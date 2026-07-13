@@ -67,6 +67,44 @@ def test_the_hook_works_when_the_graph_is_a_subdirectory(tmp_path, rules_yaml):
     assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
 
 
+def test_the_hook_honours_core_hookspath(repo):
+    """husky, the pre-commit framework, and most monorepos set core.hooksPath. Writing to
+    .git/hooks then means writing to a directory git will NEVER look at — so `hook install`
+    reported success and the gate silently never ran. That is the exact failure this
+    feature exists to eliminate."""
+    git("config", "core.hooksPath", ".githooks", cwd=repo.root)
+
+    install(repo.root)
+
+    assert (repo.root / ".githooks" / "pre-commit").exists()
+
+    repo.node("hyp-x", ALIVE_NO_GATE)
+    git("add", "-A", cwd=repo.root)
+    r = git("commit", "-m", "sneak it in", cwd=repo.root)
+
+    assert r.returncode != 0
+    assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
+
+
+def test_install_works_in_a_git_worktree(tmp_path, graph):
+    """In a worktree (and a submodule) `.git` is a FILE, so `repo/.git/hooks` raised a raw
+    NotADirectoryError."""
+    git("init", "-q", cwd=graph.root)
+    git("config", "user.email", "t@t.t", cwd=graph.root)
+    git("config", "user.name", "t", cwd=graph.root)
+    graph.node("method-gate", "id: method-gate\ntype: method")
+    git("add", "-A", cwd=graph.root)
+    git("commit", "-qm", "init", cwd=graph.root)
+
+    wt = tmp_path.parent / "wt"
+    git("worktree", "add", "-q", str(wt), cwd=graph.root)
+
+    hook = install(wt)          # must not raise
+
+    assert hook.exists()
+    assert "knoten validate" in hook.read_text()
+
+
 def test_install_refuses_outside_a_git_repo(graph):
     with pytest.raises(GraphError, match="git"):
         install(graph.root)

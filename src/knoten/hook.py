@@ -6,10 +6,17 @@ git wrote the invalid graph to history without complaint, and the phrase was a b
 A rule that only fires when you remember to ask is the same rule that let the previous
 attempt (`knowledge_graph.jsonl`, still zero bytes) rot. The gate has to sit in the one
 place you cannot forget to walk through.
+
+We ask GIT where its hooks live rather than assuming `.git/hooks`. That assumption is
+wrong in three common cases — `core.hooksPath` (husky, the pre-commit framework, most
+monorepos), worktrees and submodules (where `.git` is a FILE, not a directory) — and
+being wrong here means writing the hook somewhere git never reads, reporting success,
+and silently not gating. Which is precisely the failure this module exists to prevent.
 """
 from __future__ import annotations
 
 import stat
+import subprocess
 from pathlib import Path
 
 from .core import GraphError
@@ -34,20 +41,25 @@ exec knoten validate
 """
 
 
-def git_root(start: Path) -> Path | None:
-    """The repo containing this graph. `.git` is a directory, or a file in a worktree."""
-    for c in [start, *start.parents]:
-        if (c / ".git").exists():
-            return c
-    return None
+def _git(root: Path, *args: str) -> str:
+    try:
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise GraphError("git is not installed") from e
+    if r.returncode != 0:
+        raise GraphError(f"{root} is not inside a git repository — run `git init` first")
+    return r.stdout.strip()
+
+
+def hooks_dir(root: Path) -> Path:
+    """Where git ACTUALLY reads hooks from — not where we guess it does."""
+    p = Path(_git(root, "rev-parse", "--git-path", "hooks"))
+    return p if p.is_absolute() else (root / p).resolve()
 
 
 def install(root: Path, force: bool = False) -> Path:
-    repo = git_root(root)
-    if repo is None:
-        raise GraphError(f"{root} is not inside a git repository — run `git init` first")
-
-    hooks = repo / ".git" / "hooks"
+    repo = Path(_git(root, "rev-parse", "--show-toplevel"))
+    hooks = hooks_dir(root)
     hooks.mkdir(parents=True, exist_ok=True)
     hook = hooks / "pre-commit"
 
