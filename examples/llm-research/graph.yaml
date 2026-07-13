@@ -1,0 +1,28 @@
+# An example graph: "what actually improves LLM accuracy on reasoning tasks?"
+#
+# knoten knows nothing about LLMs. Every rule below is declared HERE, as data.
+# A different topic declares different rules and runs the same code.
+name: llm-research
+description: What actually improves LLM accuracy on reasoning tasks?
+
+node_types: [hypothesis, experiment, finding, method, source]
+
+rules:
+  - id: live-claims-must-cite-their-gates
+    when_status: alive
+    when_type: hypothesis
+    require_edge: kn:survivedGate
+    message: An unchallenged claim is not a finding, it is a hope.
+
+  - id: dead-claims-must-say-why
+    when_status: dead, retracted
+    require_sections: Why it died, reopen
+    message: The post-mortem IS the asset - a dead end must become a standing offer.
+
+  # THIS graph's own domain rule. The core has no idea what a token budget is.
+  - id: claims-must-report-token-budget
+    when_type: hypothesis
+    require_result: tokens_per_question
+    message: >
+      An accuracy gain bought with extra inference compute is not a method, it is a
+      bigger bill. State the token budget.

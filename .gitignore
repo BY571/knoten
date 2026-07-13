@@ -1,0 +1,5 @@
+.knoten/
+__pycache__/
+*.egg-info/
+.venv/
+dist/

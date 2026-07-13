@@ -1,0 +1,19 @@
+[project]
+name = "knoten"
+version = "0.1.0"
+description = "Falsification-first research graphs in git. Records why a hypothesis died — and what would reopen it."
+requires-python = ">=3.10"
+dependencies = []
+optional-dependencies = {mcp = ["mcp>=1.0"]}
+license = {text = "MIT"}
+
+[project.scripts]
+knoten = "knoten.cli:main"
+knoten-mcp = "knoten.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
