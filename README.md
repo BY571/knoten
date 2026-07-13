@@ -72,7 +72,7 @@ $ knoten query "self-consistency"
 pip install -e .                  # add ".[mcp]" for the agent server
 
 knoten init my-topic              # a new graph (it's a folder)
-knoten new hypothesis hyp-idea    # scaffold a node that already satisfies the rules
+knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
 knoten query <term>               # has this been tried?
 knoten show <node>                # edges, results, attachments
 knoten attach <node> <file>...    # attach a script, plot or notebook
@@ -110,7 +110,8 @@ shrug. Config that enforces nothing is decoration, and a rule that enforces noth
 worse than no rule, because you think you're covered.
 
 `knoten new` reads those rules and pre-fills exactly what they demand — nothing in the
-scaffold is knoten's opinion, it's your graph's:
+scaffold is knoten's opinion, it's your graph's. The values are `TODO` on purpose, so
+`new` + `validate` is a checklist rather than a guessing game:
 
 ```
 $ knoten new hypothesis hyp-my-idea --status dead

@@ -32,20 +32,6 @@ def validate(root) -> int:
     return 1
 
 
-def _tokens(s: str) -> list[str]:
-    return [t for t in re.split(r"[^a-z0-9]+", s.lower()) if t]
-
-
-def matches(n, term: str) -> bool:
-    """Every token must appear somewhere in the node.
-
-    A naive substring match meant `knoten query "self consistency"` found NOTHING, because
-    the node is `self-consistency`. The tool's headline question must not fail on a space.
-    """
-    hay = " ".join(_tokens(f"{n.id} {n.body} {n.frontmatter.get('tags', '')}"))
-    return all(t in hay.split() or t in hay for t in _tokens(term))
-
-
 def query(root, term) -> int:
     nodes = load(root)
     hits = [n for n in nodes.values() if matches(n, term)]
@@ -182,10 +168,11 @@ Replace this with a real gate. Delete it if you have none yet — but you will.
 
 
 def new(root, ntype, nid, status) -> int:
-    """Scaffold a node that already satisfies the graph's rules.
+    """Scaffold a node carrying every section and field THIS graph's rules demand.
 
-    Nothing here is knoten's opinion — it reads THIS graph's declarations and pre-fills
-    exactly what they demand.
+    Nothing here is knoten's opinion — it reads the graph's own declarations. The values
+    are TODO on purpose: `knoten validate` then names the ones you still owe it, so `new`
+    + `validate` is a checklist rather than a guessing game.
     """
     if not ID_RE.match(nid):
         raise GraphError(f"'{nid}' is not a valid id (use kebab-case: hyp-my-idea)")
@@ -258,7 +245,7 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("validate", help="enforce THIS graph's declared rules")
 
-    s = sub.add_parser("new", help="scaffold a node that already satisfies the rules")
+    s = sub.add_parser("new", help="scaffold a node with whatever the rules demand")
     s.add_argument("type")
     s.add_argument("id")
     s.add_argument("--status", default="open")
