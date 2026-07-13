@@ -96,3 +96,20 @@ async def test_query_reports_the_cause_of_death(cwd):
     assert claim["verdict"] == "DEAD"
     assert claim["killed_by"] == ["method-gate"]
     assert "compute, not method" in claim["why_it_died"]
+
+
+async def test_get_surfaces_that_a_claim_was_retracted(cwd):
+    """We reported what a node RETRACTS and never that it WAS retracted, so an agent asking
+    "has this been tried?" about a withdrawn claim was told the claim, not the withdrawal."""
+    cwd.node("method-gate", "id: method-gate\ntype: method")
+    cwd.node("hyp-wrong", "id: hyp-wrong\ntype: hypothesis\nstatus: retracted")
+    cwd.node("ret-oops", "id: ret-oops\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                         "  - {rel: npx:retracts, to: hyp-wrong}\n"
+                         "  - {rel: kn:survivedGate, to: method-gate}")
+
+    out = await call_tool("knoten_get", {"id": "hyp-wrong"})
+    res = json.loads(out[0].text)
+
+    assert res["retracted_by"] == ["ret-oops"]
+    assert "ret-oops" in res["warning"]
+
