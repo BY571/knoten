@@ -29,6 +29,7 @@ except ImportError as e:  # pragma: no cover
         "knoten-mcp needs the `mcp` extra:\n\n    pip install 'knoten[mcp]'\n"
     ) from e
 
+from . import attachments
 from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, matches,
                    parse_text, section, shortest_path)
 from .core import load as load_graph
@@ -105,6 +106,20 @@ async def list_tools() -> list[Tool]:
             }, "required": ["id", "frontmatter", "body"]},
         ),
         Tool(
+            name="knoten_attach",
+            description=(
+                "Attach files you produced to a node — the script that ran the experiment, "
+                "the plot that shows the result. Call this after knoten_commit. A claim you "
+                "cannot re-run is a claim nobody will trust in six months; the attachment IS "
+                "the reproduction. Images are embedded in the node body so they render on "
+                "GitHub. Write the file to disk first, then pass its path."),
+            inputSchema={"type": "object", "properties": {
+                "id": {"type": "string", "description": "the node to attach to"},
+                "files": {"type": "array", "items": {"type": "string"},
+                          "description": "paths to the files to attach"},
+            }, "required": ["id", "files"]},
+        ),
+        Tool(
             name="knoten_path",
             description="Show the research path between two nodes — how did we get from A to B?",
             inputSchema={"type": "object", "properties": {
@@ -149,16 +164,25 @@ def _commit(root: Path, nodes: dict[str, Node], args: dict) -> dict:
             "next": "git add + commit to version this."}
 
 
+def ok(payload) -> list[TextContent]:
+    return [TextContent(type="text", text=json.dumps(payload, indent=2, default=str))]
+
+
 @app.call_tool()
 async def call_tool(name: str, args: dict) -> list[TextContent]:
-    def ok(payload) -> list[TextContent]:
-        return [TextContent(type="text", text=json.dumps(payload, indent=2, default=str))]
-
+    """An MCP server must ANSWER, never explode: a broken graph.yaml or a directory passed
+    to knoten_attach must come back as JSON the agent can act on, not a traceback."""
     try:
-        root = _root()
-        nodes = load_graph(root)
+        return await _dispatch(name, args)
     except GraphError as e:
         return ok({"error": str(e)})
+    except OSError as e:
+        return ok({"error": f"{type(e).__name__}: {e}"})
+
+
+async def _dispatch(name: str, args: dict) -> list[TextContent]:
+    root = _root()
+    nodes = load_graph(root)
 
     if name == "knoten_query":
         hits = [n for n in nodes.values() if matches(n, args["query"])]
@@ -178,6 +202,20 @@ async def call_tool(name: str, args: dict) -> list[TextContent]:
 
     if name == "knoten_commit":
         return ok(_commit(root, nodes, args))
+
+    if name == "knoten_attach":
+        nid = args["id"]
+        if not ID_RE.match(nid or ""):
+            return ok({"status": "REJECTED", "node": nid,
+                       "reason": "invalid id — use kebab-case, e.g. hyp-self-consistency."})
+        try:
+            res = attachments.attach(root, nid, args["files"])
+        except (GraphError, OSError) as e:
+            return ok({"status": "REJECTED", "node": nid, "reason": str(e)})
+        return ok({"status": "ATTACHED", "node": nid,
+                   "attached": [f"attachments/{nid}/{n}" for n in res.added],
+                   "embedded": res.embedded, "warnings": res.warnings,
+                   "next": "git add + commit to version this."})
 
     if name == "knoten_path":
         a, b = args["from"], args["to"]

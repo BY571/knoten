@@ -186,11 +186,17 @@ pip install -e ".[mcp]"
 ```
 knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
 knoten_commit(node)                                  ← AFTER it finishes, pass or fail
+knoten_attach(node, [script, plot])                  ← and the code that proves it
 ```
 
 The agent reads the graph before running an experiment and writes back when it's done,
 **including when the experiment fails.** A dead hypothesis with a documented cause of death
 is the most valuable node in the graph, and the one that would otherwise be lost.
+
+It writes back the *evidence* too, not just the prose: `knoten_attach` puts the script it
+ran and the plot it made into the node. A claim you can't re-run is a claim nobody trusts
+in six months — so the agent that killed a hypothesis leaves behind the thing that killed
+it, ready for the next agent to run.
 
 `knoten_commit` **validates before writing and refuses on violation** — the candidate node
 is parsed and checked in memory, so an invalid node never reaches your filesystem. An agent
