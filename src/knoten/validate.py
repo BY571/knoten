@@ -163,10 +163,12 @@ def _csv(v) -> list[str]:
     return [x.strip() for x in str(v).split(",") if x.strip()]
 
 
-def _applies(n: Node, r: dict) -> bool:
-    if (st := _csv(r.get("when_status"))) and n.status not in st:
+def applies(status: str, ntype: str, r: dict) -> bool:
+    """Does this rule apply to a node with this status/type? Shared with `knoten new`, so
+    the scaffold and the validator cannot disagree about which rules are in play."""
+    if (st := _csv(r.get("when_status"))) and status not in st:
         return False
-    if (ty := _csv(r.get("when_type"))) and n.type not in ty:
+    if (ty := _csv(r.get("when_type"))) and ntype not in ty:
         return False
     return True
 
@@ -177,7 +179,7 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
 
     for n in nodes.values():
         for r in cfg.get("rules", []):
-            if not _applies(n, r):
+            if not applies(n.status, n.type, r):
                 continue
             rid, msg = r["id"], str(r.get("message", r["id"])).strip()
 

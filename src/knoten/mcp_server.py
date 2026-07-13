@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 
 try:
@@ -31,7 +30,7 @@ except ImportError as e:  # pragma: no cover
 
 from . import attachments
 from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, matches,
-                   parse_text, section, shortest_path)
+                   node_path, parse_text, section, shortest_path)
 from .core import load as load_graph
 from .validate import check
 
@@ -144,11 +143,10 @@ async def list_tools() -> list[Tool]:
 def _commit(root: Path, nodes: dict[str, Node], args: dict) -> dict:
     """Validate the candidate in memory. Nothing touches disk until it is clean."""
     nid = args["id"]
-    if not ID_RE.match(nid or ""):
-        return {"status": "REJECTED", "node": nid,
-                "reason": "invalid id — use kebab-case (lowercase letters, digits, - and _), "
-                          "e.g. hyp-self-consistency. An id becomes a filename."}
-    path = root / "nodes" / f"{nid}.md"
+    try:
+        path = node_path(root, nid)
+    except GraphError as e:
+        return {"status": "REJECTED", "node": nid, "reason": str(e)}
     if path.exists():
         return {"status": "REJECTED", "node": nid,
                 "reason": f"'{nid}' already exists. Supersede or retract it instead of "

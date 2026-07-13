@@ -40,9 +40,16 @@ VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
-# A node id becomes a filename. Anything else is a path traversal waiting to happen —
-# and `knoten_commit` takes this straight from an LLM.
+# An id becomes a filename, so anything else is a path traversal. Go through node_path()
+# for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
+# the graph, because only the MCP surface (where the id comes from an LLM) was guarded.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def node_path(root: Path, nid: str) -> Path:
+    if not ID_RE.match(nid or ""):
+        raise GraphError(f"'{nid}' is not a valid node id (kebab-case: hyp-my-idea)")
+    return root / "nodes" / f"{nid}.md"
 
 
 class _Loader(yaml.SafeLoader):
@@ -75,8 +82,6 @@ _CORE = [
                                 r"|^[-+]?[0-9]+[eE][-+]?[0-9]+$"
                                 r"|^[-+]?\.(?:inf|Inf|INF)$|^\.(?:nan|NaN|NAN)$",
                                 list("-+0123456789.")),
-    # "" is the first-char key PyYAML uses for an empty scalar (`status:` with no value).
-    ("tag:yaml.org,2002:null",  r"^(?:~|null|Null|NULL|)$", ["~", "n", "N", ""]),
 ]
 _DROP = {t for t, _, _ in _CORE} | {"tag:yaml.org,2002:timestamp"}
 
@@ -91,7 +96,6 @@ for _tag, _pattern, _first in _CORE:
 @dataclass
 class Node:
     id: str
-    path: str
     body: str
     frontmatter: dict = field(default_factory=dict)
     links: list = field(default_factory=list)
@@ -152,7 +156,6 @@ def parse_text(text: str, nid: str, label: str | None = None) -> Node:
 
     return Node(
         id=nid,
-        path=f"nodes/{nid}.md",
         body=body,
         frontmatter=fm,
         links=links,
@@ -163,18 +166,12 @@ def parse_text(text: str, nid: str, label: str | None = None) -> Node:
     )
 
 
-def parse(path: Path, root: Path) -> Node:
-    n = parse_text(path.read_text(encoding="utf-8"), path.stem, path.name)
-    n.path = str(path.relative_to(root))
-    return n
-
-
 def load(root: Path) -> dict[str, Node]:
     nodes = {}
     for p in sorted((root / "nodes").glob("*.md")):
         if p.stem.upper() == "README":
             continue
-        n = parse(p, root)
+        n = parse_text(p.read_text(encoding="utf-8"), p.stem, p.name)
         nodes[n.id] = n
     return backlink(nodes)
 
