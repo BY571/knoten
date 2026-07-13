@@ -6,22 +6,15 @@ research topic. Each declares its own rules; the core knows nothing about any do
 from __future__ import annotations
 
 import argparse
-import json
-import re
-import shutil
 import sys
 from pathlib import Path
 
-import yaml
-
-from .core import (FM_RE, ID_RE, VERDICT, GraphError, _Loader, find_root, load, matches,
-                   read_frontmatter, section, shortest_path, split)
+from . import attachments
+from .core import ID_RE, VERDICT, GraphError, find_root, load, matches, section, shortest_path
 from .hook import install as install_hook
 from .validate import check
 
 MARK = {"alive": "✓ ALIVE", "dead": "✗ DEAD", "retracted": "⊘ RETRACTED"}
-IMG = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-BIG = 1_000_000          # git is for code and plots, not datasets
 
 
 # ---------------------------------------------------------------- read commands
@@ -101,130 +94,19 @@ def show(root, nid) -> int:
 
 # ---------------------------------------------------------------- write commands
 
-def _scalar(name: str) -> str:
-    """Quote a filename unless it round-trips as the identical string. `plot #1.png` is a
-    YAML comment; `run: x.png` is a mapping; `123` is an int. All are legal filenames."""
-    try:
-        if yaml.load(name, Loader=_Loader) == name:
-            return name
-    except yaml.YAMLError:
-        pass
-    return json.dumps(name, ensure_ascii=False)     # a JSON string is valid YAML
-
-
-def _set_attachments(node_file: Path, names: list[str]) -> None:
-    """Rewrite ONLY the `attachments:` block, line by line — re-dumping through yaml would
-    strip the comments a human wrote. Items may be indented or not (`yaml.dump` emits them
-    at zero indent), and a dropped item orphaned into the block above is unparseable."""
-    text = node_file.read_text(encoding="utf-8")
-    read_frontmatter(node_file)          # refuse to touch a node we cannot parse
-    m = FM_RE.match(text)
-
-    kept, dropping = [], False
-    for line in m.group(1).splitlines():
-        if re.match(r"^attachments:\s*(\[.*\])?\s*$", line):
-            dropping = True
-            continue
-        if dropping:
-            if re.match(r"^\s*-\s", line):        # indented or not
-                continue
-            dropping = False
-        kept.append(line)
-
-    if names:
-        kept.append("attachments:")
-        kept += [f"  - {_scalar(n)}" for n in sorted(names)]
-    fm = "\n".join(kept).strip("\n")
-    out = f"---\n{fm}\n---\n{m.group(2)}"
-
-    split(out, node_file.name)           # never write a node we cannot read back
-    node_file.write_text(out, encoding="utf-8")
-
-
-def _embed(node_file: Path, nid: str, images: list[str]) -> int:
-    """Images render on GitHub only if they are in the body, not just the frontmatter."""
-    text = node_file.read_text(encoding="utf-8")
-    added = 0
-    for name in images:
-        ref = f"![{name}](../attachments/{nid}/{name})"
-        if ref in text:
-            continue
-        if "## Attachments" not in text:
-            text = text.rstrip() + "\n\n## Attachments\n"
-        text = text.rstrip() + f"\n\n{ref}\n"
-        added += 1
-    if added:
-        node_file.write_text(text, encoding="utf-8")
-    return added
-
-
-def _drop_empty_attachments_section(node_file: Path) -> None:
-    text = node_file.read_text(encoding="utf-8")
-    new = re.sub(r"\n*## Attachments\s*\n+(?=(##|\Z))", "\n", text)
-    if new != text:
-        node_file.write_text(new.rstrip() + "\n", encoding="utf-8")
-
-
-def _preflight(files) -> list[Path]:
-    """Vet every file before copying any, so a bad path cannot half-attach the node.
-    `exists()` is true for a directory, hence is_file."""
-    srcs = [Path(f) for f in files]
-    for src in srcs:
-        if not src.exists():
-            raise GraphError(f"no such file: {src}")
-        if not src.is_file():
-            raise GraphError(f"{src} is not a file")
-    names = [s.name for s in srcs]
-    if dupes := {n for n in names if names.count(n) > 1}:
-        raise GraphError(
-            f"two files share the basename {', '.join(sorted(dupes))} — they would land on "
-            f"top of each other in attachments/. Rename one.")
-    return srcs
-
-
 def attach(root, nid, files) -> int:
-    nf = root / "nodes" / f"{nid}.md"
-    if not nf.exists():
-        raise GraphError(f"no node '{nid}'")
-    fm, _ = read_frontmatter(nf)
-    have = [str(a) for a in (fm.get("attachments") or [])]
-    srcs = _preflight(files)
-
-    dest = root / "attachments" / nid
-    dest.mkdir(parents=True, exist_ok=True)
-    images = []
-    for src in srcs:
-        if (size := src.stat().st_size) > BIG:
-            print(f"  ! {src.name} is {size / 1e6:.1f} MB — git is for code and plots, "
-                  f"not datasets. Consider linking to it instead.")
-        shutil.copy2(src, dest / src.name)
-        if src.name not in have:
-            have.append(src.name)
-        print(f"  + attachments/{nid}/{src.name}")
-        if src.suffix.lower() in IMG:
-            images.append(src.name)
-
-    _set_attachments(nf, have)
-    if n := _embed(nf, nid, images):
-        print(f"  embedded {n} image(s) in the node body")
+    res = attachments.attach(root, nid, files)
+    for w in res.warnings:
+        print(f"  ! {w}")
+    for name in res.added:
+        print(f"  + attachments/{nid}/{name}")
+    if res.embedded:
+        print(f"  embedded {len(res.embedded)} image(s) in the node body")
     return 0
 
 
 def detach(root, nid, name) -> int:
-    nf = root / "nodes" / f"{nid}.md"
-    if not nf.exists():
-        raise GraphError(f"no node '{nid}'")
-    fm, _ = read_frontmatter(nf)
-    have = [str(a) for a in (fm.get("attachments") or [])]
-    if name not in have:
-        raise GraphError(f"'{name}' is not attached to {nid}")
-
-    (root / "attachments" / nid / name).unlink(missing_ok=True)
-    _set_attachments(nf, [a for a in have if a != name])
-
-    text = nf.read_text(encoding="utf-8")
-    nf.write_text(re.sub(rf"\n*!\[{re.escape(name)}\]\([^)]*\)\n*", "\n", text), encoding="utf-8")
-    _drop_empty_attachments_section(nf)
+    attachments.detach(root, nid, name)
     print(f"  - detached {name} from {nid}")
     return 0
 
