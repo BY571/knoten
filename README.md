@@ -79,6 +79,7 @@ knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>
 knoten validate                   # enforce this graph's own rules
 knoten path A B                   # how did we get from A to B?
+knoten hook                       # make `git commit` refuse a broken graph
 ```
 
 Each graph declares its own rules in `graph.yaml`. `knoten` knows nothing about your
@@ -201,8 +202,11 @@ pip install -e ".[mcp]"
 
 ```
 knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
+knoten_get("hyp-self-consistency")                   ← the full node, post-mortem included
 knoten_commit(node)                                  ← AFTER it finishes, pass or fail
 knoten_attach(node, [script, plot])                  ← and the code that proves it
+knoten_path(a, b)                                    ← how did we get from A to B?
+knoten_validate()                                    ← run the graph's own rules
 ```
 
 The agent reads the graph before running an experiment and writes back when it's done,
