@@ -13,7 +13,9 @@ import sys
 from collections import defaultdict, deque
 from pathlib import Path
 
-from .core import FM_RE, ID_RE, GraphError, load, read_frontmatter
+import yaml
+
+from .core import FM_RE, ID_RE, GraphError, _Loader, load, read_frontmatter, split
 from .validate import check
 
 MARK = {"alive": "✓ ALIVE", "dead": "✗ DEAD", "retracted": "⊘ RETRACTED"}
@@ -130,13 +132,30 @@ def build(root) -> int:
 
 # ---------------------------------------------------------------- write commands
 
+def _scalar(name: str) -> str:
+    """Emit a filename as YAML, quoting it unless it round-trips as the identical string.
+
+    Filenames were written raw. `plot #1.png` became the YAML comment `plot`; `run: final
+    .png` became a dict; `123` became an int. All are legal filenames.
+    """
+    try:
+        if yaml.load(name, Loader=_Loader) == name:
+            return name
+    except yaml.YAMLError:
+        pass
+    return json.dumps(name, ensure_ascii=False)     # a JSON string is valid YAML
+
+
 def _set_attachments(node_file: Path, names: list[str]) -> None:
     """Rewrite ONLY the `attachments:` block, line by line.
 
-    We do not re-dump the frontmatter through yaml — that would reformat and strip the
-    comments a human wrote. The old regex approach left the final list item orphaned
-    (the frontmatter has no trailing newline), so every attach after the first wedged a
-    stray `- file` into the preceding block.
+    We do not re-dump the frontmatter through yaml — that would reformat it and strip the
+    comments a human wrote.
+
+    The list items we must drop may be indented OR NOT: `yaml.dump` emits them at zero
+    indent by default. Requiring leading whitespace orphaned them, wedged them into the
+    preceding block, and left the node unparseable — which takes the whole graph down
+    with it, since load() raises rather than skips.
     """
     text = node_file.read_text(encoding="utf-8")
     read_frontmatter(node_file)          # refuse to touch a node we cannot parse
@@ -148,16 +167,19 @@ def _set_attachments(node_file: Path, names: list[str]) -> None:
             dropping = True
             continue
         if dropping:
-            if re.match(r"^\s+-\s", line):
+            if re.match(r"^\s*-\s", line):        # indented or not
                 continue
             dropping = False
         kept.append(line)
 
     if names:
         kept.append("attachments:")
-        kept += [f"  - {n}" for n in sorted(names)]
+        kept += [f"  - {_scalar(n)}" for n in sorted(names)]
     fm = "\n".join(kept).strip("\n")
-    node_file.write_text(f"---\n{fm}\n---\n{m.group(2)}", encoding="utf-8")
+    out = f"---\n{fm}\n---\n{m.group(2)}"
+
+    split(out, node_file.name)           # never write a node we cannot read back
+    node_file.write_text(out, encoding="utf-8")
 
 
 def _embed(node_file: Path, nid: str, images: list[str]) -> int:
@@ -184,20 +206,35 @@ def _drop_empty_attachments_section(node_file: Path) -> None:
         node_file.write_text(new.rstrip() + "\n", encoding="utf-8")
 
 
+def _preflight(files) -> list[Path]:
+    """Vet every file BEFORE copying any, so a bad path halfway through the list cannot
+    leave the node half-attached. `exists()` is true for a directory, so check is_file."""
+    srcs = [Path(f) for f in files]
+    for src in srcs:
+        if not src.exists():
+            raise GraphError(f"no such file: {src}")
+        if not src.is_file():
+            raise GraphError(f"{src} is not a file")
+    names = [s.name for s in srcs]
+    if dupes := {n for n in names if names.count(n) > 1}:
+        raise GraphError(
+            f"two files share the basename {', '.join(sorted(dupes))} — they would land on "
+            f"top of each other in attachments/. Rename one.")
+    return srcs
+
+
 def attach(root, nid, files) -> int:
     nf = root / "nodes" / f"{nid}.md"
     if not nf.exists():
         raise GraphError(f"no node '{nid}'")
     fm, _ = read_frontmatter(nf)
     have = [str(a) for a in (fm.get("attachments") or [])]
+    srcs = _preflight(files)
 
     dest = root / "attachments" / nid
     dest.mkdir(parents=True, exist_ok=True)
     images = []
-    for f in files:
-        src = Path(f)
-        if not src.exists():
-            raise GraphError(f"no such file: {f}")
+    for src in srcs:
         if (size := src.stat().st_size) > BIG:
             print(f"  ! {src.name} is {size / 1e6:.1f} MB — git is for code and plots, "
                   f"not datasets. Consider linking to it instead.")

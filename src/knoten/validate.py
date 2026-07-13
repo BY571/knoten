@@ -62,7 +62,33 @@ def load_rules(root: Path) -> list[dict]:
                 f"{', '.join(sorted(unknown))}. A rule key knoten does not understand "
                 f"would enforce nothing. Known keys: {', '.join(sorted(RULE_KEYS))}"
             )
+        _check_values(r)
     return rules
+
+
+def _check_values(r: dict) -> None:
+    """Validating key NAMES is not enough — a rule whose VALUE is the wrong shape used to
+    crash with a raw TypeError, which contradicts "a rule this engine cannot understand is
+    a hard error". `require_edge: [x]` is the natural mistake, since `when_status` does
+    take a list."""
+    rid = r["id"]
+    for key in ("require_edge", "require_result"):
+        if key in r and not isinstance(r[key], str):
+            raise GraphError(
+                f"graph.yaml: rule '{rid}': `{key}` must be a single string, "
+                f"got {r[key]!r}")
+
+    if "require_result_min" in r:
+        floors = r["require_result_min"]
+        if not isinstance(floors, dict):
+            raise GraphError(
+                f"graph.yaml: rule '{rid}': `require_result_min` must be a mapping of "
+                f"{{result_key: number}}, got {floors!r}")
+        for k, v in floors.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise GraphError(
+                    f"graph.yaml: rule '{rid}': `require_result_min` floor for '{k}' must "
+                    f"be a number, got {v!r}")
 
 
 def _structural(nodes: dict[str, Node], root: Path) -> list[Violation]:
@@ -131,6 +157,9 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
 
             for key, floor in (r.get("require_result_min") or {}).items():
                 got = n.results.get(key)
-                if not isinstance(got, (int, float)) or got < floor:
+                # `bool` is a subclass of `int`: `accuracy: true` would otherwise sail
+                # through a floor of 0.8 as the number 1.
+                numeric = isinstance(got, (int, float)) and not isinstance(got, bool)
+                if not numeric or got < floor:
                     out.append(Violation(n.id, rid, f"{msg} ({key}={got!r}, need >= {floor})"))
     return out

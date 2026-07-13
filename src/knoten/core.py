@@ -44,23 +44,48 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 class _Loader(yaml.SafeLoader):
-    """YAML 1.2 booleans, not 1.1.
+    """YAML 1.2 scalars, not YAML 1.1.
 
-    PyYAML implements YAML 1.1, where bare `no`, `off` and `yes` resolve to booleans —
-    the "Norway problem". In a research graph that silently turns a tag named `no` into
-    `False`. Strip the 1.1 bool resolver and keep only true/false.
+    PyYAML implements YAML 1.1, whose implicit typing is actively hostile to a research
+    graph. Everything below was reproduced in `results:` — the block that holds the
+    numbers this tool exists to protect — and every one of them validated clean:
+
+        tags: [no, off]     -> [False, False]   the "Norway problem"
+        wallclock: 12:30    -> 750              sexagesimal
+        seed: 042           -> 34               octal (but `08` stays a string!)
+        n: 1_000            -> 1000             digit separators
+        run: 2024-01-15     -> datetime.date    implicit timestamps
+
+    So we do not patch one coercion at a time — we replace the implicit resolvers with
+    the YAML 1.2 core schema, which has none of them. A value we cannot confidently type
+    stays a string, which is the safe direction: a string that should have been a number
+    fails a numeric rule loudly, whereas a number that should have been a string is a
+    silently corrupted result.
     """
 
 
+# YAML 1.2 core schema (https://yaml.org/spec/1.2.2/#103-core-schema).
+_CORE = [
+    ("tag:yaml.org,2002:bool",  r"^(?:true|True|TRUE|false|False|FALSE)$", list("tTfF")),
+    ("tag:yaml.org,2002:int",   r"^[-+]?(?:0|[1-9][0-9]*)$"
+                                r"|^0o[0-7]+$|^0x[0-9a-fA-F]+$", list("-+0123456789")),
+    # A float needs a `.` or an exponent. Without that guard a bare `042` — which the int
+    # resolver correctly refuses — falls through to float and becomes 42.0.
+    ("tag:yaml.org,2002:float", r"^[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.[0-9]*)(?:[eE][-+]?[0-9]+)?$"
+                                r"|^[-+]?[0-9]+[eE][-+]?[0-9]+$"
+                                r"|^[-+]?\.(?:inf|Inf|INF)$|^\.(?:nan|NaN|NAN)$",
+                                list("-+0123456789.")),
+    # "" is the first-char key PyYAML uses for an empty scalar (`status:` with no value).
+    ("tag:yaml.org,2002:null",  r"^(?:~|null|Null|NULL|)$", ["~", "n", "N", ""]),
+]
+_DROP = {t for t, _, _ in _CORE} | {"tag:yaml.org,2002:timestamp"}
+
 _Loader.yaml_implicit_resolvers = {
-    ch: [(tag, rx) for tag, rx in rs if tag != "tag:yaml.org,2002:bool"]
+    ch: [(tag, rx) for tag, rx in rs if tag not in _DROP]
     for ch, rs in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
-_Loader.add_implicit_resolver(
-    "tag:yaml.org,2002:bool",
-    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
-    list("tTfF"),
-)
+for _tag, _pattern, _first in _CORE:
+    _Loader.add_implicit_resolver(_tag, re.compile(_pattern), _first)
 
 
 @dataclass
@@ -88,10 +113,14 @@ class Node:
         return {l["rel"] for l in self.links}
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "path": self.path, **self.frontmatter,
+        # id and path come LAST: the filename is the truth. A stale `id:` left in the
+        # frontmatter after a rename must not overwrite it in graph.json, which is the
+        # artifact we hand to agents.
+        return {**self.frontmatter,
                 "links": self.links, "backlinks": self.backlinks,
                 "results": self.results, "repro": self.repro,
-                "sections": self.sections, "attachments": self.attachments}
+                "sections": self.sections, "attachments": self.attachments,
+                "id": self.id, "path": self.path}
 
 
 def _yaml(text: str, label: str) -> dict:
