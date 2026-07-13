@@ -19,7 +19,7 @@ rules:
 
   - id: dead-claims-must-say-why
     when_status: dead, retracted
-    require_sections: Why it died, reopen
+    require_sections: Why it died, What would reopen this
     message: The post-mortem IS the asset - a dead end must become a standing offer.
 
   # THIS graph's own domain rule. The core has no idea what a token budget is.

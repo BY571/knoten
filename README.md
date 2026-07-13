@@ -72,6 +72,7 @@ $ knoten query "self-consistency"
 pip install -e .                  # add ".[mcp]" for the agent server
 
 knoten init my-topic              # a new graph (it's a folder)
+knoten new hypothesis hyp-idea    # scaffold a node that already satisfies the rules
 knoten query <term>               # has this been tried?
 knoten show <node>                # edges, results, attachments
 knoten attach <node> <file>...    # attach a script, plot or notebook
@@ -107,6 +108,20 @@ tool exists to prevent. Both are now violations.
 A rule key — or a config key — `knoten` doesn't recognise is a **hard error**, not a
 shrug. Config that enforces nothing is decoration, and a rule that enforces nothing is
 worse than no rule, because you think you're covered.
+
+`knoten new` reads those rules and pre-fills exactly what they demand — nothing in the
+scaffold is knoten's opinion, it's your graph's:
+
+```
+$ knoten new hypothesis hyp-my-idea --status dead
+
+  + nodes/hyp-my-idea.md  (hypothesis, dead)
+    pre-filled what THIS graph's rules require:
+      ## Why it died, ## What would reopen this, tokens_per_question, n_independent
+```
+
+The failure this tool exists to prevent was caused by **friction**, so the write path is
+where friction hurts most. Write prose, not boilerplate you had to be rejected to discover.
 
 ## The gate is a git hook
 
@@ -221,6 +236,16 @@ a finding.
 unknown edge relation (`kn:killdByGate` — one letter dropped), a rule key that doesn't
 exist: all are errors. A graph that silently drops what it can't parse reports itself
 healthy while it rots.
+
+**And a claim someone later withdrew says so.** `query` surfaces the retraction from both
+sides, so an agent asking *"has this been tried?"* about a claim that was later retracted
+is told it was retracted — not just what the claim said:
+
+```
+  [✓ ALIVE] hyp-few-shot-format
+      survived     : method-compute-matched-baseline
+      RETRACTED by : ret-oops
+```
 
 See `examples/llm-research/` for a worked graph and [SPEC.md](SPEC.md) for the design.
 
