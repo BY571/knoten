@@ -203,8 +203,21 @@ worse than no validator, because you believe you are covered. The same goes for 
 unknown edge relation (`kn:killdByGate`, one letter dropped) and for frontmatter that
 does not parse.
 
+The graph also declares its own vocabulary, and it is enforced:
+
+```yaml
+node_types: [hypothesis, experiment, finding, method, source]
+statuses:   [open, alive, dead, retracted, superseded, active]
+```
+
+The core invents neither list — declare none and none is checked (§2: the core knows no
+domain). But a graph that *does* declare one has said those are the only legal words, so
+`type: hypthesis` is a typo and `status: ded` is a claim that would silently vanish from
+every query.
+
 Always-on structural checks, which no graph has to declare: `dangling-edge`,
-`missing-attachment`, `unknown-relation`, `authored-backlink`.
+`missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
+`unknown-type`, `unknown-status`.
 
 A biology graph declares entirely different rules. The core never changes.
 

@@ -93,8 +93,20 @@ rules:
     message: A result on fewer than 30 independent questions is noise, not evidence.
 ```
 
-A rule key `knoten` doesn't recognise is a **hard error**, not a shrug. A rule that
-silently enforces nothing is worse than no rule, because you think you're covered.
+Your graph also declares its own vocabulary, and that is enforced too:
+
+```yaml
+node_types: [hypothesis, experiment, finding, method, source]
+statuses:   [open, alive, dead, retracted, superseded, active]
+```
+
+`type: hypthesis` is a typo, not a new type. `status: ded` is worse than wrong — it would
+silently drop the claim out of every query, which is exactly the sort of quiet rot this
+tool exists to prevent. Both are now violations.
+
+A rule key — or a config key — `knoten` doesn't recognise is a **hard error**, not a
+shrug. Config that enforces nothing is decoration, and a rule that enforces nothing is
+worse than no rule, because you think you're covered.
 
 ## Attach the code and the plots
 

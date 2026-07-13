@@ -230,7 +230,10 @@ TEMPLATE_GRAPH = """\
 name: {name}
 description: TODO — what question is this graph about?
 
+# Enforced. A node whose type or status is not on these lists is a typo — and a claim
+# with a typo'd status silently drops out of every query. Edit them for YOUR topic.
 node_types: [hypothesis, experiment, finding, method, source, retraction]
+statuses:   [open, alive, dead, retracted, superseded, active]
 
 # Reused standards: mp:supports / mp:challenges (Micropublications),
 #   npx:retracts / npx:supersedes (Nanopublications),
