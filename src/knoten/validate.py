@@ -25,6 +25,9 @@ RULE_KEYS = {
     "require_result_min",  # {key: minimum} — numeric floor
 }
 
+# Same for the top level. `node_type:` (singular) would be the next silent no-op.
+GRAPH_KEYS = {"name", "description", "node_types", "statuses", "rules"}
+
 
 @dataclass
 class Violation:
@@ -33,11 +36,22 @@ class Violation:
     message: str
 
 
-def load_rules(root: Path) -> list[dict]:
+def load_config(root: Path) -> dict:
+    """The graph's own declaration. Every key here is enforced; a key knoten does not
+    understand is a hard error, because config that enforces nothing is decoration."""
     f = root / "graph.yaml"
     if not f.exists():
-        return []
+        return {}
     cfg = _yaml(f.read_text(encoding="utf-8"), "graph.yaml")
+
+    if unknown := set(cfg) - GRAPH_KEYS:
+        raise GraphError(
+            f"graph.yaml: unknown key(s) {', '.join(sorted(unknown))}. "
+            f"Known keys: {', '.join(sorted(GRAPH_KEYS))}"
+        )
+    for key in ("node_types", "statuses"):
+        if key in cfg and not isinstance(cfg[key], list):
+            raise GraphError(f"graph.yaml: `{key}` must be a list, got {cfg[key]!r}")
 
     rules = cfg.get("rules") or []
     if not isinstance(rules, list):
@@ -54,7 +68,12 @@ def load_rules(root: Path) -> list[dict]:
                 f"would enforce nothing. Known keys: {', '.join(sorted(RULE_KEYS))}"
             )
         _check_values(r)
-    return rules
+    cfg["rules"] = rules
+    return cfg
+
+
+def load_rules(root: Path) -> list[dict]:
+    return load_config(root).get("rules", [])
 
 
 def _check_values(r: dict) -> None:
@@ -80,11 +99,41 @@ def _check_values(r: dict) -> None:
                     f"be a number, got {v!r}")
 
 
-def _structural(nodes: dict[str, Node], root: Path) -> list[Violation]:
+def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
+    """A node's `type` and `status` must be words THIS graph declared.
+
+    The core invents no vocabulary: declare no `node_types` and none is checked. But a
+    graph that DOES declare one has said those are the only legal words — and a claim with
+    a typo'd (or missing) status silently drops out of every query, which filters on the
+    known set.
+    """
+    out = []
+    if not n.type:
+        out.append(Violation(n.id, "missing-type", "node declares no `type`"))
+    elif (types := cfg.get("node_types")) and n.type not in types:
+        out.append(Violation(n.id, "unknown-type",
+                             f"type '{n.type}' is not declared in graph.yaml "
+                             f"(node_types: {', '.join(map(str, types))})"))
+
+    if statuses := cfg.get("statuses"):
+        if not n.status:
+            out.append(Violation(n.id, "missing-status",
+                                 f"node declares no `status`, so it escapes every "
+                                 f"when_status rule and never appears in a query "
+                                 f"(statuses: {', '.join(map(str, statuses))})"))
+        elif n.status not in statuses:
+            out.append(Violation(n.id, "unknown-status",
+                                 f"status '{n.status}' is not declared in graph.yaml "
+                                 f"(statuses: {', '.join(map(str, statuses))})"))
+    return out
+
+
+def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation]:
     """Checks the core ALWAYS runs. Structural, not domain."""
     out = []
     ids = set(nodes)
     for nid, n in nodes.items():
+        out += _vocabulary(n, cfg)
         for l in n.links:
             rel = l["rel"]
             if rel in GENERATED:
@@ -123,11 +172,11 @@ def _applies(n: Node, r: dict) -> bool:
 
 
 def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
-    out = _structural(nodes, root)
-    rules = load_rules(root)
+    cfg = load_config(root)
+    out = _structural(nodes, root, cfg)
 
     for n in nodes.values():
-        for r in rules:
+        for r in cfg.get("rules", []):
             if not _applies(n, r):
                 continue
             rid, msg = r["id"], str(r.get("message", r["id"])).strip()
