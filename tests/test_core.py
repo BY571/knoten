@@ -2,7 +2,7 @@
 could not understand, so a broken node looked like a valid one."""
 import pytest
 
-from knoten.core import GraphError, load, parse
+from knoten.core import GraphError, load
 
 FM = """\
 id: hyp-x

@@ -10,9 +10,10 @@ import sys
 from pathlib import Path
 
 from . import attachments
-from .core import ID_RE, VERDICT, GraphError, find_root, load, matches, section, shortest_path
+from .core import (ID_RE, VERDICT, GraphError, find_root, load, matches, node_path, section,
+                   shortest_path)
 from .hook import install as install_hook
-from .validate import _csv, check, load_config
+from .validate import _csv, applies, check, load_config
 
 MARK = {"alive": "✓ ALIVE", "dead": "✗ DEAD", "retracted": "⊘ RETRACTED"}
 
@@ -174,9 +175,7 @@ def new(root, ntype, nid, status) -> int:
     are TODO on purpose: `knoten validate` then names the ones you still owe it, so `new`
     + `validate` is a checklist rather than a guessing game.
     """
-    if not ID_RE.match(nid):
-        raise GraphError(f"'{nid}' is not a valid id (use kebab-case: hyp-my-idea)")
-    nf = root / "nodes" / f"{nid}.md"
+    nf = node_path(root, nid)
     if nf.exists():
         raise GraphError(f"'{nid}' already exists. Supersede or retract it — corrections "
                          f"are nodes, not edits.")
@@ -192,9 +191,7 @@ def new(root, ntype, nid, status) -> int:
 
     sections, results = [], []
     for r in cfg.get("rules", []):
-        if (st := _csv(r.get("when_status"))) and status not in st:
-            continue
-        if (ty := _csv(r.get("when_type"))) and ntype not in ty:
+        if not applies(status, ntype, r):
             continue
         sections += _csv(r.get("require_sections"))
         results += [k for k in [r.get("require_result")] if k]

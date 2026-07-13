@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from .core import FM_RE, GraphError, _Loader, read_frontmatter, split
+from .core import FM_RE, GraphError, _Loader, node_path, read_frontmatter, split
 
 IMG = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 BIG = 1_000_000          # git is for code and plots, not datasets
@@ -27,7 +27,7 @@ class Attached:
 
 
 def _node_file(root: Path, nid: str) -> Path:
-    nf = root / "nodes" / f"{nid}.md"
+    nf = node_path(root, nid)          # rejects a traversal before it becomes a path
     if not nf.exists():
         raise GraphError(f"no node '{nid}'")
     return nf

@@ -151,3 +151,20 @@ def test_attaching_a_directory_is_refused_before_anything_is_copied(graph, tmp_p
         attach(graph.root, "hyp-x", [str(good), str(tmp_path / "adir")])
 
     assert not (graph.root / "attachments" / "hyp-x" / "good.py").exists()
+
+
+@pytest.mark.parametrize("nid", ["../../outside", "sub/dir", "UPPER"])
+def test_attach_and_detach_refuse_an_id_that_escapes_the_graph(graph, tmp_path, nid):
+    """The MCP surface guarded the id because it comes from an LLM; the CLI did not,
+    because a human types it. So `knoten attach ../../x f` wrote OUTSIDE the graph, and
+    `knoten detach ../../x f` DELETED a file outside it. Every id -> path conversion now
+    goes through core.node_path."""
+    f = tmp_path / "a.txt"
+    f.write_text("x", encoding="utf-8")
+
+    with pytest.raises(GraphError, match="valid node id"):
+        attach(graph.root, nid, [str(f)])
+    with pytest.raises(GraphError, match="valid node id"):
+        detach(graph.root, nid, "a.txt")
+
+    assert not (graph.root.parent / "attachments").exists()
