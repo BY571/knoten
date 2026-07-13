@@ -96,6 +96,27 @@ rules:
 A rule key `knoten` doesn't recognise is a **hard error**, not a shrug. A rule that
 silently enforces nothing is worse than no rule, because you think you're covered.
 
+## The gate is a git hook
+
+```bash
+knoten hook     # after `git init`
+```
+
+`git commit` now runs `knoten validate` and **refuses a graph that breaks its own rules**:
+
+```
+$ git commit -m "self-consistency is a win"
+
+  ✗ hyp-self-consistency
+      [live-claims-must-cite-their-gates] An unchallenged claim is not a finding, it is a hope.
+
+  1 violation(s) — commit REJECTED
+```
+
+A rule that only fires when you remember to ask is the rule that let the last attempt rot.
+Put it somewhere you can't walk past. (`git commit --no-verify` bypasses it — you should
+have a reason.)
+
 ## Attach the code and the plots
 
 A node isn't just a claim. It carries what you need to re-run it.
