@@ -155,3 +155,42 @@ rules:
     violations = check(load(graph.root), graph.root)
 
     assert [v.node for v in violations] == ["hyp-small"]
+
+
+def test_a_rule_with_a_non_numeric_floor_is_a_clean_error(graph):
+    """Crashed with a raw TypeError, contradicting "a rule this engine cannot understand
+    is a hard error"."""
+    (graph.root / "graph.yaml").write_text(
+        "rules:\n  - id: r\n    require_result_min: {n: '30'}\n", encoding="utf-8")
+
+    with pytest.raises(GraphError, match="require_result_min"):
+        load_rules(graph.root)
+
+
+def test_require_result_min_must_be_a_mapping(graph):
+    (graph.root / "graph.yaml").write_text(
+        "rules:\n  - id: r\n    require_result_min: n_independent\n", encoding="utf-8")
+
+    with pytest.raises(GraphError, match="require_result_min"):
+        load_rules(graph.root)
+
+
+def test_require_edge_must_be_a_string(graph):
+    """Natural mistake — `when_status` accepts a list, so why not this? Raw TypeError:
+    unhashable type 'list'."""
+    (graph.root / "graph.yaml").write_text(
+        "rules:\n  - id: r\n    require_edge: [kn:survivedGate]\n", encoding="utf-8")
+
+    with pytest.raises(GraphError, match="require_edge"):
+        load_rules(graph.root)
+
+
+def test_a_boolean_does_not_satisfy_a_numeric_floor(graph):
+    """`bool` is a subclass of `int`, so `accuracy: true` passed `require_result_min:
+    {accuracy: 0.8}` as 1. Floors below 1 (accuracy, F1, AUC) are the common case."""
+    (graph.root / "graph.yaml").write_text(
+        "rules:\n  - id: r\n    require_result_min: {accuracy: 0.8}\n    message: m\n",
+        encoding="utf-8")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nresults:\n  accuracy: true")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["r"]

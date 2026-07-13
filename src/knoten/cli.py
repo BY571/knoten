@@ -10,25 +10,17 @@ import json
 import re
 import shutil
 import sys
-from collections import defaultdict, deque
 from pathlib import Path
 
 import yaml
 
-from .core import FM_RE, ID_RE, GraphError, _Loader, load, read_frontmatter, split
+from .core import (FM_RE, ID_RE, VERDICT, GraphError, _Loader, find_root, load, matches,
+                   read_frontmatter, section, shortest_path, split)
 from .validate import check
 
 MARK = {"alive": "✓ ALIVE", "dead": "✗ DEAD", "retracted": "⊘ RETRACTED"}
 IMG = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 BIG = 1_000_000          # git is for code and plots, not datasets
-
-
-def _root() -> Path:
-    p = Path.cwd()
-    for c in [p, *p.parents]:
-        if (c / "graph.yaml").exists():
-            return c
-    raise GraphError("no graph.yaml found (run `knoten init` or cd into a graph)")
 
 
 # ---------------------------------------------------------------- read commands
@@ -48,50 +40,30 @@ def validate(root) -> int:
 
 def query(root, term) -> int:
     nodes = load(root)
-    t = term.lower()
-    hits = [n for n in nodes.values()
-            if t in n.id.lower() or t in n.body.lower()
-            or t in str(n.frontmatter.get("tags", "")).lower()]
-    claims = [n for n in hits if n.status in MARK]
+    hits = [n for n in nodes.values() if matches(n, term)]
+    claims = [n for n in hits if n.status in VERDICT]
     print(f'"{term}" → {len(hits)} node(s), {len(claims)} claim(s)\n')
     for n in sorted(claims, key=lambda x: x.status):
         print(f"  [{MARK[n.status]}] {n.id}")
         for rel, label in [("kn:killedByGate", "killed by"), ("kn:survivedGate", "survived ")]:
             if ts := [l["to"] for l in n.links if l["rel"] == rel]:
                 print(f"      {label} : {', '.join(ts)}")
-        if m := re.search(r"^## What would reopen this\n+(.+?)(?=\n##|\Z)", n.body, re.S | re.M):
-            print(f"      reopen if : {' '.join(m.group(1).split())[:140]}…")
+        if reopen := section(n.body, "What would reopen this"):
+            print(f"      reopen if : {reopen[:140]}…")
         print()
-    if others := [n for n in hits if n.status not in MARK]:
+    if others := [n for n in hits if n.status not in VERDICT]:
         print("  also: " + ", ".join(n.id for n in others))
     return 0
 
 
 def path(root, a, b) -> int:
-    nodes = load(root)
-    for nid in (a, b):
-        if nid not in nodes:
-            raise GraphError(f"no node '{nid}'")
-
-    adj = defaultdict(list)
-    for nid, n in nodes.items():
-        for l in n.links:
-            adj[nid].append((l["to"], l["rel"]))
-            adj[l["to"]].append((nid, "←" + l["rel"]))
-
-    q, seen = deque([(a, [(a, "")])]), {a}
-    while q:
-        cur, p = q.popleft()
-        if cur == b:
-            print(f"research path {a} → {b}:\n")
-            for i, (nid, rel) in enumerate(p):
-                print("  " * i + (f"└─ {rel} → " if rel else "") + nid)
-            return 0
-        for nxt, rel in adj[cur]:
-            if nxt not in seen:
-                seen.add(nxt)
-                q.append((nxt, p + [(nxt, rel)]))
-    print(f"no path {a} → {b}")
+    p = shortest_path(load(root), a, b)
+    if p is None:
+        print(f"no path {a} → {b}")
+        return 0
+    print(f"research path {a} → {b}:\n")
+    for i, (nid, rel) in enumerate(p):
+        print("  " * i + (f"└─ {rel} → " if rel else "") + nid)
     return 0
 
 
@@ -119,25 +91,11 @@ def show(root, nid) -> int:
     return 0
 
 
-def build(root) -> int:
-    nodes = load(root)
-    out = root / ".knoten"
-    out.mkdir(exist_ok=True)
-    (out / "graph.json").write_text(
-        json.dumps({k: v.to_dict() for k, v in nodes.items()}, indent=2, default=str),
-        encoding="utf-8")
-    print(f"wrote .knoten/graph.json ({len(nodes)} nodes)")
-    return 0
-
-
 # ---------------------------------------------------------------- write commands
 
 def _scalar(name: str) -> str:
-    """Emit a filename as YAML, quoting it unless it round-trips as the identical string.
-
-    Filenames were written raw. `plot #1.png` became the YAML comment `plot`; `run: final
-    .png` became a dict; `123` became an int. All are legal filenames.
-    """
+    """Quote a filename unless it round-trips as the identical string. `plot #1.png` is a
+    YAML comment; `run: x.png` is a mapping; `123` is an int. All are legal filenames."""
     try:
         if yaml.load(name, Loader=_Loader) == name:
             return name
@@ -147,16 +105,9 @@ def _scalar(name: str) -> str:
 
 
 def _set_attachments(node_file: Path, names: list[str]) -> None:
-    """Rewrite ONLY the `attachments:` block, line by line.
-
-    We do not re-dump the frontmatter through yaml — that would reformat it and strip the
-    comments a human wrote.
-
-    The list items we must drop may be indented OR NOT: `yaml.dump` emits them at zero
-    indent by default. Requiring leading whitespace orphaned them, wedged them into the
-    preceding block, and left the node unparseable — which takes the whole graph down
-    with it, since load() raises rather than skips.
-    """
+    """Rewrite ONLY the `attachments:` block, line by line — re-dumping through yaml would
+    strip the comments a human wrote. Items may be indented or not (`yaml.dump` emits them
+    at zero indent), and a dropped item orphaned into the block above is unparseable."""
     text = node_file.read_text(encoding="utf-8")
     read_frontmatter(node_file)          # refuse to touch a node we cannot parse
     m = FM_RE.match(text)
@@ -207,8 +158,8 @@ def _drop_empty_attachments_section(node_file: Path) -> None:
 
 
 def _preflight(files) -> list[Path]:
-    """Vet every file BEFORE copying any, so a bad path halfway through the list cannot
-    leave the node half-attached. `exists()` is true for a directory, so check is_file."""
+    """Vet every file before copying any, so a bad path cannot half-attach the node.
+    `exists()` is true for a directory, hence is_file."""
     srcs = [Path(f) for f in files]
     for src in srcs:
         if not src.exists():
@@ -366,7 +317,6 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("node")
     s.add_argument("file")
 
-    sub.add_parser("build", help="emit .knoten/graph.json for agents")
     return p
 
 
@@ -374,18 +324,17 @@ def main(argv=None) -> int:
     args = _parser().parse_args(argv if argv is not None else sys.argv[1:])
     try:
         if args.cmd is None or args.cmd == "validate":
-            return validate(_root())
+            return validate(find_root())
         if args.cmd == "init":
             return init(args.name)
 
-        root = _root()
+        root = find_root()
         return {
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
             "show":   lambda: show(root, args.node),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
-            "build":  lambda: build(root),
         }[args.cmd]()
     except GraphError as e:
         print(f"knoten: {e}", file=sys.stderr)

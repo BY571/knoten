@@ -78,7 +78,6 @@ knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>
 knoten validate                   # enforce this graph's own rules
 knoten path A B                   # how did we get from A to B?
-knoten build                      # emit .knoten/graph.json for agents
 ```
 
 Each graph declares its own rules in `graph.yaml`. `knoten` knows nothing about your

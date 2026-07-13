@@ -1,16 +1,15 @@
-"""Core: parse markdown nodes, build the graph, generate back-links.
+"""Parse markdown nodes, build the graph, generate back-links.
 
 A node is a markdown file; an edge is a typed link in its frontmatter. Git does
 versioning, branching, PRs and hosting — we do not.
 
-The parser's first duty is to REFUSE. A node it cannot read must raise, never be
-skipped: a node that silently vanishes from the graph is worse than one that errors,
-because the graph still reports itself healthy.
+The parser's first duty is to REFUSE: a node it cannot read raises, never gets skipped.
+A node that silently vanishes leaves the graph reporting itself healthy.
 """
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +35,9 @@ INVERSE = {
 }
 GENERATED = set(INVERSE.values())
 
+# The claim lifecycle. A node with any other status is not a claim (a method, a source).
+VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
+
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
 # A node id becomes a filename. Anything else is a path traversal waiting to happen —
@@ -46,9 +48,8 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 class _Loader(yaml.SafeLoader):
     """YAML 1.2 scalars, not YAML 1.1.
 
-    PyYAML implements YAML 1.1, whose implicit typing is actively hostile to a research
-    graph. Everything below was reproduced in `results:` — the block that holds the
-    numbers this tool exists to protect — and every one of them validated clean:
+    PyYAML is YAML 1.1, whose implicit typing silently rewrites `results:` — the block
+    holding the numbers this tool exists to protect:
 
         tags: [no, off]     -> [False, False]   the "Norway problem"
         wallclock: 12:30    -> 750              sexagesimal
@@ -56,11 +57,10 @@ class _Loader(yaml.SafeLoader):
         n: 1_000            -> 1000             digit separators
         run: 2024-01-15     -> datetime.date    implicit timestamps
 
-    So we do not patch one coercion at a time — we replace the implicit resolvers with
-    the YAML 1.2 core schema, which has none of them. A value we cannot confidently type
-    stays a string, which is the safe direction: a string that should have been a number
-    fails a numeric rule loudly, whereas a number that should have been a string is a
-    silently corrupted result.
+    Rather than patch these one at a time, swap the implicit resolvers for the 1.2 core
+    schema, which has none of them. Anything we cannot confidently type stays a string —
+    the safe direction, since a string fails a numeric rule loudly while a silently
+    rewritten number does not.
     """
 
 
@@ -111,16 +111,6 @@ class Node:
 
     def rels(self) -> set:
         return {l["rel"] for l in self.links}
-
-    def to_dict(self) -> dict:
-        # id and path come LAST: the filename is the truth. A stale `id:` left in the
-        # frontmatter after a rename must not overwrite it in graph.json, which is the
-        # artifact we hand to agents.
-        return {**self.frontmatter,
-                "links": self.links, "backlinks": self.backlinks,
-                "results": self.results, "repro": self.repro,
-                "sections": self.sections, "attachments": self.attachments,
-                "id": self.id, "path": self.path}
 
 
 def _yaml(text: str, label: str) -> dict:
@@ -198,3 +188,56 @@ def backlink(nodes: dict[str, Node]) -> dict[str, Node]:
     for nid, n in nodes.items():
         n.backlinks = back.get(nid, [])
     return nodes
+
+
+# ---------------------------------------------------------------------------------
+# Shared by BOTH surfaces. These lived twice — once in cli.py, once in mcp_server.py —
+# and drifted: the CLI's path printed relation labels while the MCP's did not, and a
+# search fix landed in one copy and not the other.
+
+def find_root(start: Path | None = None) -> Path:
+    """The graph containing `start` (default: cwd). A graph is the folder with graph.yaml."""
+    p = start or Path.cwd()
+    for c in [p, *p.parents]:
+        if (c / "graph.yaml").exists():
+            return c
+    raise GraphError("no graph.yaml found (run `knoten init` or cd into a graph)")
+
+
+def section(body: str, title: str) -> str | None:
+    """The prose under a `## <title>` heading, whitespace-collapsed."""
+    m = re.search(rf"^##+ {re.escape(title)}\s*\n+(.+?)(?=\n##|\Z)", body, re.S | re.M)
+    return " ".join(m.group(1).split()) if m else None
+
+
+def matches(n: Node, term: str) -> bool:
+    """Does this node answer the question "has this been tried?" for `term`?"""
+    t = term.lower()
+    return (t in n.id.lower() or t in n.body.lower()
+            or t in str(n.frontmatter.get("tags", "")).lower())
+
+
+def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str]] | None:
+    """BFS over the graph read as undirected — "how did we get from A to B?" doesn't care
+    which way an edge points. Returns [(node_id, relation_taken_to_reach_it), ...], the
+    first with an empty relation. `←rel` means the edge was traversed backwards."""
+    for nid in (a, b):
+        if nid not in nodes:
+            raise GraphError(f"no node '{nid}'")
+
+    adj = defaultdict(list)
+    for nid, n in nodes.items():
+        for l in n.links:
+            adj[nid].append((l["to"], l["rel"]))
+            adj[l["to"]].append((nid, "←" + l["rel"]))
+
+    q, seen = deque([[(a, "")]]), {a}
+    while q:
+        p = q.popleft()
+        if p[-1][0] == b:
+            return p
+        for nxt, rel in adj[p[-1][0]]:
+            if nxt not in seen:
+                seen.add(nxt)
+                q.append(p + [(nxt, rel)])
+    return None

@@ -33,30 +33,6 @@ def test_results_contains_only_the_results_block(graph):
     assert "script" not in n.results
 
 
-def test_results_keep_their_types(graph):
-    """A regex parser makes everything a string, so no rule can ever compare a
-    number. `underpowered = n<30` (SPEC 5) is unwritable against strings."""
-    graph.node("hyp-x", FM)
-    n = load(graph.root)["hyp-x"]
-
-    assert n.results["acc_greedy"] == 0.741
-    assert n.results["n_independent"] == 1319
-
-
-def test_list_fields_parse_as_lists(graph):
-    graph.node("hyp-x", FM)
-    n = load(graph.root)["hyp-x"]
-
-    assert n.frontmatter["tags"] == ["decoding", "reasoning"]
-
-
-def test_edges_parse(graph):
-    graph.node("hyp-x", FM)
-    n = load(graph.root)["hyp-x"]
-
-    assert n.links == [{"rel": "kn:killedByGate", "to": "method-gate"}]
-
-
 def test_backlink_is_generated_on_the_target(graph):
     graph.node("hyp-x", FM).node("method-gate", "id: method-gate\ntype: method")
     nodes = load(graph.root)
@@ -89,8 +65,25 @@ def test_node_without_frontmatter_raises(graph):
         load(graph.root)
 
 
-def test_parse_is_utf8_regardless_of_locale(graph, tmp_path):
-    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead", body="# köpke – ✓\n")
+@pytest.mark.parametrize("line,expected", [
+    ("wallclock: 12:30", "12:30"),      # YAML 1.1 sexagesimal -> 750
+    ("t: 1:30.5", "1:30.5"),            #                      -> 90.5
+    ("seed: 042", "042"),               # YAML 1.1 octal       -> 34
+    ("n: 1_000", "1_000"),              # underscore digits    -> 1000
+    ("run: 2024-01-15", "2024-01-15"),  # implicit timestamp   -> datetime.date
+])
+def test_yaml_1_1_does_not_silently_rewrite_a_result(graph, line, expected):
+    """`results:` holds experimental numbers. A runtime of 12:30 recorded as `750`, or a
+    seed of 042 as `34`, is a research-integrity bug — and it validated clean."""
+    graph.node("hyp-x", f"id: hyp-x\ntype: hypothesis\nstatus: dead\nresults:\n  {line}")
     n = load(graph.root)["hyp-x"]
 
-    assert "köpke – ✓" in n.body
+    assert list(n.results.values()) == [expected]
+
+
+def test_real_numbers_still_parse_as_numbers(graph):
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nresults:\n"
+                        "  acc: 0.741\n  n: 1319\n  neg: -3\n  exp: 1.2e-3\n  big: 0")
+    r = load(graph.root)["hyp-x"].results
+
+    assert r == {"acc": 0.741, "n": 1319, "neg": -3, "exp": 1.2e-3, "big": 0}

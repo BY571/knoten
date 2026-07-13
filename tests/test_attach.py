@@ -6,6 +6,7 @@ import pytest
 
 from knoten.cli import attach, detach
 from knoten.core import GraphError, load
+from knoten.validate import check
 
 FM = """\
 id: hyp-x
@@ -94,3 +95,59 @@ def test_attach_to_a_node_without_frontmatter_fails_cleanly(graph, tmp_path):
 
     with pytest.raises(GraphError, match="frontmatter"):
         attach(graph.root, "nofm", [str(f)])
+
+def test_attach_survives_a_zero_indent_attachments_list(graph, tmp_path):
+    """`yaml.dump` emits list items at ZERO indent by default. A dropper that requires
+    leading whitespace orphans them into the block above, leaving the node UNPARSEABLE —
+    which takes the whole graph down with it, since load() raises rather than skips."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nattachments:\n- old.png")
+    graph.attachment("hyp-x", "old.png")
+    new = tmp_path / "new.txt"
+    new.write_text("x", encoding="utf-8")
+
+    attach(graph.root, "hyp-x", [str(new)])
+
+    assert frontmatter_of(graph.read("hyp-x"))["attachments"] == ["new.txt", "old.png"]
+    assert load(graph.root)["hyp-x"].attachments == ["new.txt", "old.png"]
+
+
+@pytest.mark.parametrize("name", ["plot #1.png", "run: final.png", "123"])
+def test_a_filename_needing_quotes_gets_them(graph, tmp_path, name):
+    """Written raw, `plot #1.png` becomes the YAML comment `plot`, `run: final.png` a
+    mapping, and `123` an int. All are legal filenames."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
+    f = tmp_path / name
+    f.write_text("x", encoding="utf-8")
+
+    attach(graph.root, "hyp-x", [str(f)])
+
+    assert frontmatter_of(graph.read("hyp-x"))["attachments"] == [name]
+    assert load(graph.root)["hyp-x"].attachments == [name]
+    assert check(load(graph.root), graph.root) == []
+
+
+def test_two_files_with_the_same_basename_are_refused(graph, tmp_path):
+    """Both land on attachments/<id>/plot.png — the second silently overwrote the first
+    while the caller was told two files were attached."""
+    a, b = tmp_path / "a" / "plot.png", tmp_path / "b" / "plot.png"
+    for f in (a, b):
+        f.parent.mkdir()
+        f.write_text(f.parent.name, encoding="utf-8")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
+
+    with pytest.raises(GraphError, match="plot.png"):
+        attach(graph.root, "hyp-x", [str(a), str(b)])
+
+
+def test_attaching_a_directory_is_refused_before_anything_is_copied(graph, tmp_path):
+    """`exists()` is true for a directory, so the pre-check passed and copy2 died halfway,
+    leaving an orphan in attachments/."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
+    good = tmp_path / "good.py"
+    good.write_text("x", encoding="utf-8")
+    (tmp_path / "adir").mkdir()
+
+    with pytest.raises(GraphError, match="adir"):
+        attach(graph.root, "hyp-x", [str(good), str(tmp_path / "adir")])
+
+    assert not (graph.root / "attachments" / "hyp-x" / "good.py").exists()

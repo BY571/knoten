@@ -1,22 +1,17 @@
 """The rules engine.
 
-The core knows NOTHING about any domain. Every rule comes from the graph's own
-`graph.yaml`. A trading graph and a biology graph declare entirely different rules
-and share this code unchanged.
+The core knows NOTHING about any domain — every rule comes from the graph's own
+`graph.yaml`, so a trading graph and a biology graph share this code unchanged.
 
-Rules are the point. A knowledge base without enforcement decays into a wiki — which
-is the documented failure mode this tool exists to prevent. So a rule this engine
-cannot understand is a hard error, never a no-op: a rule that silently enforces
-nothing is worse than no rule at all, because you believe you are covered.
+A rule this engine cannot understand is a hard error, never a no-op: a rule that
+silently enforces nothing is worse than no rule, because you believe you are covered.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
-from .core import GENERATED, INVERSE, GraphError, Node, _Loader
+from .core import GENERATED, INVERSE, GraphError, Node, _yaml
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -28,7 +23,6 @@ RULE_KEYS = {
     "require_sections",    # body must contain these `## ` headings
     "require_result",      # results must carry this key
     "require_result_min",  # {key: minimum} — numeric floor
-    "if_result_any",       # only apply require_result when one of these is present
 }
 
 
@@ -43,10 +37,7 @@ def load_rules(root: Path) -> list[dict]:
     f = root / "graph.yaml"
     if not f.exists():
         return []
-    try:
-        cfg = yaml.load(f.read_text(encoding="utf-8"), Loader=_Loader) or {}
-    except yaml.YAMLError as e:
-        raise GraphError(f"graph.yaml: invalid YAML — {e}") from e
+    cfg = _yaml(f.read_text(encoding="utf-8"), "graph.yaml")
 
     rules = cfg.get("rules") or []
     if not isinstance(rules, list):
@@ -67,10 +58,8 @@ def load_rules(root: Path) -> list[dict]:
 
 
 def _check_values(r: dict) -> None:
-    """Validating key NAMES is not enough — a rule whose VALUE is the wrong shape used to
-    crash with a raw TypeError, which contradicts "a rule this engine cannot understand is
-    a hard error". `require_edge: [x]` is the natural mistake, since `when_status` does
-    take a list."""
+    """Key names are not enough: a wrong-SHAPED value must also be a hard error, not a
+    TypeError. `require_edge: [x]` is the natural mistake, since `when_status` takes a list."""
     rid = r["id"]
     for key in ("require_edge", "require_result"):
         if key in r and not isinstance(r[key], str):
@@ -150,10 +139,8 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
                 if not any(sec.lower() in s.lower() for s in n.sections):
                     out.append(Violation(n.id, rid, f"{msg} (missing '## {sec}')"))
 
-            if fld := r.get("require_result"):
-                trig = _csv(r.get("if_result_any"))
-                if (not trig or any(t in n.results for t in trig)) and fld not in n.results:
-                    out.append(Violation(n.id, rid, msg))
+            if (fld := r.get("require_result")) and fld not in n.results:
+                out.append(Violation(n.id, rid, msg))
 
             for key, floor in (r.get("require_result_min") or {}).items():
                 got = n.results.get(key)

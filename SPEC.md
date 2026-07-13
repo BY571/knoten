@@ -53,8 +53,8 @@ A system that stores only conclusions would have preserved ~15% of that.
 
 - **We do not build a Git host.** Git already provides versioning, branching, blame,
   diffs, PRs (peer review!) and hosting. Reimplementing any of it is madness.
-- **We do not build a UI first.** A static site generator over `graph.json` is a
-  phase-3 nicety.
+- **We do not build a UI first.** A static site generator over the graph is a
+  phase-3 nicety, and it can emit its own JSON when it exists.
 - **We do not invent a vocabulary.** Micropublications and nanopublications already
   standardised most of the predicates we need. We add only what is genuinely missing.
 - **The core knows nothing about any domain.** Not trading, not biology. Domain rules
@@ -196,7 +196,6 @@ rules:
 | `require_sections` | body must contain these `## ` headings. |
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
-| `if_result_any` | only apply `require_result` when one of these keys is present. |
 
 **An unknown rule key is a hard error.** A rule the engine cannot understand would
 enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is
@@ -222,7 +221,6 @@ my-graph/
   graph.yaml               # identity + rules
   nodes/*.md               # one node per file — the source of truth
   attachments/<id>/*       # the script that killed it, the plot that shows why
-  .knoten/graph.json       # GENERATED index (gitignored)
 ```
 
 Git provides: history, blame, diff-a-claim-as-it-changed, branches-as-research-
@@ -262,7 +260,7 @@ is constrained to kebab-case — an id is not a path.
 | phase | deliverable | status |
 |---|---|---|
 | **0** | **Dogfood** — encode a real investigation by hand | ✅ done |
-| **1** | `knoten` CLI (`init/validate/query/path/show/attach/build`) + rule engine | ✅ done |
+| **1** | `knoten` CLI (`init/validate/query/path/show/attach`) + rule engine | ✅ done |
 | **2** | **MCP server** (5 tools above) | ✅ done — the compounding step |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
 | 4 | Hosted multi-graph service | probably never needed |
