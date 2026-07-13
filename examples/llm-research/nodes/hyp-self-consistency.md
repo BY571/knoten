@@ -17,8 +17,6 @@ results:
   acc_compute_matched_baseline: 0.788
   tokens_per_question: 1420
   n_independent: 1319
-  - self_consistency.py
-  - self_consistency.py
 attachments:
   - accuracy_vs_budget.png
   - self_consistency.py

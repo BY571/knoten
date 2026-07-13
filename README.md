@@ -31,6 +31,7 @@ results:
   acc_self_consistency: 0.792
   acc_compute_matched_baseline: 0.788
   tokens_per_question: 1420
+  n_independent: 1319
 ---
 
 # Self-consistency (sample 5, majority vote) beats greedy decoding
@@ -68,7 +69,7 @@ $ knoten query "self-consistency"
 ## Use it
 
 ```bash
-pip install -e .
+pip install -e .                  # add ".[mcp]" for the agent server
 
 knoten init my-topic              # a new graph (it's a folder)
 knoten query <term>               # has this been tried?
@@ -77,11 +78,24 @@ knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>
 knoten validate                   # enforce this graph's own rules
 knoten path A B                   # how did we get from A to B?
+knoten build                      # emit .knoten/graph.json for agents
 ```
 
 Each graph declares its own rules in `graph.yaml`. `knoten` knows nothing about your
 field. It enforces whatever *you* said matters. The example graph requires every claim to
-report `tokens_per_question`; a different topic would require something else entirely.
+report `tokens_per_question` and to rest on at least 30 independent questions; a different
+topic would require something else entirely.
+
+```yaml
+rules:
+  - id: underpowered
+    when_type: hypothesis
+    require_result_min: {n_independent: 30}
+    message: A result on fewer than 30 independent questions is noise, not evidence.
+```
+
+A rule key `knoten` doesn't recognise is a **hard error**, not a shrug. A rule that
+silently enforces nothing is worse than no rule, because you think you're covered.
 
 ## Attach the code and the plots
 
@@ -126,6 +140,10 @@ The same file serves both. That's the whole design.
 Point Claude Code, or any MCP client, at a graph. It then **accumulates knowledge about a
 topic across sessions** instead of starting cold every time:
 
+```bash
+pip install -e ".[mcp]"
+```
+
 ```jsonc
 {"mcpServers": {"knoten": {
   "command": "knoten-mcp",
@@ -142,8 +160,9 @@ The agent reads the graph before running an experiment and writes back when it's
 **including when the experiment fails.** A dead hypothesis with a documented cause of death
 is the most valuable node in the graph, and the one that would otherwise be lost.
 
-`knoten_commit` **validates before writing and refuses on violation**. An agent cannot
-record a shiny result that cites no test it survived:
+`knoten_commit` **validates before writing and refuses on violation** — the candidate node
+is parsed and checked in memory, so an invalid node never reaches your filesystem. An agent
+cannot record a shiny result that cites no test it survived:
 
 ```json
 {"status": "REJECTED",
@@ -160,6 +179,11 @@ their cause of death and a command to re-run them.
 a test it survived, so a good-looking result that was never checked can't quietly become
 a finding.
 
+**And a broken node is a loud failure, not a quiet one.** Unreadable frontmatter, an
+unknown edge relation (`kn:killdByGate` — one letter dropped), a rule key that doesn't
+exist: all are errors. A graph that silently drops what it can't parse reports itself
+healthy while it rots.
+
 See `examples/llm-research/` for a worked graph and [SPEC.md](SPEC.md) for the design.
 
-MIT. No required dependencies. The whole thing is a few files you can read in one sitting.
+MIT. One dependency (PyYAML). The whole thing is a few files you can read in one sitting.

@@ -26,3 +26,8 @@ rules:
     message: >
       An accuracy gain bought with extra inference compute is not a method, it is a
       bigger bill. State the token budget.
+
+  - id: underpowered
+    when_type: hypothesis
+    require_result_min: {n_independent: 30}
+    message: A result on fewer than 30 independent questions is noise, not evidence.

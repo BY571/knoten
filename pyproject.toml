@@ -1,14 +1,31 @@
 [project]
 name = "knoten"
-version = "0.1.0"
+version = "0.2.0"
 description = "Falsification-first research graphs in git. Records why a hypothesis died — and what would reopen it."
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
-optional-dependencies = {mcp = ["mcp>=1.0"]}
-license = {text = "MIT"}
+license = { text = "MIT" }
+authors = [{ name = "Sebastian Dittert", email = "sebastian.dittert3692@gmail.com" }]
+keywords = ["research", "knowledge-graph", "falsification", "markdown", "mcp", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = ["pyyaml>=6"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+dev = ["pytest>=8", "anyio>=4"]
+
+[project.urls]
+Homepage = "https://github.com/BY571/knoten"
+Source = "https://github.com/BY571/knoten"
 
 [project.scripts]
-knoten = "knoten.cli:main"
+knoten = "knoten.cli:cli"
 knoten-mcp = "knoten.mcp_server:main"
 
 [build-system]
@@ -17,3 +34,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

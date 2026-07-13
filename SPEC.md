@@ -140,36 +140,72 @@ Jun 2026), grounded in the seven real deaths of the source session:
 | `underpowered` | too few independent bets | any t-stat on n<30 |
 | `crowding_decay` | it was real; it got arbitraged | a real edge that got arbitraged away |
 
-Every dead/retracted node carries `death.cause`, a `## Why it died` section, and a
+Every dead/retracted node should carry a `cause`, a `## Why it died` section, and a
 **`## What would reopen this`** section. The last is non-negotiable: it converts a
 dead end into a **standing offer**, and it is what stops the next agent re-running it.
+
+**The core does not enforce this vocabulary, and must not** — a cause of death is
+domain knowledge, and §2 says the core knows no domain. The list above is a *convention*
+for research graphs. Your graph enforces the parts it cares about, as data:
+
+```yaml
+  - id: dead-claims-must-say-why
+    when_status: dead, retracted
+    require_sections: Why it died, reopen
+    message: The post-mortem IS the asset — a dead end must become a standing offer.
+```
 
 ---
 
 ## 6. Rules as configuration
 
 The core enforces whatever the graph declares. **Domain knowledge lives in data,
-never in code.** Use **LinkML** (YAML schemas, validates JSON/RDF/TSV) rather than a
-bespoke validator.
+never in code.**
+
+LinkML was the original plan and was dropped: it validates *shape*, and every rule that
+matters here is a *predicate over a node* ("does this claim cite a gate?"). A LinkML
+schema plus a bespoke predicate layer is strictly more machinery than the predicate
+layer alone. The rule engine is ~40 lines in `validate.py`.
 
 ```yaml
-# graph.yaml — the trading graph's rules. Each one is a SCAR.
+# graph.yaml — each rule is a SCAR. Write one only when you have a corpse.
 rules:
   - id: live-claims-must-cite-their-gates
-    when:    {status: alive}
-    require: {edge: kn:survivedGate, min: 1}
-    message: "An unchallenged claim is not a finding, it is a hope."
+    when_status: alive
+    when_type: hypothesis, finding
+    require_edge: kn:survivedGate
+    message: An unchallenged claim is not a finding, it is a hope.
 
   - id: dead-claims-must-say-why
-    when:    {status: [dead, retracted]}
-    require: {field: death.cause, sections: ["Why it died", "What would reopen this"]}
-    message: "The post-mortem IS the asset."
+    when_status: dead, retracted
+    require_sections: Why it died, reopen
+    message: The post-mortem IS the asset.
 
-  - id: results-need-a-sample-size
-    when:    {has: results.effect_size}
-    require: {field: results.n_independent}
-    message: "An effect size without a sample size is not evidence."
+  - id: underpowered
+    when_type: hypothesis
+    require_result_min: {n_independent: 30}
+    message: An effect size without a sample size is not evidence.
 ```
+
+| key | effect |
+|---|---|
+| `id` | **required.** Names the rule in the violation. |
+| `message` | what the human reads when it fires. |
+| `when_status` / `when_type` | only apply to these statuses / node types (comma-separated). |
+| `require_edge` | node must declare this relation. |
+| `require_sections` | body must contain these `## ` headings. |
+| `require_result` | `results:` must carry this key. |
+| `require_result_min` | `{key: floor}` — numeric floor on a result. |
+| `if_result_any` | only apply `require_result` when one of these keys is present. |
+
+**An unknown rule key is a hard error.** A rule the engine cannot understand would
+enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is
+worse than no validator, because you believe you are covered. The same goes for an
+unknown edge relation (`kn:killdByGate`, one letter dropped) and for frontmatter that
+does not parse.
+
+Always-on structural checks, which no graph has to declare: `dangling-edge`,
+`missing-attachment`, `unknown-relation`, `authored-backlink`.
 
 A biology graph declares entirely different rules. The core never changes.
 
@@ -183,9 +219,10 @@ A biology graph declares entirely different rules. The core never changes.
 
 ```
 my-graph/
-  graph.yaml            # identity + rules (LinkML)
-  nodes/*.md            # one node per file — the source of truth
-  .rg/graph.json        # GENERATED index (gitignored)
+  graph.yaml               # identity + rules
+  nodes/*.md               # one node per file — the source of truth
+  attachments/<id>/*       # the script that killed it, the plot that shows why
+  .knoten/graph.json       # GENERATED index (gitignored)
 ```
 
 Git provides: history, blame, diff-a-claim-as-it-changed, branches-as-research-
@@ -204,15 +241,19 @@ memory files.
 
 | tool | purpose |
 |---|---|
-| `research_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death |
-| `research_get(id)` | full node, including the post-mortem |
-| `research_commit(node)` | append a node (runs `validate` first; **rejects on rule violation**) |
-| `research_path(a, b)` | show the research path — how did we get from A to B? |
-| `research_validate()` | run the graph's own declared rules |
+| `knoten_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death |
+| `knoten_get(id)` | full node, including the post-mortem |
+| `knoten_commit(node)` | append a node (validates first; **rejects on rule violation**) |
+| `knoten_path(a, b)` | show the research path — how did we get from A to B? |
+| `knoten_validate()` | run the graph's own declared rules |
 
-The gate is the point: **`research_commit` refuses a `status: alive` node with no
+The gate is the point: **`knoten_commit` refuses a `status: alive` node with no
 `kn:survivedGate` edge.** The system will not let an agent — or a human — record an
 unchallenged claim as a finding.
+
+The candidate node is parsed and checked **in memory**; nothing reaches the filesystem
+until it is clean. And because the `id` becomes a filename and is authored by an LLM, it
+is constrained to kebab-case — an id is not a path.
 
 ---
 
@@ -220,14 +261,14 @@ unchallenged claim as a finding.
 
 | phase | deliverable | status |
 |---|---|---|
-| **0** | **Dogfood** — encode a real investigation by hand | ✅ **done: 18 nodes** |
-| 1 | Format spec + LinkML schema + `rg` CLI (`init/new/validate/query/path/build`) | next |
-| 2 | **MCP server** (5 tools above) | the compounding step |
+| **0** | **Dogfood** — encode a real investigation by hand | ✅ done |
+| **1** | `knoten` CLI (`init/validate/query/path/show/attach/build`) + rule engine | ✅ done |
+| **2** | **MCP server** (5 tools above) | ✅ done — the compounding step |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
 | 4 | Hosted multi-graph service | probably never needed |
 
-Phase 0 is complete and it **validated the schema against real content** — including
-retractions, structural blockers, and prose that no JSON schema could hold.
+Phase 0 **validated the schema against real content** — including retractions, structural
+blockers, and prose that no JSON schema could hold.
 
 ---
 
@@ -243,11 +284,12 @@ Micropublications, nanopublications, PROV-O and LinkML are all open and safe to 
 
 ## 11. Open questions
 
-1. **Name.** `popper` (after Karl Popper — falsification-first) is the obvious one and
-   says exactly what the tool is for. Check availability.
-2. **Do we emit RDF?** A `graph.ttl` export would make the graph interoperable with
+1. **Do we emit RDF?** A `graph.ttl` export would make the graph interoperable with
    the nanopub ecosystem for ~nothing. Probably yes, phase 3.
-3. **Embeddings for `research_query`?** Start with grep + frontmatter filters. Add
+2. **Embeddings for `knoten_query`?** Start with grep + frontmatter filters. Add
    semantic search only if grep demonstrably fails.
-4. **Multi-graph federation** — one agent querying trading *and* biology graphs.
+3. **Multi-graph federation** — one agent querying trading *and* biology graphs.
    Defer until a second graph exists.
+4. **A closed `cause` vocabulary (§5) as a rule primitive?** Would need a
+   `require_field_one_of` key. Wait until a second graph wants it — a primitive with one
+   caller is a guess.
