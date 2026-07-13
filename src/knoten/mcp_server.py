@@ -50,6 +50,13 @@ def _summarise(n: Node) -> dict:
                      ("npx:retracts", "retracts"), ("kn:blockedBy", "blocked_by")]:
         if ts := [l["to"] for l in n.links if l["rel"] == rel]:
             out[key] = ts
+    # A claim someone later WITHDREW is invisible unless we say so: we reported what a node
+    # retracts, never that it WAS retracted.
+    for rel, key in [("npx:retractedBy", "retracted_by"), ("npx:supersededBy", "superseded_by")]:
+        if ts := [b["to"] for b in n.backlinks if b["rel"] == rel]:
+            out[key] = ts
+            out["warning"] = (f"This claim was {key.replace('_', ' ')} {', '.join(ts)}. "
+                              f"Read that node before relying on this one.")
     if why := section(n.body, "Why it died"):
         out["why_it_died"] = why[:400]
     if reopen := section(n.body, "What would reopen this"):

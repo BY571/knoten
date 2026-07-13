@@ -151,7 +151,7 @@ for research graphs. Your graph enforces the parts it cares about, as data:
 ```yaml
   - id: dead-claims-must-say-why
     when_status: dead, retracted
-    require_sections: Why it died, reopen
+    require_sections: Why it died, What would reopen this
     message: The post-mortem IS the asset — a dead end must become a standing offer.
 ```
 
@@ -178,7 +178,7 @@ rules:
 
   - id: dead-claims-must-say-why
     when_status: dead, retracted
-    require_sections: Why it died, reopen
+    require_sections: Why it died, What would reopen this
     message: The post-mortem IS the asset.
 
   - id: underpowered

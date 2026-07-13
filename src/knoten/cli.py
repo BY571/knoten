@@ -12,7 +12,7 @@ from pathlib import Path
 from . import attachments
 from .core import ID_RE, VERDICT, GraphError, find_root, load, matches, section, shortest_path
 from .hook import install as install_hook
-from .validate import check
+from .validate import _csv, check, load_config
 
 MARK = {"alive": "✓ ALIVE", "dead": "✗ DEAD", "retracted": "⊘ RETRACTED"}
 
@@ -41,6 +41,10 @@ def query(root, term) -> int:
         print(f"  [{MARK[n.status]}] {n.id}")
         for rel, label in [("kn:killedByGate", "killed by"), ("kn:survivedGate", "survived ")]:
             if ts := [l["to"] for l in n.links if l["rel"] == rel]:
+                print(f"      {label} : {', '.join(ts)}")
+        for rel, label in [("npx:retractedBy", "RETRACTED by"),
+                           ("npx:supersededBy", "superseded by")]:
+            if ts := [b["to"] for b in n.backlinks if b["rel"] == rel]:
                 print(f"      {label} : {', '.join(ts)}")
         if reopen := section(n.body, "What would reopen this"):
             print(f"      reopen if : {reopen[:140]}…")
@@ -141,7 +145,7 @@ rules:
 
   - id: dead-claims-must-say-why
     when_status: dead, retracted
-    require_sections: Why it died, reopen
+    require_sections: Why it died, What would reopen this
     message: The post-mortem IS the asset — a dead end must become a standing offer.
 """
 
@@ -161,6 +165,54 @@ status: active
 
 Replace this with a real gate. Delete it if you have none yet — but you will.
 """
+
+
+def new(root, ntype, nid, status) -> int:
+    """Scaffold a node carrying every section and field THIS graph's rules demand.
+
+    Nothing here is knoten's opinion — it reads the graph's own declarations. The values
+    are TODO on purpose: `knoten validate` then names the ones you still owe it, so `new`
+    + `validate` is a checklist rather than a guessing game.
+    """
+    if not ID_RE.match(nid):
+        raise GraphError(f"'{nid}' is not a valid id (use kebab-case: hyp-my-idea)")
+    nf = root / "nodes" / f"{nid}.md"
+    if nf.exists():
+        raise GraphError(f"'{nid}' already exists. Supersede or retract it — corrections "
+                         f"are nodes, not edits.")
+
+    cfg = load_config(root)
+    # `new` used to skip this while knoten_commit enforced it: the same node was accepted
+    # by one entry point and rejected by the other.
+    for field, declared in [("type", cfg.get("node_types")), ("status", cfg.get("statuses"))]:
+        value = ntype if field == "type" else status
+        if declared and value not in declared:
+            raise GraphError(f"{field} '{value}' is not declared in graph.yaml "
+                             f"({field}s: {', '.join(map(str, declared))})")
+
+    sections, results = [], []
+    for r in cfg.get("rules", []):
+        if (st := _csv(r.get("when_status"))) and status not in st:
+            continue
+        if (ty := _csv(r.get("when_type"))) and ntype not in ty:
+            continue
+        sections += _csv(r.get("require_sections"))
+        results += [k for k in [r.get("require_result")] if k]
+        results += list(r.get("require_result_min") or {})
+
+    fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}"]
+    if results:
+        fm.append("results:")
+        fm += [f"  {k}: TODO" for k in dict.fromkeys(results)]
+
+    body = ["# TODO — state the claim in one line\n"]
+    body += [f"## {s}\nTODO\n" for s in dict.fromkeys(sections)]
+
+    nf.write_text("---\n" + "\n".join(fm) + "\n---\n\n" + "\n".join(body), encoding="utf-8")
+    print(f"  + nodes/{nid}.md  ({ntype}, {status})")
+    if wanted := [f"## {s}" for s in dict.fromkeys(sections)] + list(dict.fromkeys(results)):
+        print(f"    pre-filled what THIS graph's rules require: {', '.join(wanted)}")
+    return 0
 
 
 def init(name) -> int:
@@ -192,6 +244,11 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("name")
 
     sub.add_parser("validate", help="enforce THIS graph's declared rules")
+
+    s = sub.add_parser("new", help="scaffold a node with whatever the rules demand")
+    s.add_argument("type")
+    s.add_argument("id")
+    s.add_argument("--status", default="open")
 
     s = sub.add_parser("query", help='"has this been tried?" -> verdicts + causes of death')
     s.add_argument("term")
@@ -230,6 +287,7 @@ def main(argv=None) -> int:
         return {
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
+            "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),

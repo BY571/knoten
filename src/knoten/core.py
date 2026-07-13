@@ -210,11 +210,19 @@ def section(body: str, title: str) -> str | None:
     return " ".join(m.group(1).split()) if m else None
 
 
+def _tokens(s: str) -> list[str]:
+    return [t for t in re.split(r"[^a-z0-9]+", s.lower()) if t]
+
+
 def matches(n: Node, term: str) -> bool:
-    """Does this node answer the question "has this been tried?" for `term`?"""
-    t = term.lower()
-    return (t in n.id.lower() or t in n.body.lower()
-            or t in str(n.frontmatter.get("tags", "")).lower())
+    """Does this node answer "has this been tried?" for `term`?
+
+    Every token must appear. A substring match meant `query "self consistency"` found
+    NOTHING, because the node is `self-consistency` — the headline question failing on a
+    space, and answering "untested" for work that is already dead.
+    """
+    hay = " ".join(_tokens(f"{n.id} {n.body} {n.frontmatter.get('tags', '')}"))
+    return all(t in hay for t in _tokens(term))
 
 
 def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str]] | None:
