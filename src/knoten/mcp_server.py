@@ -1,19 +1,13 @@
 """MCP server — the reason this project exists.
 
-A knowledge base that depends on someone REMEMBERING to write to it will be empty in
-six months. That is not a hypothesis; it is the documented failure mode this tool was
-built in response to (a prior `knowledge_graph.jsonl`, scaffolded and never written
-to, still zero bytes).
-
-The fix is to make the graph reachable from inside the work, not alongside it. With
-this server, any agent can:
+A knowledge base that depends on someone REMEMBERING to write to it will be empty in six
+months. So make the graph reachable from inside the work, not alongside it:
 
     knoten_query("has anyone tested X?")   BEFORE starting  -> don't redo dead work
     knoten_commit(node)                    AFTER finishing   -> the graph writes itself
 
-`knoten_commit` VALIDATES before writing and REFUSES on violation. An agent cannot
-record an unchallenged claim as a finding — the gate is enforced at the door, not by
-good intentions.
+`knoten_commit` validates the candidate in memory and refuses on violation; nothing
+reaches disk until it is clean.
 
 Run:
     knoten-mcp                       # serves the graph found from $PWD
@@ -26,11 +20,18 @@ import os
 import re
 from pathlib import Path
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+try:
+    from mcp.server import Server
+    from mcp.server.stdio import stdio_server
+    from mcp.types import TextContent, Tool
+except ImportError as e:  # pragma: no cover
+    raise SystemExit(
+        "knoten-mcp needs the `mcp` extra:\n\n    pip install 'knoten[mcp]'\n"
+    ) from e
 
-from .core import load
+from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, matches,
+                   parse_text, section, shortest_path)
+from .core import load as load_graph
 from .validate import check
 
 app = Server("knoten")
@@ -39,35 +40,23 @@ app = Server("knoten")
 def _root() -> Path:
     if env := os.environ.get("KNOTEN_GRAPH"):
         return Path(env).expanduser()
-    p = Path.cwd()
-    for c in [p, *p.parents]:
-        if (c / "graph.yaml").exists():
-            return c
-    raise RuntimeError("no graph.yaml found; set KNOTEN_GRAPH")
+    return find_root()
 
 
-def _verdict(n) -> str:
-    return {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}.get(
-        n.status, n.status or "-")
-
-
-def _section(body: str, title: str) -> str | None:
-    m = re.search(rf"^##+ {re.escape(title)}\s*\n+(.+?)(?=\n##|\Z)", body, re.S | re.M)
-    return " ".join(m.group(1).split()) if m else None
-
-
-def _summarise(n) -> dict:
-    out = {"id": n.id, "type": n.type, "verdict": _verdict(n)}
+def _summarise(n: Node) -> dict:
+    out = {"id": n.id, "type": n.type, "verdict": VERDICT.get(n.status, n.status or "-")}
     for rel, key in [("kn:killedByGate", "killed_by"), ("kn:survivedGate", "survived_gates"),
                      ("npx:retracts", "retracts"), ("kn:blockedBy", "blocked_by")]:
         if ts := [l["to"] for l in n.links if l["rel"] == rel]:
             out[key] = ts
-    if why := _section(n.body, "Why it died"):
+    if why := section(n.body, "Why it died"):
         out["why_it_died"] = why[:400]
-    if re_ := _section(n.body, "What would reopen this"):
-        out["what_would_reopen_this"] = re_[:400]
+    if reopen := section(n.body, "What would reopen this"):
+        out["what_would_reopen_this"] = reopen[:400]
     if n.results:
         out["results"] = n.results
+    if n.repro:
+        out["repro"] = n.repro
     if n.attachments:
         out["attachments"] = [f"attachments/{n.id}/{a}" for a in n.attachments]
     return out
@@ -99,16 +88,16 @@ async def list_tools() -> list[Tool]:
             name="knoten_commit",
             description=(
                 "Add a node to the graph. VALIDATES FIRST and REFUSES on rule violation — "
-                "e.g. a claim marked 'alive' that cites no gate it survived, or a t-stat "
-                "with no count of independent observations. Call this when an "
-                "investigation concludes, INCLUDING when it fails. A dead hypothesis with "
+                "e.g. a claim marked 'alive' that cites no gate it survived. Call this when "
+                "an investigation concludes, INCLUDING when it fails. A dead hypothesis with "
                 "a documented cause of death is the most valuable node in the graph."),
             inputSchema={"type": "object", "properties": {
-                "id": {"type": "string", "description": "kebab-case, e.g. hyp-my-idea"},
+                "id": {"type": "string",
+                       "description": "kebab-case, e.g. hyp-my-idea. Lowercase letters, "
+                                      "digits, - and _ only."},
                 "frontmatter": {"type": "string",
                                 "description": "YAML frontmatter body (no --- fences). Must "
-                                               "include type and status. Dead/retracted nodes "
-                                               "need a cause; alive claims need a "
+                                               "include type and status. Alive claims need a "
                                                "kn:survivedGate link."},
                 "body": {"type": "string",
                          "description": "Markdown. Dead/retracted nodes MUST contain "
@@ -130,24 +119,52 @@ async def list_tools() -> list[Tool]:
     ]
 
 
+def _commit(root: Path, nodes: dict[str, Node], args: dict) -> dict:
+    """Validate the candidate in memory. Nothing touches disk until it is clean."""
+    nid = args["id"]
+    if not ID_RE.match(nid or ""):
+        return {"status": "REJECTED", "node": nid,
+                "reason": "invalid id — use kebab-case (lowercase letters, digits, - and _), "
+                          "e.g. hyp-self-consistency. An id becomes a filename."}
+    path = root / "nodes" / f"{nid}.md"
+    if path.exists():
+        return {"status": "REJECTED", "node": nid,
+                "reason": f"'{nid}' already exists. Supersede or retract it instead of "
+                          "overwriting — corrections are nodes, not edits."}
+
+    text = f"---\n{args['frontmatter'].strip()}\n---\n\n{args['body'].strip()}\n"
+    try:
+        candidate = parse_text(text, nid)
+    except GraphError as e:
+        return {"status": "REJECTED", "node": nid, "reason": str(e)}
+
+    if errs := [e for e in check(backlink({**nodes, nid: candidate}), root) if e.node == nid]:
+        return {"status": "REJECTED", "node": nid,
+                "violations": [{"rule": e.rule, "message": e.message} for e in errs],
+                "hint": "Fix the violations and commit again. The gate is the point."}
+
+    path.write_text(text, encoding="utf-8")
+    return {"status": "COMMITTED", "node": nid, "path": f"nodes/{nid}.md",
+            "graph_size": len(nodes) + 1,
+            "next": "git add + commit to version this."}
+
+
 @app.call_tool()
 async def call_tool(name: str, args: dict) -> list[TextContent]:
-    root = _root()
-    nodes = load(root)
-
     def ok(payload) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(payload, indent=2, default=str))]
 
+    try:
+        root = _root()
+        nodes = load_graph(root)
+    except GraphError as e:
+        return ok({"error": str(e)})
+
     if name == "knoten_query":
-        q = args["query"].lower()
-        hits = [n for n in nodes.values()
-                if q in n.id.lower() or q in n.body.lower()
-                or q in str(n.frontmatter.get("tags", "")).lower()]
-        claims = [_summarise(n) for n in hits
-                  if n.status in ("alive", "dead", "retracted")]
-        methods = [n.id for n in hits if n.type == "method"]
+        hits = [n for n in nodes.values() if matches(n, args["query"])]
+        claims = [_summarise(n) for n in hits if n.status in VERDICT]
         return ok({"query": args["query"], "claims": claims,
-                   "related_methods": methods,
+                   "related_methods": [n.id for n in hits if n.type == "method"],
                    "note": ("Claims marked DEAD or RETRACTED have already been tested. "
                             "Read 'what_would_reopen_this' before re-running them.")
                    if claims else "No prior work found. This appears untested."})
@@ -160,42 +177,18 @@ async def call_tool(name: str, args: dict) -> list[TextContent]:
                    "links": n.links, "backlinks": n.backlinks, "body": n.body})
 
     if name == "knoten_commit":
-        nid = args["id"]
-        path = root / "nodes" / f"{nid}.md"
-        if path.exists():
-            return ok({"status": "REJECTED", "reason": f"'{nid}' already exists. "
-                       "Supersede or retract it instead of overwriting — corrections are "
-                       "nodes, not edits."})
-        text = f"---\n{args['frontmatter'].strip()}\n---\n\n{args['body'].strip()}\n"
-        path.write_text(text)
-        errs = check(load(root), root)
-        mine = [e for e in errs if e.node == nid]
-        if mine:
-            path.unlink()                      # never leave an invalid graph on disk
-            return ok({"status": "REJECTED", "node": nid,
-                       "violations": [{"rule": e.rule, "message": e.message} for e in mine],
-                       "hint": "Fix the violations and commit again. The gate is the point."})
-        return ok({"status": "COMMITTED", "node": nid, "path": str(path.relative_to(root)),
-                   "graph_size": len(load(root)),
-                   "next": "git add + commit to version this."})
+        return ok(_commit(root, nodes, args))
 
     if name == "knoten_path":
-        from collections import defaultdict, deque
         a, b = args["from"], args["to"]
-        adj = defaultdict(list)
-        for nid, n in nodes.items():
-            for l in n.links:
-                adj[nid].append((l["to"], l["rel"]))
-                adj[l["to"]].append((nid, "<-" + l["rel"]))
-        q, seen = deque([(a, [a])]), {a}
-        while q:
-            cur, p = q.popleft()
-            if cur == b:
-                return ok({"path": p, "hops": len(p) - 1})
-            for nxt, _ in adj[cur]:
-                if nxt not in seen:
-                    seen.add(nxt); q.append((nxt, p + [nxt]))
-        return ok({"path": None, "note": f"no path {a} -> {b}"})
+        p = shortest_path(nodes, a, b)
+        if p is None:
+            return ok({"path": None, "note": f"no path {a} -> {b}"})
+        # WITH the relation on each hop. Without it an agent learns two nodes are
+        # connected but not HOW, which is useless for reasoning about falsification.
+        return ok({"path": [{"node": nid, "via": rel} if rel else {"node": nid}
+                            for nid, rel in p],
+                   "hops": len(p) - 1})
 
     if name == "knoten_validate":
         errs = check(nodes, root)
