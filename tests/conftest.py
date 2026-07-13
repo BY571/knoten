@@ -17,6 +17,11 @@ rules:
 
 
 @pytest.fixture
+def rules_yaml():
+    return RULES
+
+
+@pytest.fixture
 def graph(tmp_path):
     """A minimal graph on disk. Returns a helper to add nodes and set rules."""
 

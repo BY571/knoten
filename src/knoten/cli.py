@@ -16,6 +16,7 @@ import yaml
 
 from .core import (FM_RE, ID_RE, VERDICT, GraphError, _Loader, find_root, load, matches,
                    read_frontmatter, section, shortest_path, split)
+from .hook import install as install_hook
 from .validate import check
 
 MARK = {"alive": "✓ ALIVE", "dead": "✗ DEAD", "retracted": "⊘ RETRACTED"}
@@ -64,6 +65,13 @@ def path(root, a, b) -> int:
     print(f"research path {a} → {b}:\n")
     for i, (nid, rel) in enumerate(p):
         print("  " * i + (f"└─ {rel} → " if rel else "") + nid)
+    return 0
+
+
+def hook(root, force) -> int:
+    h = install_hook(root, force=force)
+    print(f"  ✓ installed {h}")
+    print("    `git commit` now runs `knoten validate` and refuses a broken graph.")
     return 0
 
 
@@ -282,7 +290,8 @@ def init(name) -> int:
     print(f"created graph '{name}'\n")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
     print(f"  {name}/nodes/       <- one markdown file per hypothesis / method / source\n")
-    print(f"  next:  cd {name} && git init && knoten validate")
+    print(f"  next:  cd {name} && git init && knoten hook")
+    print("         (the hook makes `git commit` refuse a graph that breaks its own rules)")
     return 0
 
 
@@ -305,6 +314,10 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("path", help="how did we get from A to B?")
     s.add_argument("a")
     s.add_argument("b")
+
+    s = sub.add_parser("hook", help="install the git pre-commit gate")
+    s.add_argument("--force", action="store_true",
+                   help="overwrite a pre-commit hook knoten did not write")
 
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
@@ -333,6 +346,7 @@ def main(argv=None) -> int:
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
             "show":   lambda: show(root, args.node),
+            "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
         }[args.cmd]()
