@@ -73,19 +73,25 @@ $ knoten query "self-consistency"
 pip install -e .                  # add ".[mcp]" for the agent server
 
 knoten init my-topic              # a new graph (it's a folder)
-knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
-knoten query <term>               # has this been tried?
+
+# deciding what to do
 knoten frontier                   # what should I work on next?
-knoten gates                      # what must a claim survive here?
 knoten index                      # the whole graph, one line per node
 knoten index --tag decoding       # ...narrowed to one corner of it
 knoten index --since 2026-08-01   # ...or to what moved this month
+knoten query <term>               # has this been tried, by keyword?
 knoten show <node>                # edges, results, attachments
+knoten gates                      # what must a claim survive here?
+
+# recording what happened
+knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
 knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>
+
+# keeping it honest
 knoten validate                   # enforce this graph's own rules
-knoten path A B                   # how did we get from A to B?
 knoten hook                       # make `git commit` refuse a broken graph
+knoten path A B                   # how did we get from A to B?
 ```
 
 Each graph declares its own rules in `graph.yaml`. `knoten` knows nothing about your
@@ -194,6 +200,32 @@ knoten show hyp-self-consistency     # edges, results, attachments
 knoten detach hyp-self-consistency accuracy_vs_budget.png
 ```
 
+## What now?
+
+A graph that only answers *"has this been tried?"* is a filing cabinet. `frontier` is the
+one screen that answers *"what next?"*:
+
+```
+$ knoten frontier
+
+  OPEN — started, never settled
+    hyp-batch-schedule        Does the LR schedule interact with batch size?
+
+  REOPENABLE — died, but said what would bring them back
+    hyp-self-consistency      Self-consistency (sample 5, majority vote) beats greedy
+      reopen if : A task where the majority-vote aggregation is doing real work…
+
+  UNTESTED GATES — no claim has been through them
+    method-holdout-period     Gate: hold out the last 20%
+```
+
+A dead end with a standing offer is a **cheaper experiment than a new idea**, because the
+design is already written down. That is what `## What would reopen this` is for: without
+somewhere to surface it, acting on one means re-reading every post-mortem in the graph.
+
+knoten does not decide whether a condition is *met*. That is a judgement, and it is the
+research. It puts the offers where you cannot walk past them.
+
 ## "Has this been tried?" — and "anything like it?"
 
 Two different questions. `query` answers the first by keyword, ranked by how well each
@@ -222,14 +254,13 @@ $ knoten index --tag decoding
 That is cheap enough to read in full — the entire graph, not a guess about which part of
 it is relevant. For an agent it is cheaper still than a broad `query`, because a row is a
 claim rather than a whole node: on a 500-node graph a broad query returned ~83k tokens,
-the same graph's index is ~9k, and one tag narrows it to ~2.5k. `knoten index --status open`
-answers a third question the graph could not answer at all before: **what is still open?**
+the same graph's index is ~9k, and one tag narrows it to ~2.5k.
 
-## The gate, before the experiment
+## What a claim has to survive
 
-A claim can only be marked `alive` if it cites a gate it survived — so an agent that
-discovers the gate at commit time has already spent the compute on an experiment whose
-result cannot be filed. `gates` puts the specification in front of the work:
+A claim can only be marked `alive` if it cites a gate it survived. An agent that meets
+the gate at commit time has already spent the compute on an experiment whose result
+cannot be filed. `gates` puts the specification in front of the work:
 
 ```
 $ knoten gates
@@ -243,32 +274,6 @@ $ knoten gates
 The record on the right is free — the back-links already exist — and it is the more
 interesting half. A gate that has killed nothing and validated nothing has never been
 applied, which is either a useless check or a check nobody is running.
-
-## What now?
-
-A graph that only answers *"has this been tried?"* is a filing cabinet. `frontier` is the
-one screen that answers *"what next?"*:
-
-```
-$ knoten frontier
-
-  OPEN — started, never settled
-    hyp-batch-schedule        Does the LR schedule interact with batch size?
-
-  REOPENABLE — died, but said what would bring them back
-    hyp-self-consistency      Self-consistency (sample 5, majority vote) beats greedy
-      reopen if : A task where the majority-vote aggregation is doing real work…
-
-  UNTESTED GATES — no claim has been through them
-    method-holdout-period     Gate: hold out the last 20%
-```
-
-A dead end with a standing offer is a **cheaper experiment than a new idea**, because the
-design is already written down — that is what `## What would reopen this` was for, and
-until now the only way to act on one was to re-read every post-mortem.
-
-knoten does not decide whether a condition is *met*. That is a judgement, and it is the
-research. It puts the offers where you cannot walk past them.
 
 ## Two readers, one file
 
@@ -368,6 +373,11 @@ cannot record a shiny result that cites no test it survived:
 
 **You stop redoing experiments you already ran and forgot.** Dead ends come back with
 their cause of death and a command to re-run them.
+
+**And work that outlives the session still gets closed.** An agent opens a hypothesis,
+runs an experiment for a week, and records the verdict on the same node when it returns —
+so *what is still open?* stays a real answer instead of filling up with questions that
+were settled and never filed.
 
 **And you can't fool yourself as easily:** a claim can only be marked *alive* if it cites
 a test it survived, so a good-looking result that was never checked can't quietly become
