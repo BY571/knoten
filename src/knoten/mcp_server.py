@@ -28,7 +28,18 @@ try:
     from mcp.server import MCPServer
     from pydantic import Field
 except ImportError as e:  # pragma: no cover
+    try:
+        from importlib.metadata import version
+        have = version("mcp")
+    except Exception:
+        have = None
+    # Distinguish "not installed" from "installed but too old". They need different
+    # commands, and telling someone to install what they already have is a dead end:
+    # `MCPServer` arrived in mcp 2.0, so a 1.x install fails here looking identical.
     raise SystemExit(
+        f"knoten-mcp needs mcp>=2 (you have {have}). Upgrade with:\n\n"
+        f"    pip install -U 'knoten[mcp]'\n"
+        if have else
         "knoten-mcp needs the `mcp` extra:\n\n    pip install 'knoten[mcp]'\n"
     ) from e
 
