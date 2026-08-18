@@ -76,20 +76,16 @@ def test_index_where_error_in_json_mode_is_a_stdout_payload(graph, monkeypatch, 
     assert json.loads(out)["error"]
 
 
-def test_index_limit_help_states_the_real_default():
+def test_index_limit_help_states_the_real_default(capsys):
     """`--limit 0` never meant uncapped — `ops.index` treats 0 as falsy and falls back
-    to INDEX_LIMIT — but the help text used to claim '0 = no limit'."""
-    import argparse
+    to INDEX_LIMIT — but the help text used to claim '0 = no limit'. Read through
+    `--help`, which is what a user actually sees, rather than argparse internals."""
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["index", "--help"])
+    help_text = capsys.readouterr().out
 
-    index_parser = None
-    for action in _parser()._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            index_parser = action.choices["index"]
-    assert index_parser is not None
-
-    limit_help = next(a.help for a in index_parser._actions if "--limit" in a.option_strings)
-    assert "no limit" not in limit_help.lower()
-    assert str(ops.INDEX_LIMIT) in limit_help
+    assert "no limit" not in help_text.lower()
+    assert str(ops.INDEX_LIMIT) in help_text
 
 
 def test_index_accepts_a_query_flag_for_relevance_ranking(graph, monkeypatch, capsys):

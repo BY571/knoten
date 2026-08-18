@@ -30,6 +30,17 @@ def _emit(payload: dict, as_json: bool, render) -> None:
         render(payload)
 
 
+def _fail(payload: dict, reason, as_json: bool) -> int:
+    """Every failure on this surface, one contract. --json keeps the structured payload on
+    stdout even on failure, so a machine reader never has to check a second stream for the
+    error; prose puts it on stderr, where every other command's GraphError goes."""
+    if as_json:
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        print(f"knoten: {reason}", file=sys.stderr)
+    return 1
+
+
 def render_validate(payload: dict) -> None:
     print(f"{payload['nodes']} nodes\n")
     if payload["valid"]:
@@ -52,10 +63,8 @@ def render_query(payload: dict) -> None:
     # agent reads the top of this list and stops.
     for c in payload["claims"]:
         print(f"  [{MARK[c['verdict']]}] {c['id']}")
-        for key, label in [("killed_by", "killed by"), ("survived_gates", "survived ")]:
-            if ts := c.get(key):
-                print(f"      {label} : {', '.join(ts)}")
-        for key, label in [("retracted_by", "RETRACTED by"), ("superseded_by", "superseded by")]:
+        for key, label in [("killed_by", "killed by"), ("survived_gates", "survived "),
+                            ("retracted_by", "RETRACTED by"), ("superseded_by", "superseded by")]:
             if ts := c.get(key):
                 print(f"      {label} : {', '.join(ts)}")
         if reopen := c.get("what_would_reopen_this"):
@@ -76,15 +85,24 @@ def query(root, term, as_json=False) -> int:
     return 0
 
 
+def _pairs(pairs, msg):
+    """Yield (key, raw value) for each `KEY=VALUE` string in `pairs` — only the key is
+    stripped here, since `_kv` deliberately leaves its value alone while `_where` and
+    `_links` strip theirs. `msg` is the caller's own error text, with `{}` for the
+    offending item."""
+    for p in pairs or []:
+        if "=" not in p:
+            raise GraphError(msg.format(p))
+        k, v = p.split("=", 1)
+        yield k.strip(), v
+
+
 def _where(pairs) -> dict:
     """`--where cause=weak_baseline`, repeatable. Values for one field accumulate as
     alternatives, so `--where cause=a --where cause=b` reads as "a or b"."""
     out = {}
-    for p in pairs or []:
-        if "=" not in p:
-            raise GraphError(f"--where takes key=value, got '{p}'")
-        k, v = p.split("=", 1)
-        out.setdefault(k.strip(), []).append(v.strip())
+    for k, v in _pairs(pairs, "--where takes key=value, got '{}'"):
+        out.setdefault(k, []).append(v.strip())
     return out
 
 
@@ -108,7 +126,7 @@ def index(root, tags, status, ntype, where, since, limit, query=None, as_json=Fa
     this?" that keyword search cannot give: a reader — human or agent — judges
     relatedness from the claims themselves."""
     payload = ops.index(root, query=query, tags=tags, status=status, type=ntype,
-                        where=_where(where), since=since, limit=limit or None)
+                        where=_where(where), since=since, limit=limit)
     _emit(payload, as_json, render_index)
     return 0
 
@@ -209,14 +227,7 @@ def render_get(payload: dict) -> None:
 def show(root, nid, as_json=False) -> int:
     payload = ops.get(root, nid)
     if err := payload.get("error"):
-        # A machine reader parses stdout, so the structured payload stays there even on
-        # failure; a human reading prose expects an error on stderr, same as every other
-        # command's GraphError.
-        if as_json:
-            print(json.dumps(payload, indent=2, default=str))
-        else:
-            print(f"knoten: {err}", file=sys.stderr)
-        return 1
+        return _fail(payload, err, as_json)
     _emit(payload, as_json, render_get)
     return 0
 
@@ -234,26 +245,22 @@ def _kv(pairs) -> dict:
     """`--result acc=0.7`, repeatable. Typed rather than left as strings, because
     `require_result_min` compares numerically."""
     out = {}
-    for p in pairs or []:
-        if "=" not in p:
-            raise GraphError(f"--result takes key=value, got '{p}'")
-        k, v = p.split("=", 1)
+    for k, v in _pairs(pairs, "--result takes key=value, got '{}'"):
+        # Deliberately NOT stripped — unlike `_where`/`_links`, `--result "note= fine "`
+        # writes ' fine ' to disk as-is. That asymmetry is existing behaviour, kept.
         try:
             v = float(v)
         except ValueError:
             pass
-        out[k.strip()] = v
+        out[k] = v
     return out
 
 
 def _links(pairs) -> list[dict]:
     """`--link kn:killedByGate=method-x`, repeatable."""
     out = []
-    for p in pairs or []:
-        if "=" not in p:
-            raise GraphError(f"--link takes rel=to, got '{p}'")
-        rel, to = p.split("=", 1)
-        out.append({"rel": rel.strip(), "to": to.strip()})
+    for rel, to in _pairs(pairs, "--link takes rel=to, got '{}'"):
+        out.append({"rel": rel, "to": to.strip()})
     return out
 
 
@@ -268,15 +275,8 @@ def render_commit(payload: dict) -> None:
 def commit_cmd(root, nid, frontmatter, body, as_json) -> int:
     res = commit(root, nid, _read(frontmatter), _read(body))
     if res["status"] == "REJECTED":
-        # Same stream contract as `show`: --json keeps the payload on stdout even on
-        # failure, so a machine reader never has to check a second stream for the error.
-        if as_json:
-            print(json.dumps(res, indent=2, default=str))
-        else:
-            reason = res.get("reason") or "; ".join(
-                f"[{v['rule']}] {v['message']}" for v in res["violations"])
-            print(f"knoten: {reason}", file=sys.stderr)
-        return 1
+        return _fail(res, res.get("reason") or "; ".join(
+            f"[{v['rule']}] {v['message']}" for v in res["violations"]), as_json)
     _emit(res, as_json, render_commit)
     return 0
 
@@ -291,13 +291,7 @@ def update_cmd(root, nid, status, append, results, links, as_json) -> int:
     payload = ops.update(root, nid, status=status, append=_read(append) if append else None,
                          results=_kv(results), links=_links(links))
     if payload["status"] == "REJECTED":
-        # Same stream contract as `show`/`commit`: --json keeps the payload on stdout
-        # even on failure, so a machine reader never has to check a second stream.
-        if as_json:
-            print(json.dumps(payload, indent=2, default=str))
-        else:
-            print(f"knoten: {payload['reason']}", file=sys.stderr)
-        return 1
+        return _fail(payload, payload["reason"], as_json)
     _emit(payload, as_json, render_update)
     return 0
 
@@ -475,7 +469,7 @@ def _parser() -> argparse.ArgumentParser:
                    help="keep nodes whose frontmatter KEY is VALUE (repeatable)")
     s.add_argument("--since", metavar="YYYY-MM-DD",
                    help="only nodes created or updated on/after this day")
-    s.add_argument("--limit", type=int, default=0,
+    s.add_argument("--limit", type=int,
                    help=f"0 = the default cap ({ops.INDEX_LIMIT}); never uncapped, so a "
                         f"truncated list can't silently read as the whole graph")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
@@ -544,14 +538,16 @@ def main(argv=None) -> int:
             "path":   lambda: path(root, args.a, args.b, args.json),
             "frontier": lambda: frontier_cmd(root, args.json),
             "gates":  lambda: gates_cmd(root, args.json),
-            "index":  lambda: index(root, args.tag, args.status, args.type,
-                                    args.where, args.since, args.limit, args.query,
-                                    args.json),
+            "index":  lambda: index(root, tags=args.tag, status=args.status, ntype=args.type,
+                                    where=args.where, since=args.since, limit=args.limit,
+                                    query=args.query, as_json=args.json),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node, args.json),
-            "commit": lambda: commit_cmd(root, args.id, args.frontmatter, args.body, args.json),
-            "update": lambda: update_cmd(root, args.id, args.status, args.append,
-                                         args.result, args.link, args.json),
+            "commit": lambda: commit_cmd(root, nid=args.id, frontmatter=args.frontmatter,
+                                         body=args.body, as_json=args.json),
+            "update": lambda: update_cmd(root, nid=args.id, status=args.status,
+                                         append=args.append, results=args.result,
+                                         links=args.link, as_json=args.json),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
@@ -559,15 +555,7 @@ def main(argv=None) -> int:
     except (GraphError, OSError) as e:
         # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error,
         # not a traceback — mcp_server.tool already guards this for the same reason.
-        #
-        # Both land here so --json mode gets the SAME contract every other error on
-        # this surface gets: the payload on stdout, never bare prose to stderr, so a
-        # machine reader never has to guess which stream carries the failure.
-        if getattr(args, "json", False):
-            print(json.dumps({"error": str(e)}, indent=2, default=str))
-        else:
-            print(f"knoten: {e}", file=sys.stderr)
-        return 1
+        return _fail({"error": str(e)}, e, getattr(args, "json", False))
 
 
 def cli() -> None:
