@@ -43,13 +43,10 @@ except ImportError as e:  # pragma: no cover
         "knoten-mcp needs the `mcp` extra:\n\n    pip install 'knoten[mcp]'\n"
     ) from e
 
-from . import attachments
+from . import attachments, ops
 from .commit import commit as commit_node
-from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, Node, find_root,
-                   frontier, gates, retrieve, section, shortest_path)
-from .core import load as load_graph
+from .core import ID_RE, GraphError, find_root
 from .update import update as update_node
-from .validate import check, load_config
 
 INSTRUCTIONS = """\
 knoten is a research graph that remembers what did NOT work. Each node is a claim; a dead
@@ -80,15 +77,6 @@ refuse on violation. The refusal is the feature. Fix the node and call again.
 """
 
 app = MCPServer("knoten", instructions=INSTRUCTIONS)
-
-# A row is ~45 tokens once JSON key overhead is counted, so 200 rows is ~9k — readable
-# in one go, where the same graph's broad query was 83k. It is a CAP, never a silent one:
-# `truncated` and `total` always say what was left out.
-INDEX_LIMIT = 200
-
-# A query returns FULL summaries (post-mortem, results, repro) — a few hundred tokens
-# each. Twenty is a read; sixty is a context flood that buries the top hit.
-QUERY_LIMIT = 20
 
 
 def tool(fn):
@@ -133,37 +121,6 @@ def _root() -> Path:
     return find_root()
 
 
-def _graph() -> tuple[Path, dict[str, Node]]:
-    root = _root()
-    return root, load_graph(root)
-
-
-def _summarise(n: Node) -> dict:
-    out = {"id": n.id, "type": n.type, "verdict": VERDICT.get(n.status, n.status or "-")}
-    for rel, key in [("kn:killedByGate", "killed_by"), ("kn:survivedGate", "survived_gates"),
-                     ("npx:retracts", "retracts"), ("kn:blockedBy", "blocked_by")]:
-        if ts := [l["to"] for l in n.links if l["rel"] == rel]:
-            out[key] = ts
-    # A claim someone later WITHDREW is invisible unless we say so: we reported what a node
-    # retracts, never that it WAS retracted.
-    for rel, key in [("npx:retractedBy", "retracted_by"), ("npx:supersededBy", "superseded_by")]:
-        if ts := [b["to"] for b in n.backlinks if b["rel"] == rel]:
-            out[key] = ts
-            out["warning"] = (f"This claim was {key.replace('_', ' ')} {', '.join(ts)}. "
-                              f"Read that node before relying on this one.")
-    if why := section(n.body, "Why it died"):
-        out["why_it_died"] = why[:400]
-    if reopen := section(n.body, "What would reopen this"):
-        out["what_would_reopen_this"] = reopen[:400]
-    if n.results:
-        out["results"] = n.results
-    if n.repro:
-        out["repro"] = n.repro
-    if n.attachments:
-        out["attachments"] = [f"attachments/{n.id}/{a}" for a in n.attachments]
-    return out
-
-
 # ------------------------------------------------------------ 1. what to work on
 
 
@@ -174,15 +131,7 @@ def knoten_frontier() -> dict:
     A dead end with a standing offer is a cheaper experiment than a new idea, because the
     design is already written down.
     """
-    f = frontier(_graph()[1])
-    return {
-        "open": [{"id": n.id, "title": n.title} for n in f["open"]],
-        "reopenable": [{"id": n.id, "title": n.title, "reopen_if": offer}
-                       for n, offer in f["reopenable"]],
-        "untested_gates": [{"id": n.id, "title": n.title} for n in f["untested_gates"]],
-        "note": ("A reopenable claim states its own condition. Judge whether it holds now "
-                 "— knoten does not, because that is the research."),
-    }
+    return ops.frontier(_root())
 
 
 # ------------------------------------------------------------ 2. has this been tried
@@ -197,7 +146,7 @@ def knoten_index(
     type: Types = None,
     where: Where = None,
     since: Since = None,
-    limit: Annotated[int | None, Field(description=f"default {INDEX_LIMIT}")] = None,
+    limit: Annotated[int | None, Field(description=f"default {ops.INDEX_LIMIT}")] = None,
 ) -> dict:
     """START HERE when you have an idea and need to know whether it is new. The whole
     graph, one line per node: id, type, verdict, tags, claim. Read the lines and judge
@@ -206,25 +155,8 @@ def knoten_index(
     (status=['open']). Narrow a large graph with tags / status / type / since before
     reading it.
     """
-    root, nodes = _graph()
-    hits = retrieve(nodes, query, tags=tags, status=status, type=type,
-                    where=where, since=since)
-    cap = max(1, int(limit or INDEX_LIMIT))
-    out = {
-        "total": len(hits),
-        "truncated": len(hits) > cap,
-        "nodes": [{"id": n.id, "type": n.type,
-                   "verdict": VERDICT.get(n.status, n.status or "-"),
-                   "tags": n.tags, "title": n.title} for n in hits[:cap]],
-        "declared_tags": [str(t) for t in (load_config(root).get("tags") or [])],
-    }
-    if out["truncated"]:
-        # A silent cap reads as "that is the whole graph" — the same false negative the
-        # AND-query bug produced, arriving by a different route.
-        out["note"] = (f"Showing {cap} of {len(hits)}. Narrow with tags/status/type, or "
-                       f"pass a query to rank by relevance, before concluding anything "
-                       f"about what is NOT here.")
-    return out
+    return ops.index(_root(), query=query, tags=tags, status=status, type=type,
+                     where=where, since=since, limit=limit)
 
 
 @tool
@@ -236,27 +168,7 @@ def knoten_query(query: Annotated[str, Field(description="term, tag, or topic")]
     verdicts (ALIVE/DEAD/RETRACTED), the gates that killed or validated each claim, why it
     died, and what would reopen it.
     """
-    hits = retrieve(_graph()[1], query)
-    claims = [n for n in hits if n.status in VERDICT]      # already relevance-ranked
-    out = {"query": query, "total": len(claims),
-           "truncated": len(claims) > QUERY_LIMIT,
-           "claims": [_summarise(n) for n in claims[:QUERY_LIMIT]],
-           "related_methods": [n.id for n in hits if n.type == "method"]}
-    if out["truncated"]:
-        out["note"] = (f"Showing the {QUERY_LIMIT} closest of {len(claims)} matching "
-                       f"claims. Use knoten_index for the full picture in one line per "
-                       f"node.")
-    elif claims:
-        out["note"] = ("Claims marked DEAD or RETRACTED have already been tested. Read "
-                       "'what_would_reopen_this' before re-running them.")
-    else:
-        # Keyword search cannot find an idea phrased in words the node never used. Saying
-        # "untested" here without that caveat is how an agent re-runs a dead experiment —
-        # the exact failure this tool exists to prevent.
-        out["note"] = ("No keyword match. This is NOT proof the idea is untested — a "
-                       "differently-worded node will not match. Call knoten_index and "
-                       "read the claims yourself before concluding it is new.")
-    return out
+    return ops.query(_root(), query)
 
 
 # ------------------------------------------------------------ 3. read one node
@@ -268,11 +180,7 @@ def knoten_get(id: NodeId) -> dict:
     attached scripts or plots (read them with your file tools to re-run or inspect the
     experiment).
     """
-    nodes = _graph()[1]
-    if not (n := nodes.get(id)):
-        return {"error": f"no node '{id}'", "available": sorted(nodes)}
-    return {**_summarise(n), "frontmatter": n.frontmatter,
-            "links": n.links, "backlinks": n.backlinks, "body": n.body}
+    return ops.get(_root(), id)
 
 
 # ------------------------------------------------------------ 4. what must it survive
@@ -286,18 +194,7 @@ def knoten_gates() -> dict:
     meeting a gate at commit time means the compute is already spent on a result that
     cannot be recorded.
     """
-    rule, why = GATE_SECTIONS
-    out = []
-    for n, killed, survived in gates(_graph()[1]):
-        row = {"id": n.id, "title": n.title, "killed": killed, "survived": survived}
-        if r := section(n.body, rule):
-            row["rule"] = r
-        if w := section(n.body, why):
-            row["why_it_exists"] = w
-        out.append(row)
-    return {"gates": out,
-            "note": ("Design the experiment to pass these. A gate with nothing in "
-                     "`killed` or `survived` has never been applied.")}
+    return ops.gates(_root())
 
 
 # ------------------------------------------------------------ 5. record the outcome
@@ -389,24 +286,13 @@ def knoten_path(
     end: Annotated[str, Field(description="node id to reach")],
 ) -> dict:
     """Show the research path between two nodes — how did we get from A to B?"""
-    p = shortest_path(_graph()[1], start, end)
-    if p is None:
-        return {"path": None, "note": f"no path {start} -> {end}"}
-    # WITH the relation on each hop. Without it an agent learns two nodes are connected
-    # but not HOW, which is useless for reasoning about falsification.
-    return {"path": [{"node": nid, "via": rel} if rel else {"node": nid}
-                     for nid, rel in p],
-            "hops": len(p) - 1}
+    return ops.path(_root(), start, end)
 
 
 @tool
 def knoten_validate() -> dict:
     """Run the graph's own declared rules over every node."""
-    root, nodes = _graph()
-    errs = check(nodes, root)
-    return {"nodes": len(nodes), "valid": not errs,
-            "violations": [{"node": e.node, "rule": e.rule, "message": e.message}
-                           for e in errs]}
+    return ops.validate(_root())
 
 
 def main() -> None:
