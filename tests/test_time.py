@@ -8,8 +8,6 @@ per node.
 """
 from datetime import date
 
-import pytest
-
 from knoten.cli import main
 from knoten.core import load, retrieve, today
 from knoten.update import update
@@ -92,36 +90,25 @@ def test_cli_index_since(graph, monkeypatch, capsys):
 
 # ------------------------------------------------------------------ agent surface
 
-pytestmark = pytest.mark.anyio
-
-
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-async def test_commit_stamps_a_node_the_agent_wrote(graph, monkeypatch):
-    import json
-
-    from knoten.mcp_server import call_tool
+def test_commit_stamps_a_node_the_agent_wrote(graph, monkeypatch):
+    from knoten import mcp_server as M
     monkeypatch.chdir(graph.root)
     monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
 
-    res = json.loads((await call_tool("knoten_commit", {
-        "id": "hyp-x", "frontmatter": "type: hypothesis\nstatus: dead",
-        "body": "# A claim\n"}))[0].text)
+    res = M.knoten_commit(id="hyp-x", frontmatter="type: hypothesis\nstatus: dead",
+                          body="# A claim\n")
 
     assert res["status"] == "COMMITTED"
     assert load(graph.root)["hyp-x"].frontmatter["created"] == today()
 
 
-async def test_commit_respects_a_date_the_author_supplied(graph, monkeypatch):
-    from knoten.mcp_server import call_tool
+def test_commit_respects_a_date_the_author_supplied(graph, monkeypatch):
+    from knoten import mcp_server as M
     monkeypatch.chdir(graph.root)
     monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
 
-    await call_tool("knoten_commit", {
-        "id": "hyp-x", "frontmatter": "type: hypothesis\nstatus: dead\ncreated: 2019-05-05",
-        "body": "# A claim\n"})
+    M.knoten_commit(id="hyp-x",
+                    frontmatter="type: hypothesis\nstatus: dead\ncreated: 2019-05-05",
+                    body="# A claim\n")
 
     assert load(graph.root)["hyp-x"].frontmatter["created"] == "2019-05-05"

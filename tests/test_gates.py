@@ -5,13 +5,11 @@ result could no longer be recorded. SPEC §1 is blunt that the gates are the reu
 asset — "the reusable asset turned out to be the seven method nodes, not any strategy" —
 so they belong in front of the work, as a specification, not behind it as a punishment.
 """
-import json
-
 import pytest
 
 from knoten.cli import main
 from knoten.core import gates, load
-from knoten.mcp_server import call_tool
+from knoten import mcp_server as M
 
 GATE = """\
 id: method-compute-matched
@@ -61,21 +59,15 @@ def test_only_method_nodes_are_gates(g):
 
 # ------------------------------------------------------------------ surfaces
 
-pytestmark = pytest.mark.anyio
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-async def test_the_agent_gets_the_rule_and_the_reason_up_front(g, monkeypatch):
+def test_the_agent_gets_the_rule_and_the_reason_up_front(g, monkeypatch):
     """Knowing a gate exists is not enough to design an experiment that passes it. The
     agent needs what to run, and why the check is there at all."""
     monkeypatch.chdir(g.root)
     monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
 
-    res = json.loads((await call_tool("knoten_gates", {}))[0].text)
+    res = M.knoten_gates()
     gate = next(x for x in res["gates"] if x["id"] == "method-compute-matched")
 
     assert gate["rule"].startswith("Compare at an equal token budget")

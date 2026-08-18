@@ -362,8 +362,8 @@ def _passes(n: Node, tags, status, type, where, since) -> bool:
         return False
     # Generic, because the core knows no domain: "everything that died of a weak
     # baseline" is one graph's question, and `cause` is one graph's field name.
-    for field, allowed in (where or {}).items():
-        got = n.frontmatter.get(field)
+    for key, allowed in (where or {}).items():
+        got = n.frontmatter.get(key)
         if got is None or str(got) not in {str(a) for a in allowed}:
             return False
     return True

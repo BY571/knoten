@@ -4,20 +4,12 @@ import json
 
 import pytest
 
+from knoten import mcp_server as M
 from knoten.core import load
-from knoten.mcp_server import call_tool
-
-pytestmark = pytest.mark.anyio
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-async def commit(nid, frontmatter, body="# body\n"):
-    out = await call_tool("knoten_commit", {"id": nid, "frontmatter": frontmatter, "body": body})
-    return json.loads(out[0].text)
+def commit(nid, frontmatter, body="# body\n"):
+    return M.knoten_commit(id=nid, frontmatter=frontmatter, body=body)
 
 
 @pytest.fixture(autouse=True)
@@ -27,10 +19,10 @@ def cwd(graph, monkeypatch):
     return graph
 
 
-async def test_commit_refuses_an_id_that_escapes_the_graph(cwd, tmp_path):
+def test_commit_refuses_an_id_that_escapes_the_graph(cwd, tmp_path):
     """Finding 7: `root/nodes/{id}.md` with an LLM-supplied id. An id of
     `../../../pwned` wrote outside the graph entirely."""
-    res = await commit("../../../pwned", "id: x\ntype: hypothesis\nstatus: dead")
+    res = commit("../../../pwned", "id: x\ntype: hypothesis\nstatus: dead")
 
     assert res["status"] == "REJECTED"
     assert "id" in res["reason"].lower()
@@ -38,26 +30,26 @@ async def test_commit_refuses_an_id_that_escapes_the_graph(cwd, tmp_path):
 
 
 @pytest.mark.parametrize("nid", ["../evil", "sub/dir", "with space", "UPPER", "", "."])
-async def test_commit_only_accepts_kebab_case_ids(cwd, nid):
-    res = await commit(nid, "id: x\ntype: hypothesis\nstatus: dead")
+def test_commit_only_accepts_kebab_case_ids(cwd, nid):
+    res = commit(nid, "id: x\ntype: hypothesis\nstatus: dead")
 
     assert res["status"] == "REJECTED"
 
 
-async def test_commit_does_not_touch_disk_when_the_node_is_invalid(cwd):
+def test_commit_does_not_touch_disk_when_the_node_is_invalid(cwd):
     """Finding 8: commit wrote the file, THEN validated, THEN unlinked. The
     README promises it 'validates before writing'. Now it actually does."""
-    res = await commit("hyp-unchallenged", "id: hyp-unchallenged\ntype: hypothesis\nstatus: alive")
+    res = commit("hyp-unchallenged", "id: hyp-unchallenged\ntype: hypothesis\nstatus: alive")
 
     assert res["status"] == "REJECTED"
     assert res["violations"][0]["rule"] == "live-claims-must-cite-their-gates"
     assert not (cwd.root / "nodes" / "hyp-unchallenged.md").exists()
 
 
-async def test_commit_writes_a_valid_node(cwd):
+def test_commit_writes_a_valid_node(cwd):
     cwd.node("method-gate", "id: method-gate\ntype: method")
 
-    res = await commit(
+    res = commit(
         "hyp-ok",
         "id: hyp-ok\ntype: hypothesis\nstatus: alive\nlinks:\n  - {rel: kn:survivedGate, to: method-gate}",
     )
@@ -66,23 +58,23 @@ async def test_commit_writes_a_valid_node(cwd):
     assert (cwd.root / "nodes" / "hyp-ok.md").exists()
 
 
-async def test_commit_rejects_malformed_yaml_without_writing(cwd):
-    res = await commit("hyp-bad", "id: hyp-bad\n  oops: bad indent")
+def test_commit_rejects_malformed_yaml_without_writing(cwd):
+    res = commit("hyp-bad", "id: hyp-bad\n  oops: bad indent")
 
     assert res["status"] == "REJECTED"
     assert not (cwd.root / "nodes" / "hyp-bad.md").exists()
 
 
-async def test_commit_refuses_to_overwrite(cwd):
+def test_commit_refuses_to_overwrite(cwd):
     cwd.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
 
-    res = await commit("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
+    res = commit("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
 
     assert res["status"] == "REJECTED"
     assert "supersede" in res["reason"].lower()
 
 
-async def test_query_reports_the_cause_of_death(cwd):
+def test_query_reports_the_cause_of_death(cwd):
     cwd.node("method-gate", "id: method-gate\ntype: method")
     cwd.node(
         "hyp-x",
@@ -90,8 +82,7 @@ async def test_query_reports_the_cause_of_death(cwd):
         body="# x\n## Why it died\nThe gain was compute, not method.\n",
     )
 
-    out = await call_tool("knoten_query", {"query": "hyp-x"})
-    res = json.loads(out[0].text)
+    res = M.knoten_query(query="hyp-x")
 
     (claim,) = res["claims"]
     assert claim["verdict"] == "DEAD"
@@ -99,7 +90,7 @@ async def test_query_reports_the_cause_of_death(cwd):
     assert "compute, not method" in claim["why_it_died"]
 
 
-async def test_get_surfaces_that_a_claim_was_retracted(cwd):
+def test_get_surfaces_that_a_claim_was_retracted(cwd):
     """We reported what a node RETRACTS and never that it WAS retracted, so an agent asking
     "has this been tried?" about a withdrawn claim was told the claim, not the withdrawal."""
     cwd.node("method-gate", "id: method-gate\ntype: method")
@@ -108,15 +99,14 @@ async def test_get_surfaces_that_a_claim_was_retracted(cwd):
                          "  - {rel: npx:retracts, to: hyp-wrong}\n"
                          "  - {rel: kn:survivedGate, to: method-gate}")
 
-    out = await call_tool("knoten_get", {"id": "hyp-wrong"})
-    res = json.loads(out[0].text)
+    res = M.knoten_get(id="hyp-wrong")
 
     assert res["retracted_by"] == ["ret-oops"]
     assert "ret-oops" in res["warning"]
 
 
 
-async def test_query_caps_its_own_response_and_says_so(cwd):
+def test_query_caps_its_own_response_and_says_so(cwd):
     """A broad query on a 500-node graph returned every match in full — ~83k tokens in
     one response. The tool got LESS usable the more the graph accumulated, which is
     backwards for a thing whose whole purpose is to accumulate. Cap it, rank it, and
@@ -125,8 +115,7 @@ async def test_query_caps_its_own_response_and_says_so(cwd):
         cwd.node(f"hyp-{i:03d}", f"id: hyp-{i:03d}\ntype: hypothesis\nstatus: dead",
                  f"# decoding experiment {i}\n")
 
-    out = await call_tool("knoten_query", {"query": "decoding"})
-    res = json.loads(out[0].text)
+    res = M.knoten_query(query="decoding")
 
     assert res["total"] == 60
     assert len(res["claims"]) < 60
@@ -134,13 +123,12 @@ async def test_query_caps_its_own_response_and_says_so(cwd):
     assert "knoten_index" in res["note"]
 
 
-async def test_query_ranks_the_closest_claim_first(cwd):
+def test_query_ranks_the_closest_claim_first(cwd):
     cwd.node("hyp-far", "id: hyp-far\ntype: hypothesis\nstatus: dead", "# decoding\n")
     cwd.node("hyp-near", "id: hyp-near\ntype: hypothesis\nstatus: dead",
              "# decoding with majority vote sampling\n")
 
-    res = json.loads((await call_tool(
-        "knoten_query", {"query": "majority vote sampling"}))[0].text)
+    res = M.knoten_query(query="majority vote sampling")
 
     assert res["claims"][0]["id"] == "hyp-near"
 
@@ -148,42 +136,42 @@ async def test_query_ranks_the_closest_claim_first(cwd):
 # ---------------------------------------------------------------- knoten_update
 
 
-async def update(**args):
-    return json.loads((await call_tool("knoten_update", args))[0].text)
+def update(**args):
+    return M.knoten_update(**args)
 
 
-async def test_the_loop_can_close_what_it_opened(cwd):
+def test_the_loop_can_close_what_it_opened(cwd):
     """open -> run -> record the verdict. Step three had no tool at all: knoten_commit
     refuses to overwrite, so an agent could open a hypothesis and never close it."""
     cwd.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# A claim\n")
 
-    res = await update(id="hyp-x", status="dead", append="## Why it died\nnoise\n")
+    res = update(id="hyp-x", status="dead", append="## Why it died\nnoise\n")
 
     assert res["status"] == "UPDATED"
     assert res["node_status"] == "dead"
     assert load(cwd.root)["hyp-x"].status == "dead"
 
 
-async def test_an_update_that_breaks_a_rule_comes_back_as_json(cwd):
+def test_an_update_that_breaks_a_rule_comes_back_as_json(cwd):
     """The gate survives the new write path, and an MCP server answers rather than
     exploding."""
     cwd.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead", "# A claim\n")
 
-    res = await update(id="hyp-x", status="alive")
+    res = update(id="hyp-x", status="alive")
 
     assert res["status"] == "REJECTED"
     assert "live-claims-must-cite-their-gates" in json.dumps(res)
     assert load(cwd.root)["hyp-x"].status == "dead"
 
 
-async def test_updating_an_unknown_node_is_reported_not_raised(cwd):
-    assert (await update(id="hyp-nope", status="dead"))["status"] == "REJECTED"
+def test_updating_an_unknown_node_is_reported_not_raised(cwd):
+    assert (update(id="hyp-nope", status="dead"))["status"] == "REJECTED"
 
 
 # ---------------------------------------------------------------- duplicate warning
 
 
-async def test_commit_warns_when_the_new_claim_resembles_a_settled_one(cwd):
+def test_commit_warns_when_the_new_claim_resembles_a_settled_one(cwd):
     """A loop running for weeks WILL re-propose an idea it already settled, worded
     differently, under a new id. The graph then holds two answers to one question and the
     second has no post-mortem."""
@@ -192,7 +180,7 @@ async def test_commit_warns_when_the_new_claim_resembles_a_settled_one(cwd):
              "# Self-consistency majority vote beats greedy decoding\n\n"
              "## Why it died\nThe gain was compute, not method.\n")
 
-    res = await commit("hyp-sample-and-vote", "type: hypothesis\nstatus: open",
+    res = commit("hyp-sample-and-vote", "type: hypothesis\nstatus: open",
                        "# Majority vote over sampled chains beats greedy decoding\n")
 
     assert res["status"] == "COMMITTED"          # a warning, never a block
@@ -201,17 +189,17 @@ async def test_commit_warns_when_the_new_claim_resembles_a_settled_one(cwd):
     assert "supersede" in res["warning"]
 
 
-async def test_an_unrelated_claim_gets_no_warning(cwd):
+def test_an_unrelated_claim_gets_no_warning(cwd):
     cwd.node("hyp-self-consistency", "id: hyp-self-consistency\ntype: hypothesis\n"
                                      "status: dead", "# Self-consistency beats greedy\n")
 
-    res = await commit("hyp-tokeniser", "type: hypothesis\nstatus: open",
+    res = commit("hyp-tokeniser", "type: hypothesis\nstatus: open",
                        "# A byte-level tokeniser lowers perplexity\n")
 
     assert "similar" not in res
 
 
-async def test_one_shared_word_is_not_a_duplicate(cwd):
+def test_one_shared_word_is_not_a_duplicate(cwd):
     """The warning is worth nothing if it fires on every commit, so it takes two shared
     title words rather than one.
 
@@ -223,19 +211,19 @@ async def test_one_shared_word_is_not_a_duplicate(cwd):
     cwd.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: dead",
              "# Dropout lowers perplexity\n")
 
-    res = await commit("hyp-b", "type: hypothesis\nstatus: open",
+    res = commit("hyp-b", "type: hypothesis\nstatus: open",
                        "# Warmup improves accuracy on reasoning\n")
 
     assert "similar" not in res
 
 
-async def test_an_unsettled_claim_is_not_reported_as_prior_art(cwd):
+def test_an_unsettled_claim_is_not_reported_as_prior_art(cwd):
     """`open` is not an answer. Warning about one would tell the agent the question is
     closed when it is exactly what is still being asked."""
     cwd.node("hyp-open", "id: hyp-open\ntype: hypothesis\nstatus: open",
              "# Majority vote over sampled chains beats greedy decoding\n")
 
-    res = await commit("hyp-new", "type: hypothesis\nstatus: open",
+    res = commit("hyp-new", "type: hypothesis\nstatus: open",
                        "# Majority vote over sampled chains beats greedy decoding\n")
 
     assert "similar" not in res

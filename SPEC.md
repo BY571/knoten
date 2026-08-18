@@ -299,7 +299,13 @@ The gate is the point: **`knoten_commit` refuses a `status: alive` node with no
 unchallenged claim as a finding.
 
 The candidate node is parsed and checked **in memory**; nothing reaches the filesystem
-until it is clean. And because the `id` becomes a filename and is authored by an LLM, it
+until it is clean.
+
+Each tool is a plain function: its name is the tool name, its docstring is the description
+the agent reads, and its annotated signature IS the input schema. There is no second copy
+of any of that to drift — the failure mode being avoided is a hand-written schema that
+quietly stops matching the code it documents. The loop above lives once, in the server's
+`instructions`, rather than being re-asserted by every tool description. And because the `id` becomes a filename and is authored by an LLM, it
 is constrained to kebab-case — an id is not a path.
 
 ---

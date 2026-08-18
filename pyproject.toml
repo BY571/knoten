@@ -17,10 +17,7 @@ classifiers = [
 dependencies = ["pyyaml>=6"]
 
 [project.optional-dependencies]
-# Upper bound is load-bearing: mcp 2.0 removed the low-level `@server.list_tools()`
-# / `@server.call_tool()` decorators this server is built on, in favour of a
-# FastMCP-style `MCPServer`. Migrating is real work, not a rename.
-mcp = ["mcp>=1.0,<2"]
+mcp = ["mcp>=2"]
 dev = ["pytest>=8", "anyio>=4"]
 
 [project.urls]

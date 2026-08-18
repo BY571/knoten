@@ -8,22 +8,12 @@ the more it accumulated, which is backwards for a thing whose purpose is to accu
 One line per node is ~15 tokens. A tag-filtered slice of a 5k-node graph fits in a single
 call, and the agent — which is already an LLM — does the semantic matching itself.
 """
-import json
-
 import pytest
 
-from knoten.mcp_server import call_tool
+from knoten import mcp_server as M
 
-pytestmark = pytest.mark.anyio
-
-
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-async def index(**args):
-    return json.loads((await call_tool("knoten_index", args))[0].text)
+def index(**args):
+    return M.knoten_index(**args)
 
 
 @pytest.fixture(autouse=True)
@@ -42,15 +32,15 @@ def cwd(graph, monkeypatch):
     return graph
 
 
-async def test_index_lists_every_node(cwd):
-    res = await index()
+def test_index_lists_every_node(cwd):
+    res = index()
 
     assert {r["id"] for r in res["nodes"]} == {"hyp-alpha", "hyp-beta", "method-gate"}
 
 
-async def test_a_row_carries_the_claim_not_just_the_id(cwd):
+def test_a_row_carries_the_claim_not_just_the_id(cwd):
     """An id alone cannot be judged for relatedness. The H1 IS the claim."""
-    row = next(r for r in (await index())["nodes"] if r["id"] == "hyp-alpha")
+    row = next(r for r in (index())["nodes"] if r["id"] == "hyp-alpha")
 
     assert row["title"] == "Alpha beats greedy"
     assert row["verdict"] == "open"       # not a verdict yet, so the raw status
@@ -58,48 +48,48 @@ async def test_a_row_carries_the_claim_not_just_the_id(cwd):
     assert row["tags"] == ["decoding"]
 
 
-async def test_a_row_carries_the_verdict_for_a_settled_claim(cwd):
-    row = next(r for r in (await index())["nodes"] if r["id"] == "hyp-beta")
+def test_a_row_carries_the_verdict_for_a_settled_claim(cwd):
+    row = next(r for r in (index())["nodes"] if r["id"] == "hyp-beta")
 
     assert row["verdict"] == "DEAD"
 
 
-async def test_index_filters_by_status(cwd):
+def test_index_filters_by_status(cwd):
     """"What is still open?" — unanswerable before, because query needed a search term
     and `status` is not prose."""
-    res = await index(status=["open"])
+    res = index(status=["open"])
 
     assert [r["id"] for r in res["nodes"]] == ["hyp-alpha"]
 
 
-async def test_index_filters_by_tag(cwd):
-    res = await index(tags=["prompting"])
+def test_index_filters_by_tag(cwd):
+    res = index(tags=["prompting"])
 
     assert [r["id"] for r in res["nodes"]] == ["hyp-beta"]
 
 
-async def test_index_filters_by_type(cwd):
-    res = await index(type=["method"])
+def test_index_filters_by_type(cwd):
+    res = index(type=["method"])
 
     assert [r["id"] for r in res["nodes"]] == ["method-gate"]
 
 
-async def test_index_reports_the_graphs_declared_tags(cwd):
+def test_index_reports_the_graphs_declared_tags(cwd):
     """The agent must know which tags it can filter on before it can filter."""
     (cwd.root / "graph.yaml").write_text(
         "name: t\ntags: [decoding, prompting]\nrules: []\n", encoding="utf-8")
 
-    assert (await index())["declared_tags"] == ["decoding", "prompting"]
+    assert (index())["declared_tags"] == ["decoding", "prompting"]
 
 
-async def test_truncation_is_loud(cwd):
+def test_truncation_is_loud(cwd):
     """A silent cap reads as "that is the whole graph" — the same false-negative as the
     AND-query bug, arriving by a different route."""
     for i in range(30):
         cwd.node(f"hyp-{i:03d}", f"id: hyp-{i:03d}\ntype: hypothesis\nstatus: open",
                  f"# claim {i}\n")
 
-    res = await index(limit=5)
+    res = index(limit=5)
 
     assert len(res["nodes"]) == 5
     assert res["total"] == 33
@@ -107,14 +97,14 @@ async def test_truncation_is_loud(cwd):
     assert "narrow" in res["note"].lower()
 
 
-async def test_an_untruncated_index_says_so(cwd):
-    res = await index()
+def test_an_untruncated_index_says_so(cwd):
+    res = index()
 
     assert res["truncated"] is False
     assert res["total"] == 3
 
 
-async def test_index_filters_on_an_arbitrary_frontmatter_field(cwd):
+def test_index_filters_on_an_arbitrary_frontmatter_field(cwd):
     """"Re-open everything that died of a weak baseline" is a query if the cause is a
     field, and a re-read of every post-mortem if it is prose."""
     cwd.node("hyp-w", "id: hyp-w\ntype: hypothesis\nstatus: dead\ncause: weak_baseline",
@@ -122,6 +112,6 @@ async def test_index_filters_on_an_arbitrary_frontmatter_field(cwd):
     cwd.node("hyp-n", "id: hyp-n\ntype: hypothesis\nstatus: dead\ncause: no_signal",
              "# None\n")
 
-    res = await index(where={"cause": ["weak_baseline"]})
+    res = index(where={"cause": ["weak_baseline"]})
 
     assert [r["id"] for r in res["nodes"]] == ["hyp-w"]
