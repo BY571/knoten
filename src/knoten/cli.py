@@ -6,54 +6,67 @@ research topic. Each declares its own rules; the core knows nothing about any do
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
-from . import attachments
-from .core import (GATE_SECTIONS, ID_RE, LOCK, VERDICT, GraphError, find_root, frontier, gates,
-                   load, node_path, retrieve, section, shortest_path, today)
+from . import attachments, ops
+from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook
-from .validate import _csv, applies, check, load_config
+from .validate import _csv, applies, load_config
 
-MARK = {"alive": "✓ ALIVE", "dead": "✗ DEAD", "retracted": "⊘ RETRACTED"}
+# Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
+# lowercase and includes values (open, active, …) this table has no symbol for.
+MARK = {"ALIVE": "✓ ALIVE", "DEAD": "✗ DEAD", "RETRACTED": "⊘ RETRACTED"}
 
 
 # ---------------------------------------------------------------- read commands
 
-def validate(root) -> int:
-    nodes = load(root)
-    errs = check(nodes, root)
-    print(f"{len(nodes)} nodes\n")
-    if not errs:
+def _emit(payload: dict, as_json: bool, render) -> None:
+    if as_json:
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        render(payload)
+
+
+def render_validate(payload: dict) -> None:
+    print(f"{payload['nodes']} nodes\n")
+    if payload["valid"]:
         print("  ✓ all rules pass")
-        return 0
-    for v in errs:
-        print(f"  ✗ {v.node}\n      [{v.rule}] {v.message}")
-    print(f"\n  {len(errs)} violation(s) — commit REJECTED")
-    return 1
+        return
+    for v in payload["violations"]:
+        print(f"  ✗ {v['node']}\n      [{v['rule']}] {v['message']}")
+    print(f"\n  {len(payload['violations'])} violation(s) — commit REJECTED")
 
 
-def query(root, term) -> int:
-    nodes = load(root)
-    hits = retrieve(nodes, term)
-    claims = [n for n in hits if n.status in VERDICT]
-    print(f'"{term}" → {len(hits)} node(s), {len(claims)} claim(s)\n')
+def validate(root, as_json=False) -> int:
+    payload = ops.validate(root)
+    _emit(payload, as_json, render_validate)
+    return 0 if payload["valid"] else 1
+
+
+def render_query(payload: dict) -> None:
+    print(f'"{payload["query"]}" → {payload["total"]} claim(s)\n')
     # Relevance order, NOT status order: the closest match must be first, because an
     # agent reads the top of this list and stops.
-    for n in claims:
-        print(f"  [{MARK[n.status]}] {n.id}")
-        for rel, label in [("kn:killedByGate", "killed by"), ("kn:survivedGate", "survived ")]:
-            if ts := [l["to"] for l in n.links if l["rel"] == rel]:
+    for c in payload["claims"]:
+        print(f"  [{MARK[c['verdict']]}] {c['id']}")
+        for key, label in [("killed_by", "killed by"), ("survived_gates", "survived ")]:
+            if ts := c.get(key):
                 print(f"      {label} : {', '.join(ts)}")
-        for rel, label in [("npx:retractedBy", "RETRACTED by"),
-                           ("npx:supersededBy", "superseded by")]:
-            if ts := [b["to"] for b in n.backlinks if b["rel"] == rel]:
+        for key, label in [("retracted_by", "RETRACTED by"), ("superseded_by", "superseded by")]:
+            if ts := c.get(key):
                 print(f"      {label} : {', '.join(ts)}")
-        if reopen := section(n.body, "What would reopen this"):
+        if reopen := c.get("what_would_reopen_this"):
             print(f"      reopen if : {reopen[:140]}…")
         print()
-    if others := [n for n in hits if n.status not in VERDICT]:
-        print("  also: " + ", ".join(n.id for n in others))
+    if payload["related_methods"]:
+        print("  also: " + ", ".join(payload["related_methods"]))
+
+
+def query(root, term, as_json=False) -> int:
+    payload = ops.query(root, term)
+    _emit(payload, as_json, render_query)
     return 0
 
 
@@ -69,69 +82,89 @@ def _where(pairs) -> dict:
     return out
 
 
-def index(root, tags, status, ntype, where, since, limit) -> int:
+def render_index(payload: dict) -> None:
+    shown = payload["nodes"]
+    width = max((len(n["id"]) for n in shown), default=0)
+    for n in shown:
+        mark = MARK.get(n["verdict"], n["verdict"])
+        tag = f"[{','.join(n['tags'])}]" if n["tags"] else ""
+        print(f"  {n['id']:{width}}  {mark:12} {tag:24} {n['title']}")
+    print(f"\n  {len(shown)} of {payload['total']} node(s)")
+    if payload["truncated"]:
+        # Never a silent cap: a truncated list reads as the whole graph.
+        print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
+
+
+def index(root, tags, status, ntype, where, since, limit, as_json=False) -> int:
     """The whole graph, one line per node. The answer to "have we done anything LIKE
     this?" that keyword search cannot give: a reader — human or agent — judges
     relatedness from the claims themselves."""
-    hits = retrieve(load(root), None, tags=tags, status=status, type=ntype,
-                    where=_where(where), since=since)
-    shown = hits[:limit] if limit else hits
-    width = max((len(n.id) for n in shown), default=0)
-    for n in shown:
-        mark = MARK.get(n.status, n.status or "-")
-        tag = f"[{','.join(n.tags)}]" if n.tags else ""
-        print(f"  {n.id:{width}}  {mark:12} {tag:24} {n.title}")
-    print(f"\n  {len(shown)} of {len(hits)} node(s)")
-    if len(shown) < len(hits):
-        # Never a silent cap: a truncated list reads as the whole graph.
-        print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
+    payload = ops.index(root, tags=tags, status=status, type=ntype,
+                        where=_where(where), since=since, limit=limit or None)
+    _emit(payload, as_json, render_index)
     return 0
 
 
-def gates_cmd(root) -> int:
-    """What every claim in this graph has to survive. Read it before you design the
-    experiment, not after the commit is refused."""
-    for n, killed, survived in gates(load(root)):
+def render_gates(payload: dict) -> None:
+    for g in payload["gates"]:
+        killed, survived = g["killed"], g["survived"]
         record = f"killed {len(killed)}, survived by {len(survived)}" if killed or survived \
             else "never applied"
-        print(f"  {n.id}  ({record})")
-        print(f"    {n.title}")
-        if rule := section(n.body, GATE_SECTIONS[0]):
+        print(f"  {g['id']}  ({record})")
+        print(f"    {g['title']}")
+        if rule := g.get("rule"):
             print(f"    the rule : {rule[:160]}")
         print()
+
+
+def gates_cmd(root, as_json=False) -> int:
+    """What every claim in this graph has to survive. Read it before you design the
+    experiment, not after the commit is refused."""
+    payload = ops.gates(root)
+    _emit(payload, as_json, render_gates)
     return 0
 
 
-def frontier_cmd(root) -> int:
+def render_frontier(payload: dict) -> None:
+    if payload["open"]:
+        print("  OPEN — started, never settled")
+        for n in payload["open"]:
+            print(f"    {n['id']:24}  {n['title']}")
+    if payload["reopenable"]:
+        print("\n  REOPENABLE — died, but said what would bring them back")
+        for n in payload["reopenable"]:
+            print(f"    {n['id']:24}  {n['title']}")
+            print(f"      reopen if : {n['reopen_if'][:120]}…")
+    if payload["untested_gates"]:
+        print("\n  UNTESTED GATES — no claim has been through them")
+        for n in payload["untested_gates"]:
+            print(f"    {n['id']:24}  {n['title']}")
+    if not (payload["open"] or payload["reopenable"] or payload["untested_gates"]):
+        print("  nothing open, nothing reopenable, every gate has fired.")
+
+
+def frontier_cmd(root, as_json=False) -> int:
     """The one screen that answers "what now?". Kept short on purpose — a frontier you
     have to scroll is a frontier nobody reads."""
-    f = frontier(load(root))
-    if f["open"]:
-        print("  OPEN — started, never settled")
-        for n in f["open"]:
-            print(f"    {n.id:24}  {n.title}")
-    if f["reopenable"]:
-        print("\n  REOPENABLE — died, but said what would bring them back")
-        for n, offer in f["reopenable"]:
-            print(f"    {n.id:24}  {n.title}")
-            print(f"      reopen if : {offer[:120]}…")
-    if f["untested_gates"]:
-        print("\n  UNTESTED GATES — no claim has been through them")
-        for n in f["untested_gates"]:
-            print(f"    {n.id:24}  {n.title}")
-    if not any(f.values()):
-        print("  nothing open, nothing reopenable, every gate has fired.")
+    payload = ops.frontier(root)
+    _emit(payload, as_json, render_frontier)
     return 0
 
 
-def path(root, a, b) -> int:
-    p = shortest_path(load(root), a, b)
+def render_path(payload: dict) -> None:
+    p = payload["path"]
     if p is None:
-        print(f"no path {a} → {b}")
-        return 0
-    print(f"research path {a} → {b}:\n")
-    for i, (nid, rel) in enumerate(p):
-        print("  " * i + (f"└─ {rel} → " if rel else "") + nid)
+        print(payload["note"])
+        return
+    print(f"research path {p[0]['node']} → {p[-1]['node']}:\n")
+    for i, hop in enumerate(p):
+        rel = hop.get("via")
+        print("  " * i + (f"└─ {rel} → " if rel else "") + hop["node"])
+
+
+def path(root, a, b, as_json=False) -> int:
+    payload = ops.path(root, a, b)
+    _emit(payload, as_json, render_path)
     return 0
 
 
@@ -142,28 +175,31 @@ def hook(root, force) -> int:
     return 0
 
 
-def show(root, nid) -> int:
-    nodes = load(root)
-    n = nodes.get(nid)
-    if not n:
-        raise GraphError(f"no node '{nid}'")
-    print(f"{n.id}  [{MARK.get(n.status, n.status or '-')}]  type={n.type}\n")
-    for l in n.links:
+def render_get(payload: dict) -> None:
+    if err := payload.get("error"):
+        print(err)
+        return
+    print(f"{payload['id']}  [{MARK.get(payload['verdict'], payload['verdict'])}]  "
+          f"type={payload['type']}\n")
+    for l in payload["links"]:
         print(f"  {l['rel']:22} -> {l['to']}")
-    for b in n.backlinks:
+    for b in payload["backlinks"]:
         print(f"  {b['rel']:22} <- {b['to']}")
-    for label, d in [("repro", n.repro), ("results", n.results)]:
+    for label, d in [("repro", payload.get("repro")), ("results", payload.get("results"))]:
         if d:
             print(f"\n  {label}:")
             for k, v in d.items():
                 print(f"    {k}: {v}")
-    if n.attachments:
+    if atts := payload.get("attachments"):
         print("\n  attachments:")
-        for a in n.attachments:
-            p = root / "attachments" / nid / a
-            sz = f"{p.stat().st_size / 1024:.1f} KB" if p.exists() else "MISSING"
-            print(f"    attachments/{nid}/{a}  ({sz})")
-    return 0
+        for a in atts:
+            print(f"    {a}")
+
+
+def show(root, nid, as_json=False) -> int:
+    payload = ops.get(root, nid)
+    _emit(payload, as_json, render_get)
+    return 1 if "error" in payload else 0
 
 
 # ---------------------------------------------------------------- write commands
@@ -320,7 +356,8 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("init", help="start a NEW graph for a topic")
     s.add_argument("name")
 
-    sub.add_parser("validate", help="enforce THIS graph's declared rules")
+    s = sub.add_parser("validate", help="enforce THIS graph's declared rules")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("new", help="scaffold a node with whatever the rules demand")
     s.add_argument("type")
@@ -329,6 +366,7 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("query", help='"has this been tried?" -> verdicts + causes of death')
     s.add_argument("term")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("index", help="the whole graph, one line per node")
     s.add_argument("--tag", action="append", help="keep nodes carrying this tag (repeatable)")
@@ -339,14 +377,18 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--since", metavar="YYYY-MM-DD",
                    help="only nodes created or updated on/after this day")
     s.add_argument("--limit", type=int, default=0, help="0 = no limit")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
 
-    sub.add_parser("frontier", help="what should I work on next?")
+    s = sub.add_parser("frontier", help="what should I work on next?")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
 
-    sub.add_parser("gates", help="what must a claim survive here?")
+    s = sub.add_parser("gates", help="what must a claim survive here?")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("path", help="how did we get from A to B?")
     s.add_argument("a")
     s.add_argument("b")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("hook", help="install the git pre-commit gate")
     s.add_argument("--force", action="store_true",
@@ -354,6 +396,7 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("attach", help="attach a script / plot / notebook to a node")
     s.add_argument("node")
@@ -370,20 +413,21 @@ def main(argv=None) -> int:
     args = _parser().parse_args(argv if argv is not None else sys.argv[1:])
     try:
         if args.cmd is None or args.cmd == "validate":
-            return validate(find_root())
+            # No subcommand never parsed a `validate` subparser, so it has no --json.
+            return validate(find_root(), getattr(args, "json", False))
         if args.cmd == "init":
             return init(args.name)
 
         root = find_root()
         return {
-            "query":  lambda: query(root, args.term),
-            "path":   lambda: path(root, args.a, args.b),
-            "frontier": lambda: frontier_cmd(root),
-            "gates":  lambda: gates_cmd(root),
+            "query":  lambda: query(root, args.term, args.json),
+            "path":   lambda: path(root, args.a, args.b, args.json),
+            "frontier": lambda: frontier_cmd(root, args.json),
+            "gates":  lambda: gates_cmd(root, args.json),
             "index":  lambda: index(root, args.tag, args.status, args.type,
-                                    args.where, args.since, args.limit),
+                                    args.where, args.since, args.limit, args.json),
             "new":    lambda: new(root, args.type, args.id, args.status),
-            "show":   lambda: show(root, args.node),
+            "show":   lambda: show(root, args.node, args.json),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
