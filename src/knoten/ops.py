@@ -89,7 +89,12 @@ def query(root: Path, term: str) -> dict:
     out = {"query": term, "total": len(claims),
            "truncated": len(claims) > QUERY_LIMIT,
            "claims": [summarise(n) for n in claims[:QUERY_LIMIT]],
-           "related_methods": [n.id for n in hits if n.type == "method"]}
+           # MCP contract — do not narrow, an agent tool call is keyed on this shape.
+           "related_methods": [n.id for n in hits if n.type == "method"],
+           # Everything else that matched but isn't a claim: sources, open work, whatever
+           # types this graph declares. The CLI's "also:" line used to show these before
+           # it was rewired onto this dict; losing them was silent narrowing, not a fix.
+           "related": [n.id for n in hits if n.status not in VERDICT]}
     if out["truncated"]:
         out["note"] = (f"Showing the {QUERY_LIMIT} closest of {len(claims)} matching "
                        f"claims. Use knoten_index for the full picture in one line per "

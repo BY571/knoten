@@ -60,8 +60,8 @@ def render_query(payload: dict) -> None:
         if reopen := c.get("what_would_reopen_this"):
             print(f"      reopen if : {reopen[:140]}…")
         print()
-    if payload["related_methods"]:
-        print("  also: " + ", ".join(payload["related_methods"]))
+    if payload["related"]:
+        print("  also: " + ", ".join(payload["related"]))
 
 
 def query(root, term, as_json=False) -> int:
@@ -176,9 +176,6 @@ def hook(root, force) -> int:
 
 
 def render_get(payload: dict) -> None:
-    if err := payload.get("error"):
-        print(err)
-        return
     print(f"{payload['id']}  [{MARK.get(payload['verdict'], payload['verdict'])}]  "
           f"type={payload['type']}\n")
     for l in payload["links"]:
@@ -198,8 +195,17 @@ def render_get(payload: dict) -> None:
 
 def show(root, nid, as_json=False) -> int:
     payload = ops.get(root, nid)
+    if err := payload.get("error"):
+        # A machine reader parses stdout, so the structured payload stays there even on
+        # failure; a human reading prose expects an error on stderr, same as every other
+        # command's GraphError.
+        if as_json:
+            print(json.dumps(payload, indent=2, default=str))
+        else:
+            print(err, file=sys.stderr)
+        return 1
     _emit(payload, as_json, render_get)
-    return 1 if "error" in payload else 0
+    return 0
 
 
 # ---------------------------------------------------------------- write commands
