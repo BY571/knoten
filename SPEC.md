@@ -284,14 +284,15 @@ memory files.
 
 | tool | purpose |
 |---|---|
-| `knoten_index(...)` | *"anything LIKE this?"* / *"what is still open?"* → the graph, one line per node |
-| `knoten_gates()` | *"what must this survive?"* → the gates, their rule, and their record |
 | `knoten_frontier()` | *"what should I work on next?"* → open claims, standing offers, unused gates |
-| `knoten_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death |
+| `knoten_index(...)` | *"anything LIKE this?"* / *"what is still open?"* → the graph, one line per node |
+| `knoten_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death, by keyword |
 | `knoten_get(id)` | full node, including the post-mortem |
+| `knoten_gates()` | *"what must this survive?"* → the gates, their rule, and their record |
 | `knoten_commit(node)` | append a node (validates first; **rejects on rule violation**) |
 | `knoten_update(id, …)` | move a node's status and append to it — the lifecycle in §3, walkable |
-| `knoten_path(a, b)` | show the research path — how did we get from A to B? |
+| `knoten_attach(id, files)` | the script that ran it and the plot that shows it |
+| `knoten_path(start, end)` | show the research path — how did we get from A to B? |
 | `knoten_validate()` | run the graph's own declared rules |
 
 The gate is the point: **`knoten_commit` refuses a `status: alive` node with no
@@ -351,8 +352,8 @@ index, which the 1k–5k node case does not.
 | phase | deliverable | status |
 |---|---|---|
 | **0** | **Dogfood** — encode a real investigation by hand | ✅ done |
-| **1** | `knoten` CLI (`init/validate/query/path/show/attach`) + rule engine | ✅ done |
-| **2** | **MCP server** (5 tools above) | ✅ done — the compounding step |
+| **1** | `knoten` CLI (`init/new/validate/query/index/frontier/gates/path/show/attach`) + rule engine | ✅ done |
+| **2** | **MCP server** (the tools above) | ✅ done — the compounding step |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
 | 4 | Hosted multi-graph service | probably never needed |
 
