@@ -5,7 +5,6 @@ the transport layer, and creating a node programmatically required the `mcp` SDK
 optional dependency for a transport you may not be using. `attach` and `update` never had
 that problem; they live in their own modules and lock themselves.
 """
-import pytest
 
 from knoten import commit as commit_mod
 from knoten.commit import commit
@@ -25,7 +24,6 @@ rules:
 ALIVE_CITING = ("type: hypothesis\nstatus: alive\n"
                 "links:\n  - {rel: kn:survivedGate, to: method-new}")
 
-
 def test_a_valid_node_is_written(graph):
     graph.rules(RULES).node("method-new", "id: method-new\ntype: method\nstatus: open")
 
@@ -34,7 +32,6 @@ def test_a_valid_node_is_written(graph):
     assert res["status"] == "COMMITTED"
     assert load(graph.root)["hyp-x"].status == "alive"
 
-
 def test_a_violating_node_never_reaches_disk(graph):
     graph.rules(RULES)
 
@@ -42,7 +39,6 @@ def test_a_violating_node_never_reaches_disk(graph):
 
     assert res["status"] == "REJECTED"
     assert not (graph.root / "nodes" / "hyp-x.md").exists()
-
 
 def test_commit_validates_the_graph_as_it_is_when_the_lock_is_held(graph, monkeypatch):
     """The graph was read BEFORE the lock was taken and validated against that stale
@@ -68,7 +64,6 @@ def test_commit_validates_the_graph_as_it_is_when_the_lock_is_held(graph, monkey
 
     assert res["status"] == "COMMITTED", res
 
-
 def test_an_existing_node_is_not_overwritten(graph):
     graph.rules(RULES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open")
 
@@ -77,7 +72,6 @@ def test_an_existing_node_is_not_overwritten(graph):
     assert res["status"] == "REJECTED"
     assert "already exists" in res["reason"]
 
-
 def test_an_id_that_escapes_the_graph_is_refused(graph, tmp_path):
     graph.rules(RULES)
 
@@ -85,7 +79,6 @@ def test_an_id_that_escapes_the_graph_is_refused(graph, tmp_path):
 
     assert res["status"] == "REJECTED"
     assert not (tmp_path.parent / "pwned.md").exists()
-
 
 def test_committing_needs_no_mcp_sdk(graph):
     """The point of the extraction: knoten.mcp_server raises ImportError without mcp>=2,
