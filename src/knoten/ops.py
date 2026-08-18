@@ -12,7 +12,13 @@ from .core import (GATE_SECTIONS, VERDICT, Node, frontier as _frontier,
                    gates as _gates, load, retrieve, section, shortest_path)
 from .validate import check, load_config
 
+# A row is ~45 tokens once JSON key overhead is counted, so 200 rows is ~9k — readable
+# in one go, where the same graph's broad query was 83k. It is a CAP, never a silent one:
+# `truncated` and `total` always say what was left out.
 INDEX_LIMIT = 200
+
+# A query returns FULL summaries (post-mortem, results, repro) — a few hundred tokens
+# each. Twenty is a read; sixty is a context flood that buries the top hit.
 QUERY_LIMIT = 20
 
 
