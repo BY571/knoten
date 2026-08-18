@@ -335,6 +335,21 @@ ran and the plot it made into the node. A claim you can't re-run is a claim nobo
 in six months — so the agent that killed a hypothesis leaves behind the thing that killed
 it, ready for the next agent to run.
 
+It also tells the agent when it is about to file the same question twice. A loop running
+for weeks *will* re-propose an idea it already settled, worded differently, under a new
+id — so `knoten_commit` reports settled claims the new node resembles:
+
+```json
+{"status": "COMMITTED",
+ "similar": [{"id": "hyp-self-consistency", "verdict": "DEAD",
+              "why_it_died": "The gain was compute, not method…"}],
+ "warning": "This resembles 1 settled claim. If it is the same question, supersede or
+             retract that node rather than leaving two answers in the graph."}
+```
+
+A warning, never a block: a compute-matched rerun of a dead idea *is* a new claim, and
+that is the entire point of a gate.
+
 `knoten_commit` **validates before writing and refuses on violation** — the candidate node
 is parsed and checked in memory, so an invalid node never reaches your filesystem. An agent
 cannot record a shiny result that cites no test it survived:

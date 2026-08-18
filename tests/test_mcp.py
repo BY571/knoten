@@ -178,3 +178,64 @@ async def test_an_update_that_breaks_a_rule_comes_back_as_json(cwd):
 
 async def test_updating_an_unknown_node_is_reported_not_raised(cwd):
     assert (await update(id="hyp-nope", status="dead"))["status"] == "REJECTED"
+
+
+# ---------------------------------------------------------------- duplicate warning
+
+
+async def test_commit_warns_when_the_new_claim_resembles_a_settled_one(cwd):
+    """A loop running for weeks WILL re-propose an idea it already settled, worded
+    differently, under a new id. The graph then holds two answers to one question and the
+    second has no post-mortem."""
+    cwd.node("hyp-self-consistency", "id: hyp-self-consistency\ntype: hypothesis\n"
+                                     "status: dead",
+             "# Self-consistency majority vote beats greedy decoding\n\n"
+             "## Why it died\nThe gain was compute, not method.\n")
+
+    res = await commit("hyp-sample-and-vote", "type: hypothesis\nstatus: open",
+                       "# Majority vote over sampled chains beats greedy decoding\n")
+
+    assert res["status"] == "COMMITTED"          # a warning, never a block
+    assert [s["id"] for s in res["similar"]] == ["hyp-self-consistency"]
+    assert res["similar"][0]["verdict"] == "DEAD"
+    assert "supersede" in res["warning"]
+
+
+async def test_an_unrelated_claim_gets_no_warning(cwd):
+    cwd.node("hyp-self-consistency", "id: hyp-self-consistency\ntype: hypothesis\n"
+                                     "status: dead", "# Self-consistency beats greedy\n")
+
+    res = await commit("hyp-tokeniser", "type: hypothesis\nstatus: open",
+                       "# A byte-level tokeniser lowers perplexity\n")
+
+    assert "similar" not in res
+
+
+async def test_one_shared_word_is_not_a_duplicate(cwd):
+    """The warning is worth nothing if it fires on every commit, so it takes two shared
+    title words rather than one.
+
+    Two IS a loose bar — "dropout improves accuracy" and "warmup improves accuracy" would
+    trip it — and that is deliberate: a false positive costs the agent one line of JSON
+    it can dismiss, while a false negative costs a duplicated experiment. The asymmetry
+    says lean permissive. Anything tighter (idf over titles, overlap ratios) misbehaves
+    on the small graphs where duplicates start appearing."""
+    cwd.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: dead",
+             "# Dropout lowers perplexity\n")
+
+    res = await commit("hyp-b", "type: hypothesis\nstatus: open",
+                       "# Warmup improves accuracy on reasoning\n")
+
+    assert "similar" not in res
+
+
+async def test_an_unsettled_claim_is_not_reported_as_prior_art(cwd):
+    """`open` is not an answer. Warning about one would tell the agent the question is
+    closed when it is exactly what is still being asked."""
+    cwd.node("hyp-open", "id: hyp-open\ntype: hypothesis\nstatus: open",
+             "# Majority vote over sampled chains beats greedy decoding\n")
+
+    res = await commit("hyp-new", "type: hypothesis\nstatus: open",
+                       "# Majority vote over sampled chains beats greedy decoding\n")
+
+    assert "similar" not in res
