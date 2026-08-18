@@ -300,17 +300,21 @@ pip install -e ".[mcp]"
 ```
 
 ```
-knoten_frontier()                                    ← what should I work on next?
-knoten_gates()                                       ← what must the result survive?
-knoten_index(tags=["decoding"])                      ← the graph, one line per node
-knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
-knoten_get("hyp-self-consistency")                   ← the full node, post-mortem included
-knoten_commit(node)                                  ← AFTER it finishes, pass or fail
-knoten_update(node, status="dead", append=…)         ← or CLOSE one it opened earlier
-knoten_attach(node, [script, plot])                  ← and the code that proves it
+knoten_frontier()                                    ← 1. what should I work on next?
+knoten_index(tags=["decoding"])                      ← 2. has anything LIKE this been tried?
+knoten_query("self-consistency")                     ←    ...or by keyword, if it has a name
+knoten_get("hyp-self-consistency")                   ← 3. the full node, post-mortem included
+knoten_gates()                                       ← 4. what must the result survive?
+knoten_commit(node)                                  ← 5. file it, pass or fail
+knoten_update(node, status="dead", append=…)         ←    ...or close one opened earlier
+knoten_attach(node, [script, plot])                  ← 6. and the code that proves it
 knoten_path(a, b)                                    ← how did we get from A to B?
 knoten_validate()                                    ← run the graph's own rules
 ```
+
+The server hands that order to the client at connect time as its `instructions`, so the
+agent is told how the loop fits together once, rather than guessing it from ten tool
+descriptions.
 
 An experiment that takes a week does not finish in the session that started it. So the
 agent can open a hypothesis as `open`, come back later, and close it:
@@ -386,4 +390,5 @@ is told it was retracted — not just what the claim said:
 
 See `examples/llm-research/` for a worked graph and [SPEC.md](SPEC.md) for the design.
 
-MIT. One dependency (PyYAML). The whole thing is a few files you can read in one sitting.
+MIT. One runtime dependency (PyYAML), plus the `mcp` SDK if you want the agent server.
+Seven source files, ~2k lines, no framework.

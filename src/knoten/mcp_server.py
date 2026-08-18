@@ -37,7 +37,35 @@ from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, Node, backlink, fi
 from .core import load as load_graph
 from .validate import check, load_config
 
-app = Server("knoten")
+INSTRUCTIONS = """\
+knoten is a research graph that remembers what did NOT work. Each node is a claim; a dead
+claim carries why it died and what would bring it back.
+
+The loop, in order:
+
+  1. knoten_frontier — what is worth doing next: work left open, dead ends whose stated
+     reopen condition may now hold, and gates nothing has been through. A dead end with a
+     standing offer is a cheaper experiment than a new idea; the design is already written.
+  2. knoten_index / knoten_query — has this been tried? `index` lists the whole graph one
+     line per node so you can spot work done in DIFFERENT WORDS; `query` is keyword search,
+     faster when your idea has a distinctive name and blind to paraphrase.
+  3. knoten_get — the full node for anything that looks close: post-mortem, results, and
+     the path of the script that produced them.
+  4. knoten_gates — what a result must survive here. Read it BEFORE designing the
+     experiment: a claim cannot be filed as alive without citing a gate it survived, so
+     meeting the gate at commit time means the compute is already spent.
+  5. knoten_commit — file the claim when the work concludes, INCLUDING when it fails. Use
+     knoten_update instead if you opened the node earlier and are now closing it.
+  6. knoten_attach — the script that ran it and the plot that shows it. A claim nobody can
+     re-run is a claim nobody trusts in six months.
+
+knoten_path answers "how did we get from A to B?"; knoten_validate runs the graph's rules.
+
+Writes are gated: commit and update validate against the graph's own declared rules and
+refuse on violation. The refusal is the feature. Fix the node and call again.
+"""
+
+app = Server("knoten", instructions=INSTRUCTIONS)
 
 # A row is ~45 tokens once JSON key overhead is counted, so 200 rows is ~9k — readable
 # in one go, where the same graph's broad query was 83k. It is a CAP, never a silent one:
@@ -85,13 +113,23 @@ def _summarise(n: Node) -> dict:
 async def list_tools() -> list[Tool]:
     return [
         Tool(
+            name="knoten_frontier",
+            description=(
+                "Use when choosing what to work on next. Three buckets: claims left open, "
+                "dead claims that stated what would reopen them, and gates no claim has "
+                "ever been through. A dead end with a standing offer is a cheaper "
+                "experiment than a new idea, because the design is already written down."),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="knoten_index",
             description=(
-                "The whole graph, one line per node: id, type, verdict, tags, claim. USE "
-                "THIS TO ASK 'have we done anything LIKE this?' — read the lines and judge "
-                "relatedness yourself; a differently-worded idea will not be found by "
-                "keyword search. Also answers 'what is still open?' (status=['open']). "
-                "Narrow a large graph with tags/status/type before reading it."),
+                "START HERE when you have an idea and need to know whether it is new. The whole "
+                "graph, one line per node: id, type, verdict, tags, claim. Read the lines "
+                "and judge relatedness yourself — this is the only way to find work "
+                "already done in DIFFERENT WORDS, which keyword search cannot do. Also "
+                "answers 'what is still open?' (status=['open']). Narrow a large graph "
+                "with tags / status / type / since before reading it."),
             inputSchema={"type": "object", "properties": {
                 "query": {"type": "string",
                           "description": "optional — rank the rows by relevance to this"},
@@ -110,33 +148,15 @@ async def list_tools() -> list[Tool]:
             }},
         ),
         Tool(
-            name="knoten_gates",
-            description=(
-                "The methodological gates this graph holds every claim to: what to run, "
-                "why the check exists, and what each has killed or validated. CALL THIS "
-                "BEFORE YOU DESIGN AN EXPERIMENT. A claim cannot be recorded as alive "
-                "without citing a gate it survived, so learning about a gate at commit "
-                "time means the compute is already spent on an experiment whose result "
-                "cannot be filed."),
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="knoten_frontier",
-            description=(
-                "What is worth doing next: claims left OPEN, dead claims that stated what "
-                "would reopen them, and gates no claim has ever been through. CALL THIS "
-                "WHEN CHOOSING WHAT TO WORK ON. A dead end with a standing offer is a "
-                "cheaper experiment than a new idea, because the design is already "
-                "written down."),
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
             name="knoten_query",
             description=(
-                "Search the research graph. CALL THIS BEFORE STARTING ANY INVESTIGATION. "
-                "Returns matching hypotheses with their verdict (ALIVE/DEAD/RETRACTED), "
-                "which methodological gates killed or validated them, WHY they died, and "
-                "WHAT WOULD REOPEN THEM. Prevents redoing work that is already dead."),
+                "Keyword search over the graph, ranked by relevance. Quicker than knoten_index "
+                "when your idea has a distinctive name. It matches WORDS, NOT MEANING: a "
+                "node phrased differently will not appear, so an empty result means 'no "
+                "keyword match' and NOT 'never tried' — confirm with knoten_index before "
+                "concluding an idea is new. Returns verdicts (ALIVE/DEAD/RETRACTED), the "
+                "gates that killed or validated each claim, why it died, and what would "
+                "reopen it."),
             inputSchema={"type": "object", "properties": {
                 "query": {"type": "string", "description": "term, tag, or topic"}},
                 "required": ["query"]},
@@ -148,6 +168,16 @@ async def list_tools() -> list[Tool]:
                          "tools to re-run or inspect the experiment)."),
             inputSchema={"type": "object", "properties": {
                 "id": {"type": "string"}}, "required": ["id"]},
+        ),
+        Tool(
+            name="knoten_gates",
+            description=(
+                "Read this BEFORE you design an experiment. The methodological gates every "
+                "claim here is held to: what to run, why the check exists, and what each "
+                "has killed or validated. A claim cannot be filed as alive without citing "
+                "a gate it survived, so meeting a gate at commit time means the compute is "
+                "already spent on a result that cannot be recorded."),
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="knoten_commit",
