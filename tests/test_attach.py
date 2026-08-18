@@ -4,6 +4,7 @@ import yaml
 
 import pytest
 
+from knoten import attachments
 from knoten.cli import attach, detach
 from knoten.core import GraphError, load
 from knoten.validate import check
@@ -168,3 +169,30 @@ def test_attach_and_detach_refuse_an_id_that_escapes_the_graph(graph, tmp_path, 
         detach(graph.root, nid, "a.txt")
 
     assert not (graph.root.parent / "attachments").exists()
+
+
+def test_two_attachments_at_once_both_survive(graph, tmp_path):
+    """attach() was a read-modify-write on the node file: read the frontmatter, copy the
+    files, rewrite the list. Two agents attaching at the same moment — a plot from one, a
+    script from the other — lost one of the two lists.
+
+    The file stayed parseable and `knoten validate` PASSED; the frontmatter simply no
+    longer mentioned a file sitting on disk. Silent, and the graph reported itself
+    healthy — which is the failure this project exists to refuse.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
+    files = []
+    for i in range(8):
+        f = tmp_path / f"evidence_{i}.py"
+        f.write_text(f"# {i}\n", encoding="utf-8")
+        files.append(f)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda f: attachments.attach(graph.root, "hyp-x", [str(f)]), files))
+
+    listed = load(graph.root)["hyp-x"].attachments
+
+    assert sorted(listed) == sorted(f.name for f in files)
+    assert check(load(graph.root), graph.root) == []

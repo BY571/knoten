@@ -13,7 +13,8 @@ from pathlib import Path
 
 import yaml
 
-from .core import FM_RE, GraphError, _Loader, node_path, read_frontmatter, split
+from .core import (FM_RE, GraphError, _Loader, graph_lock, node_path,
+                   read_frontmatter, split, write_atomic)
 
 IMG = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 BIG = 1_000_000          # git is for code and plots, not datasets
@@ -81,7 +82,7 @@ def set_list(node_file: Path, names: list[str]) -> None:
     out = f"---\n{fm}\n---\n{m.group(2)}"
 
     split(out, node_file.name)           # never write a node we cannot read back
-    node_file.write_text(out, encoding="utf-8")
+    write_atomic(node_file, out)
 
 
 def _embed(node_file: Path, nid: str, images: list[str]) -> list[str]:
@@ -97,7 +98,7 @@ def _embed(node_file: Path, nid: str, images: list[str]) -> list[str]:
         text = text.rstrip() + f"\n\n{ref}\n"
         embedded.append(name)
     if embedded:
-        node_file.write_text(text, encoding="utf-8")
+        write_atomic(node_file, text)
     return embedded
 
 
@@ -124,6 +125,11 @@ def _preflight(files: list[str]) -> list[Path]:
 
 
 def attach(root: Path, nid: str, files: list[str]) -> Attached:
+    with graph_lock(root):
+        return _attach(root, nid, files)
+
+
+def _attach(root: Path, nid: str, files: list[str]) -> Attached:
     nf = _node_file(root, nid)
     fm, _ = read_frontmatter(nf)
     names = [str(a) for a in (fm.get("attachments") or [])]
@@ -155,6 +161,11 @@ def attach(root: Path, nid: str, files: list[str]) -> Attached:
 
 
 def detach(root: Path, nid: str, name: str) -> None:
+    with graph_lock(root):
+        _detach(root, nid, name)
+
+
+def _detach(root: Path, nid: str, name: str) -> None:
     nf = _node_file(root, nid)
     fm, _ = read_frontmatter(nf)
     have = [str(a) for a in (fm.get("attachments") or [])]
@@ -167,4 +178,4 @@ def detach(root: Path, nid: str, name: str) -> None:
     text = nf.read_text(encoding="utf-8")
     text = re.sub(rf"\n*!\[{re.escape(name)}\]\([^)]*\)\n*", "\n", text)
     text = re.sub(r"\n*## Attachments\s*\n+(?=(##|\Z))", "\n", text)
-    nf.write_text(text.rstrip() + "\n", encoding="utf-8")
+    write_atomic(nf, text.rstrip() + "\n")

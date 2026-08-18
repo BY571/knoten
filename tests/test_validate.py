@@ -194,3 +194,62 @@ def test_a_boolean_does_not_satisfy_a_numeric_floor(graph):
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nresults:\n  accuracy: true")
 
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["r"]
+
+
+# ------------------------------------------------------ require_field_one_of
+
+CAUSES = """\
+name: t
+rules:
+  - id: deaths-must-name-a-cause
+    when_status: dead
+    require_field_one_of:
+      cause: [no_signal, cost_hurdle, weak_baseline]
+    message: A cause of death you cannot filter on is a story, not an index.
+"""
+
+
+def test_a_field_outside_the_declared_set_is_a_violation(graph):
+    """SPEC §5 defines seven causes of death and the engine could enforce none of them,
+    so the cause lived only as prose and nothing could ask "what died of a weak
+    baseline?" — the question that makes a research graph pay for itself."""
+    graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\n"
+                                      "cause: week_baseline")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert [v.rule for v in violations] == ["deaths-must-name-a-cause"]
+    assert "week_baseline" in violations[0].message
+
+
+def test_a_missing_field_is_a_violation(graph):
+    graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["deaths-must-name-a-cause"]
+
+
+def test_a_declared_value_passes(graph):
+    graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\n"
+                                      "cause: weak_baseline")
+
+    assert check(load(graph.root), graph.root) == []
+
+
+def test_the_rule_only_applies_where_it_says(graph):
+    graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+
+    assert check(load(graph.root), graph.root) == []
+
+
+def test_require_field_one_of_must_be_a_mapping_of_field_to_list(graph):
+    graph.rules("name: t\nrules:\n  - id: r\n    require_field_one_of: cause")
+
+    with pytest.raises(GraphError, match="require_field_one_of"):
+        load_rules(graph.root)
+
+
+def test_the_allowed_values_must_be_a_list(graph):
+    graph.rules("name: t\nrules:\n  - id: r\n    require_field_one_of: {cause: no_signal}")
+
+    with pytest.raises(GraphError, match="cause"):
+        load_rules(graph.root)

@@ -8,12 +8,24 @@ A node that silently vanishes leaves the graph reporting itself healthy.
 """
 from __future__ import annotations
 
+import math
+import os
 import re
-from collections import defaultdict, deque
+import tempfile
+from contextlib import contextmanager
+from datetime import date
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+try:                                          # POSIX only; Windows falls back to no lock
+    import fcntl
+except ImportError:                           # pragma: no cover
+    fcntl = None
+
+LOCK = ".knoten.lock"
 
 
 class GraphError(Exception):
@@ -38,12 +50,61 @@ GENERATED = set(INVERSE.values())
 # The claim lifecycle. A node with any other status is not a claim (a method, a source).
 VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 
+# The three conventions `frontier` reads. They are conventions, not core vocabulary — a
+# graph that names things differently gets an empty bucket, not a wrong answer. They are
+# named here rather than buried so that stays obvious.
+OPEN = "open"
+REOPEN_SECTION = "What would reopen this"
+GATE_TYPE = "method"
+GATE_SECTIONS = ("The rule", "Why it exists")
+
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
 # An id becomes a filename, so anything else is a path traversal. Go through node_path()
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
 # the graph, because only the MCP surface (where the id comes from an LLM) was guarded.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+@contextmanager
+def graph_lock(root: Path):
+    """One writer at a time, for the read-modify-write windows.
+
+    `attach` reads a node's frontmatter, copies files, then rewrites the list. Two agents
+    doing that at once lost one of the two lists — and the file stayed parseable, so
+    `validate` passed while the frontmatter no longer mentioned a file on disk. Parallel
+    agents are the obvious way to scale a research loop, and this is the step most likely
+    to happen at the same moment.
+    """
+    if fcntl is None:                         # pragma: no cover
+        yield
+        return
+    with open(root / LOCK, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, then rename. A reader either sees the
+    old node or the new one — never the half-written one, which does not parse and takes
+    the whole graph down with it, since load() raises rather than skips."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def today() -> str:
+    """The stamp knoten writes. A plain ISO date: it sorts lexicographically, survives
+    the YAML 1.2 loader as a string, and diffs cleanly in git."""
+    return date.today().isoformat()
 
 
 def node_path(root: Path, nid: str) -> Path:
@@ -104,6 +165,7 @@ class Node:
     sections: list = field(default_factory=list)
     backlinks: list = field(default_factory=list)
     attachments: list = field(default_factory=list)
+    tokens: tuple | None = field(default=None, repr=False, compare=False)
 
     @property
     def status(self) -> str:
@@ -112,6 +174,20 @@ class Node:
     @property
     def type(self) -> str:
         return str(self.frontmatter.get("type", ""))
+
+    @property
+    def title(self) -> str:
+        """The H1 — the claim itself, in one line. This is what makes an index row
+        judgeable: an id alone cannot be compared against a new idea."""
+        return _title(self.body)
+
+    @property
+    def tags(self) -> list:
+        """A bare `tags: decoding` is legal YAML that iterates as characters. `validate`
+        reports it as malformed-tags; here it reads as untagged rather than as five
+        one-letter tags."""
+        raw = self.frontmatter.get("tags")
+        return [str(x) for x in raw] if isinstance(raw, list) else []
 
     def rels(self) -> set:
         return {l["rel"] for l in self.links}
@@ -211,15 +287,135 @@ def _tokens(s: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", s.lower()) if t]
 
 
-def matches(n: Node, term: str) -> bool:
-    """Does this node answer "has this been tried?" for `term`?
+# Function words an agent's question carries and a node never means. Domain words are
+# NEVER listed here — a corpus-common word like "accuracy" is handled by idf below,
+# which is adaptive; a hardcoded one would be a permanent blind spot.
+_STOP = {
+    "a", "about", "again", "all", "an", "and", "any", "anybody", "anyone", "anything",
+    "are", "as", "at", "be", "been", "before", "being", "but", "by", "did", "do", "does",
+    "done", "ever", "for", "from", "had", "has", "have", "how", "i", "if", "in", "into",
+    "is", "it", "its", "of", "on", "or", "over", "should", "so", "some", "someone",
+    "something", "than", "that", "the", "then", "these", "this", "those", "to", "was",
+    "we", "were", "what", "when", "where", "which", "who", "whom", "whose", "why",
+    "will", "with", "would", "you",
+}
 
-    Every token must appear. A substring match meant `query "self consistency"` found
-    NOTHING, because the node is `self-consistency` — the headline question failing on a
-    space, and answering "untested" for work that is already dead.
+# knoten's own schema words. Their VALUES are searchable; the key names are not, since
+# they appear in every node and would make `query "status"` return the whole graph.
+_STRUCTURAL = {"id", "type", "status", "tags", "links", "rel", "to", "note",
+               "results", "repro", "attachments"}
+
+# id and title carry the claim; tags are a curated label; everything else is context.
+_STRONG, _MEDIUM, _WEAK = 3.0, 2.0, 1.0
+
+
+def _flatten(obj, out: list) -> list:
+    """Every scalar in the frontmatter, plus the keys a human chose (`tokens_per_question`,
+    `acc_greedy`). The haystack was id + body + tags, so `repro.model: Qwen3-8B` was
+    unsearchable and two nodes that ran on the same benchmark answered as one."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k) not in _STRUCTURAL:
+                out.append(str(k))
+            _flatten(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _flatten(v, out)
+    elif obj is not None:
+        out.append(str(obj))
+    return out
+
+
+def _title(body: str) -> str:
+    m = re.search(r"^#\s+(.+)$", body, re.M)
+    return m.group(1) if m else ""
+
+
+def fields(n: Node) -> tuple[set, set, set]:
+    """(id+title, tags, everything). Cached on the node — a 5k-node graph is tokenised
+    once per process, not once per query."""
+    if n.tokens is None:
+        strong = set(_tokens(f"{n.id} {_title(n.body)}"))
+        medium = set(_tokens(" ".join(str(t) for t in (n.frontmatter.get("tags") or []))))
+        weak = set(_tokens(" ".join(_flatten(n.frontmatter, []) + [n.body]))) | strong | medium
+        n.tokens = (strong, medium, weak)
+    return n.tokens
+
+
+def moved(n: Node) -> str:
+    """When this claim last moved — updated if it has, else created. Not when the FILE
+    changed: a typo fix and a status flip are the same event to git."""
+    fm = n.frontmatter
+    return max(str(fm.get("updated") or ""), str(fm.get("created") or ""))
+
+
+def _passes(n: Node, tags, status, type, where, since) -> bool:
+    # An unstamped node predates stamping and cannot answer a question about time. Better
+    # absent from a `since` view than silently assumed recent.
+    if since and moved(n) < str(since):
+        return False
+    if status and n.status not in status:
+        return False
+    if type and n.type not in type:
+        return False
+    if tags and not set(n.tags) & set(tags):
+        return False
+    # Generic, because the core knows no domain: "everything that died of a weak
+    # baseline" is one graph's question, and `cause` is one graph's field name.
+    for field, allowed in (where or {}).items():
+        got = n.frontmatter.get(field)
+        if got is None or str(got) not in {str(a) for a in allowed}:
+            return False
+    return True
+
+
+# Keep a hit only if it scores within this fraction of the best hit. Adaptive, so there
+# is no absolute threshold to tune per graph: one strong match suppresses the long tail
+# of nodes that merely share a common word with the query.
+RELATIVE_FLOOR = 0.35
+
+
+def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
+             status=None, type=None, where=None, since=None) -> list[Node]:
+    """Rank nodes by relevance to `query`, narrowed by the filters. Ranked, not filtered:
+
+    ANDing every token meant one unmatched word silenced the whole query, so
+    `"has anyone tried self-consistency?"` — the README's own example — answered "no
+    prior work found" about a hypothesis the graph was holding, dead and documented.
+    A false "untested" is the only failure of this tool that costs real work.
+
+    Tokens are weighted by idf, so a word in every node counts for nothing without
+    anybody having to list it, and a rare one dominates.
+
+    This is the ONE retrieval seam: `query`, `index` and the MCP tools all come through
+    here, so a semantic backend replaces this body and nothing above it changes.
     """
-    hay = " ".join(_tokens(f"{n.id} {n.body} {n.frontmatter.get('tags', '')}"))
-    return all(t in hay for t in _tokens(term))
+    pool = [n for n in nodes.values() if _passes(n, tags, status, type, where, since)]
+    if query is None:
+        return sorted(pool, key=lambda n: n.id)
+
+    qt = [t for t in dict.fromkeys(_tokens(query)) if t not in _STOP]
+    if not qt or not pool:
+        return []
+
+    df = Counter(t for n in pool for t in qt if t in fields(n)[2])
+    total = len(pool)
+
+    scored = []
+    for n in pool:
+        strong, medium, weak = fields(n)
+        s = sum(
+            (_STRONG if t in strong else _MEDIUM if t in medium else _WEAK)
+            * math.log(1 + total / (1 + df[t]))
+            for t in qt if t in weak
+        )
+        if s > 0:
+            scored.append((s, n))
+    if not scored:
+        return []
+
+    floor = RELATIVE_FLOOR * max(s for s, _ in scored)
+    return [n for s, n in sorted(scored, key=lambda p: (-p[0], p[1].id)) if s >= floor]
 
 
 def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str]] | None:
@@ -246,3 +442,37 @@ def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str
                 seen.add(nxt)
                 q.append(p + [(nxt, rel)])
     return None
+
+
+def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
+    """Every gate, with what it killed and what survived it: [(node, killed, survived)].
+
+    An agent used to meet a gate by being REJECTED by it, once the experiment had already
+    run. The gates are the reusable asset (SPEC §1), so they belong in front of the work
+    as a specification. The record is free — the back-links are already generated.
+    """
+    return [(n,
+             [b["to"] for b in n.backlinks if b["rel"] == "kn:gateKilled"],
+             [b["to"] for b in n.backlinks if b["rel"] == "kn:gateSurvivedBy"])
+            for n in sorted(nodes.values(), key=lambda n: n.id) if n.type == GATE_TYPE]
+
+
+def frontier(nodes: dict[str, Node]) -> dict:
+    """What is worth doing next, in three buckets.
+
+    `## What would reopen this` is the standing offer SPEC §5 insists on, and until now
+    the only way to act on one was to re-read every post-mortem and notice the world had
+    changed. This does not try to decide whether a condition is *met* — that is a
+    judgement, and encoding it as a predicate would be either trivially wrong or an
+    ontology project. It presents the offers cheaply and lets the reader judge, the same
+    bargain `retrieve` makes with an index.
+    """
+    ordered = sorted(nodes.values(), key=lambda n: n.id)
+    return {
+        "open": [n for n in ordered if n.status == OPEN],
+        "reopenable": [(n, offer) for n in ordered
+                       if n.status in ("dead", "retracted")
+                       and (offer := section(n.body, REOPEN_SECTION))],
+        "untested_gates": [n for n, killed, survived in gates(nodes)
+                           if not killed and not survived],
+    }

@@ -4,6 +4,7 @@ type: hypothesis
 status: dead
 created: 2026-03-02
 tags: [decoding, reasoning]
+cause: weak_baseline   # greedy at 1x was the strawman
 links:
   - {rel: kn:killedByGate, to: method-compute-matched-baseline}
 repro:

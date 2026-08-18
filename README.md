@@ -19,6 +19,7 @@ humans, code to reproduce it.**
 id: hyp-self-consistency
 type: hypothesis
 status: dead
+cause: weak_baseline
 links:
   - {rel: kn:killedByGate, to: method-compute-matched-baseline}
 repro:
@@ -74,6 +75,11 @@ pip install -e .                  # add ".[mcp]" for the agent server
 knoten init my-topic              # a new graph (it's a folder)
 knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
 knoten query <term>               # has this been tried?
+knoten frontier                   # what should I work on next?
+knoten gates                      # what must a claim survive here?
+knoten index                      # the whole graph, one line per node
+knoten index --tag decoding       # ...narrowed to one corner of it
+knoten index --since 2026-08-01   # ...or to what moved this month
 knoten show <node>                # edges, results, attachments
 knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>
@@ -93,6 +99,19 @@ rules:
     when_type: hypothesis
     require_result_min: {n_independent: 30}
     message: A result on fewer than 30 independent questions is noise, not evidence.
+
+  - id: deaths-must-name-a-cause
+    when_status: dead
+    require_field_one_of:
+      cause: [no_signal, cost_hurdle, weak_baseline, underpowered, crowding_decay]
+    message: A cause of death you cannot filter on is a story, not an index.
+```
+
+That last one is what makes a dead end *reusable*. Once the cause is a field rather than
+a sentence, the question you actually ask six months later is a query:
+
+```bash
+knoten index --where cause=weak_baseline    # we have a stronger baseline now — what reopens?
 ```
 
 Your graph also declares its own vocabulary, and that is enforced too:
@@ -100,11 +119,15 @@ Your graph also declares its own vocabulary, and that is enforced too:
 ```yaml
 node_types: [hypothesis, experiment, finding, method, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
+tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```
 
 `type: hypthesis` is a typo, not a new type. `status: ded` is worse than wrong — it would
 silently drop the claim out of every query, which is exactly the sort of quiet rot this
-tool exists to prevent. Both are now violations.
+tool exists to prevent. Both are now violations. So is `tags: [decodng]`: tags are the
+axis you filter a big graph on, so a typo'd tag leaves the node in the graph but outside
+every view of it. Declare no `tags:` and tagging stays free — the core invents no
+vocabulary, it only enforces the one you declared.
 
 A rule key — or a config key — `knoten` doesn't recognise is a **hard error**, not a
 shrug. Config that enforces nothing is decoration, and a rule that enforces nothing is
@@ -171,6 +194,82 @@ knoten show hyp-self-consistency     # edges, results, attachments
 knoten detach hyp-self-consistency accuracy_vs_budget.png
 ```
 
+## "Has this been tried?" — and "anything like it?"
+
+Two different questions. `query` answers the first by keyword, ranked by how well each
+node matches — partial matches surface, so a question phrased in words the node never
+used still finds it:
+
+```
+$ knoten query "has anyone tried self-consistency?"
+
+  [✗ DEAD] hyp-self-consistency
+      killed by : method-compute-matched-baseline
+      reopen if : A task where the majority-vote aggregation does real work…
+```
+
+But keyword search **cannot** answer the second. An idea worded differently from the node
+that already killed it will not match, and a confident "no prior work found" is the one
+failure of this tool that costs real work. So `index` prints the whole graph, one line per
+node, and lets the reader judge:
+
+```
+$ knoten index --tag decoding
+
+  hyp-self-consistency  ✗ DEAD  [decoding,reasoning]  Self-consistency (sample 5, majority vote) beats greedy decoding
+```
+
+That is cheap enough to read in full — the entire graph, not a guess about which part of
+it is relevant. For an agent it is cheaper still than a broad `query`, because a row is a
+claim rather than a whole node: on a 500-node graph a broad query returned ~83k tokens,
+the same graph's index is ~9k, and one tag narrows it to ~2.5k. `knoten index --status open`
+answers a third question the graph could not answer at all before: **what is still open?**
+
+## The gate, before the experiment
+
+A claim can only be marked `alive` if it cites a gate it survived — so an agent that
+discovers the gate at commit time has already spent the compute on an experiment whose
+result cannot be filed. `gates` puts the specification in front of the work:
+
+```
+$ knoten gates
+
+  method-compute-matched-baseline  (killed 1, survived by 1)
+    Gate: compute-matched baseline
+    the rule : Any method that spends more inference compute must be compared against a
+               baseline given the same budget — not against greedy decoding at 1x.
+```
+
+The record on the right is free — the back-links already exist — and it is the more
+interesting half. A gate that has killed nothing and validated nothing has never been
+applied, which is either a useless check or a check nobody is running.
+
+## What now?
+
+A graph that only answers *"has this been tried?"* is a filing cabinet. `frontier` is the
+one screen that answers *"what next?"*:
+
+```
+$ knoten frontier
+
+  OPEN — started, never settled
+    hyp-batch-schedule        Does the LR schedule interact with batch size?
+
+  REOPENABLE — died, but said what would bring them back
+    hyp-self-consistency      Self-consistency (sample 5, majority vote) beats greedy
+      reopen if : A task where the majority-vote aggregation is doing real work…
+
+  UNTESTED GATES — no claim has been through them
+    method-holdout-period     Gate: hold out the last 20%
+```
+
+A dead end with a standing offer is a **cheaper experiment than a new idea**, because the
+design is already written down — that is what `## What would reopen this` was for, and
+until now the only way to act on one was to re-read every post-mortem.
+
+knoten does not decide whether a condition is *met*. That is a judgement, and it is the
+research. It puts the offers where you cannot walk past them.
+
 ## Two readers, one file
 
 **Humans** skim the prose and get the story: what was tried, what killed it, what's
@@ -201,13 +300,35 @@ pip install -e ".[mcp]"
 ```
 
 ```
-knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
-knoten_get("hyp-self-consistency")                   ← the full node, post-mortem included
-knoten_commit(node)                                  ← AFTER it finishes, pass or fail
-knoten_attach(node, [script, plot])                  ← and the code that proves it
+knoten_frontier()                                    ← 1. what should I work on next?
+knoten_index(tags=["decoding"])                      ← 2. has anything LIKE this been tried?
+knoten_query("self-consistency")                     ←    ...or by keyword, if it has a name
+knoten_get("hyp-self-consistency")                   ← 3. the full node, post-mortem included
+knoten_gates()                                       ← 4. what must the result survive?
+knoten_commit(node)                                  ← 5. file it, pass or fail
+knoten_update(node, status="dead", append=…)         ←    ...or close one opened earlier
+knoten_attach(node, [script, plot])                  ← 6. and the code that proves it
 knoten_path(a, b)                                    ← how did we get from A to B?
 knoten_validate()                                    ← run the graph's own rules
 ```
+
+The server hands that order to the client at connect time as its `instructions`, so the
+agent is told how the loop fits together once, rather than guessing it from ten tool
+descriptions.
+
+An experiment that takes a week does not finish in the session that started it. So the
+agent can open a hypothesis as `open`, come back later, and close it:
+
+```
+knoten_index(status=["open"])          ← what did we start and never finish?
+knoten_update("hyp-bigger-batch", status="dead",
+              append="## Why it died\n…\n## What would reopen this\n…")
+```
+
+`knoten_update` appends and moves the status; it cannot rewrite prose or change a result
+that was already recorded, and it runs the same gate `knoten_commit` does — so a claim
+still cannot become `alive` without citing something it survived. A correction to a claim
+is still a new node. Git holds the before and after.
 
 The agent reads the graph before running an experiment and writes back when it's done,
 **including when the experiment fails.** A dead hypothesis with a documented cause of death
@@ -217,6 +338,21 @@ It writes back the *evidence* too, not just the prose: `knoten_attach` puts the 
 ran and the plot it made into the node. A claim you can't re-run is a claim nobody trusts
 in six months — so the agent that killed a hypothesis leaves behind the thing that killed
 it, ready for the next agent to run.
+
+It also tells the agent when it is about to file the same question twice. A loop running
+for weeks *will* re-propose an idea it already settled, worded differently, under a new
+id — so `knoten_commit` reports settled claims the new node resembles:
+
+```json
+{"status": "COMMITTED",
+ "similar": [{"id": "hyp-self-consistency", "verdict": "DEAD",
+              "why_it_died": "The gain was compute, not method…"}],
+ "warning": "This resembles 1 settled claim. If it is the same question, supersede or
+             retract that node rather than leaving two answers in the graph."}
+```
+
+A warning, never a block: a compute-matched rerun of a dead idea *is* a new claim, and
+that is the entire point of a gate.
 
 `knoten_commit` **validates before writing and refuses on violation** — the candidate node
 is parsed and checked in memory, so an invalid node never reaches your filesystem. An agent
@@ -254,4 +390,5 @@ is told it was retracted — not just what the claim said:
 
 See `examples/llm-research/` for a worked graph and [SPEC.md](SPEC.md) for the design.
 
-MIT. One dependency (PyYAML). The whole thing is a few files you can read in one sitting.
+MIT. One runtime dependency (PyYAML), plus the `mcp` SDK if you want the agent server.
+Seven source files, ~2k lines, no framework.

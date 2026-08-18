@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 from . import attachments
-from .core import (ID_RE, VERDICT, GraphError, find_root, load, matches, node_path, section,
-                   shortest_path)
+from .core import (GATE_SECTIONS, ID_RE, LOCK, VERDICT, GraphError, find_root, frontier, gates,
+                   load, node_path, retrieve, section, shortest_path, today)
 from .hook import install as install_hook
 from .validate import _csv, applies, check, load_config
 
@@ -35,10 +35,12 @@ def validate(root) -> int:
 
 def query(root, term) -> int:
     nodes = load(root)
-    hits = [n for n in nodes.values() if matches(n, term)]
+    hits = retrieve(nodes, term)
     claims = [n for n in hits if n.status in VERDICT]
     print(f'"{term}" → {len(hits)} node(s), {len(claims)} claim(s)\n')
-    for n in sorted(claims, key=lambda x: x.status):
+    # Relevance order, NOT status order: the closest match must be first, because an
+    # agent reads the top of this list and stops.
+    for n in claims:
         print(f"  [{MARK[n.status]}] {n.id}")
         for rel, label in [("kn:killedByGate", "killed by"), ("kn:survivedGate", "survived ")]:
             if ts := [l["to"] for l in n.links if l["rel"] == rel]:
@@ -52,6 +54,73 @@ def query(root, term) -> int:
         print()
     if others := [n for n in hits if n.status not in VERDICT]:
         print("  also: " + ", ".join(n.id for n in others))
+    return 0
+
+
+def _where(pairs) -> dict:
+    """`--where cause=weak_baseline`, repeatable. Values for one field accumulate as
+    alternatives, so `--where cause=a --where cause=b` reads as "a or b"."""
+    out = {}
+    for p in pairs or []:
+        if "=" not in p:
+            raise GraphError(f"--where takes key=value, got '{p}'")
+        k, v = p.split("=", 1)
+        out.setdefault(k.strip(), []).append(v.strip())
+    return out
+
+
+def index(root, tags, status, ntype, where, since, limit) -> int:
+    """The whole graph, one line per node. The answer to "have we done anything LIKE
+    this?" that keyword search cannot give: a reader — human or agent — judges
+    relatedness from the claims themselves."""
+    hits = retrieve(load(root), None, tags=tags, status=status, type=ntype,
+                    where=_where(where), since=since)
+    shown = hits[:limit] if limit else hits
+    width = max((len(n.id) for n in shown), default=0)
+    for n in shown:
+        mark = MARK.get(n.status, n.status or "-")
+        tag = f"[{','.join(n.tags)}]" if n.tags else ""
+        print(f"  {n.id:{width}}  {mark:12} {tag:24} {n.title}")
+    print(f"\n  {len(shown)} of {len(hits)} node(s)")
+    if len(shown) < len(hits):
+        # Never a silent cap: a truncated list reads as the whole graph.
+        print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
+    return 0
+
+
+def gates_cmd(root) -> int:
+    """What every claim in this graph has to survive. Read it before you design the
+    experiment, not after the commit is refused."""
+    for n, killed, survived in gates(load(root)):
+        record = f"killed {len(killed)}, survived by {len(survived)}" if killed or survived \
+            else "never applied"
+        print(f"  {n.id}  ({record})")
+        print(f"    {n.title}")
+        if rule := section(n.body, GATE_SECTIONS[0]):
+            print(f"    the rule : {rule[:160]}")
+        print()
+    return 0
+
+
+def frontier_cmd(root) -> int:
+    """The one screen that answers "what now?". Kept short on purpose — a frontier you
+    have to scroll is a frontier nobody reads."""
+    f = frontier(load(root))
+    if f["open"]:
+        print("  OPEN — started, never settled")
+        for n in f["open"]:
+            print(f"    {n.id:24}  {n.title}")
+    if f["reopenable"]:
+        print("\n  REOPENABLE — died, but said what would bring them back")
+        for n, offer in f["reopenable"]:
+            print(f"    {n.id:24}  {n.title}")
+            print(f"      reopen if : {offer[:120]}…")
+    if f["untested_gates"]:
+        print("\n  UNTESTED GATES — no claim has been through them")
+        for n in f["untested_gates"]:
+            print(f"    {n.id:24}  {n.title}")
+    if not any(f.values()):
+        print("  nothing open, nothing reopenable, every gate has fired.")
     return 0
 
 
@@ -130,6 +199,10 @@ description: TODO — what question is this graph about?
 node_types: [hypothesis, experiment, finding, method, source, retraction]
 statuses:   [open, alive, dead, retracted, superseded, active]
 
+# The axis `knoten index --tag` filters on. Declare them and a typo is a violation;
+# declare none and tagging is free. Add tags as the topic tells you what they are.
+# tags: [decoding, evaluation]
+
 # Reused standards: mp:supports / mp:challenges (Micropublications),
 #   npx:retracts / npx:supersedes (Nanopublications),
 #   prov:wasDerivedFrom / prov:used (PROV-O)
@@ -189,15 +262,19 @@ def new(root, ntype, nid, status) -> int:
             raise GraphError(f"{field} '{value}' is not declared in graph.yaml "
                              f"({field}s: {', '.join(map(str, declared))})")
 
-    sections, results = [], []
+    sections, results, fields = [], [], {}
     for r in cfg.get("rules", []):
         if not applies(status, ntype, r):
             continue
         sections += _csv(r.get("require_sections"))
         results += [k for k in [r.get("require_result")] if k]
         results += list(r.get("require_result_min") or {})
+        fields.update(r.get("require_field_one_of") or {})
 
-    fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}"]
+    fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}", f"created: {today()}"]
+    # The allowed values go in the scaffold as a comment: a closed vocabulary the author
+    # has to go and look up is a closed vocabulary they will guess at.
+    fm += [f"{k}: TODO   # one of: {', '.join(map(str, v))}" for k, v in fields.items()]
     if results:
         fm.append("results:")
         fm += [f"  {k}: TODO" for k in dict.fromkeys(results)]
@@ -207,7 +284,8 @@ def new(root, ntype, nid, status) -> int:
 
     nf.write_text("---\n" + "\n".join(fm) + "\n---\n\n" + "\n".join(body), encoding="utf-8")
     print(f"  + nodes/{nid}.md  ({ntype}, {status})")
-    if wanted := [f"## {s}" for s in dict.fromkeys(sections)] + list(dict.fromkeys(results)):
+    if wanted := ([f"## {s}" for s in dict.fromkeys(sections)]
+                  + list(dict.fromkeys(results)) + list(fields)):
         print(f"    pre-filled what THIS graph's rules require: {', '.join(wanted)}")
     return 0
 
@@ -220,6 +298,8 @@ def init(name) -> int:
         raise GraphError(f"{root} already exists")
     (root / "nodes").mkdir(parents=True)
     (root / "graph.yaml").write_text(TEMPLATE_GRAPH.format(name=name), encoding="utf-8")
+    # knoten's own write lock. Nobody should have to see it in `git status`.
+    (root / ".gitignore").write_text(f"{LOCK}\n", encoding="utf-8")
     (root / "nodes" / "method-example-gate.md").write_text(TEMPLATE_METHOD, encoding="utf-8")
     print(f"created graph '{name}'\n")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
@@ -249,6 +329,20 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("query", help='"has this been tried?" -> verdicts + causes of death')
     s.add_argument("term")
+
+    s = sub.add_parser("index", help="the whole graph, one line per node")
+    s.add_argument("--tag", action="append", help="keep nodes carrying this tag (repeatable)")
+    s.add_argument("--status", action="append")
+    s.add_argument("--type", action="append")
+    s.add_argument("--where", action="append", metavar="KEY=VALUE",
+                   help="keep nodes whose frontmatter KEY is VALUE (repeatable)")
+    s.add_argument("--since", metavar="YYYY-MM-DD",
+                   help="only nodes created or updated on/after this day")
+    s.add_argument("--limit", type=int, default=0, help="0 = no limit")
+
+    sub.add_parser("frontier", help="what should I work on next?")
+
+    sub.add_parser("gates", help="what must a claim survive here?")
 
     s = sub.add_parser("path", help="how did we get from A to B?")
     s.add_argument("a")
@@ -284,6 +378,10 @@ def main(argv=None) -> int:
         return {
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
+            "frontier": lambda: frontier_cmd(root),
+            "gates":  lambda: gates_cmd(root),
+            "index":  lambda: index(root, args.tag, args.status, args.type,
+                                    args.where, args.since, args.limit),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node),
             "hook":   lambda: hook(root, args.force),

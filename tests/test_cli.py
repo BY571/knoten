@@ -152,15 +152,23 @@ def test_query_matches_across_the_separator(graph, monkeypatch, capsys):
     assert "hyp-self-consistency" in capsys.readouterr().out
 
 
-def test_query_requires_all_tokens(graph, monkeypatch, capsys):
+def test_query_ranks_the_node_matching_both_tokens_first(graph, monkeypatch, capsys):
+    """This replaces `test_query_requires_all_tokens`, which asserted that a partial
+    match returns NOTHING. That contract was the headline bug: it answered "no prior
+    work" for every question phrased in words the node happened not to use. Partial
+    matches are the point — "anything related?" is the question — so the guarantee moved
+    from exclusion to ORDER: the closest node comes first."""
     monkeypatch.chdir(graph.root)
     graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: dead", body="# about decoding\n")
     graph.node("hyp-b", "id: hyp-b\ntype: hypothesis\nstatus: dead", body="# about prompting\n")
+    graph.node("hyp-c", "id: hyp-c\ntype: hypothesis\nstatus: dead",
+               body="# about decoding and prompting\n")
 
     main(["query", "decoding prompting"])
     out = capsys.readouterr().out
 
-    assert "0 claim(s)" in out
+    assert out.index("hyp-c") < out.index("hyp-a")
+    assert out.index("hyp-c") < out.index("hyp-b")
 
 
 def test_query_says_a_claim_was_retracted_by_another_node(graph, monkeypatch, capsys):
@@ -183,3 +191,92 @@ def retracted_graph(graph):
                            "  - {rel: kn:survivedGate, to: method-gate}")
     graph.node("method-gate", "id: method-gate\ntype: method")
     return graph
+
+
+# ------------------------------------------------------------------ index
+
+def indexed(graph):
+    (graph.root / "graph.yaml").write_text(
+        "name: t\ntags: [decoding, prompting]\nrules: []\n", encoding="utf-8")
+    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open\ntags: [decoding]",
+               "# Alpha beats greedy\n")
+    graph.node("hyp-b", "id: hyp-b\ntype: hypothesis\nstatus: dead\ntags: [prompting]",
+               "# Beta improves accuracy\n")
+    return graph
+
+
+def test_index_prints_one_line_per_node_with_the_claim(graph, monkeypatch, capsys):
+    """The CLI and the MCP server must not drift: a fix that reaches one surface and not
+    the other is this project's most repeated bug."""
+    monkeypatch.chdir(indexed(graph).root)
+
+    main(["index"])
+    out = capsys.readouterr().out
+
+    assert "hyp-a" in out and "Alpha beats greedy" in out
+    assert "hyp-b" in out and "Beta improves accuracy" in out
+
+
+def test_index_filters_by_tag(graph, monkeypatch, capsys):
+    monkeypatch.chdir(indexed(graph).root)
+
+    main(["index", "--tag", "prompting"])
+    out = capsys.readouterr().out
+
+    assert "hyp-b" in out
+    assert "hyp-a" not in out
+
+
+def test_index_filters_by_status(graph, monkeypatch, capsys):
+    monkeypatch.chdir(indexed(graph).root)
+
+    main(["index", "--status", "open"])
+    out = capsys.readouterr().out
+
+    assert "hyp-a" in out
+    assert "hyp-b" not in out
+
+
+def test_index_filters_on_a_frontmatter_field(graph, monkeypatch, capsys):
+    monkeypatch.chdir(indexed(graph).root)
+    graph.node("hyp-w", "id: hyp-w\ntype: hypothesis\nstatus: dead\ncause: weak_baseline",
+               "# Weak\n")
+
+    main(["index", "--where", "cause=weak_baseline"])
+    out = capsys.readouterr().out
+
+    assert "hyp-w" in out
+    assert "hyp-a" not in out
+
+
+def test_a_malformed_where_is_a_clean_error(graph, monkeypatch, capsys):
+    monkeypatch.chdir(indexed(graph).root)
+
+    assert main(["index", "--where", "cause"]) == 1
+    assert "cause" in capsys.readouterr().err
+
+
+def test_new_scaffolds_a_field_the_rules_demand(graph, monkeypatch):
+    """`new` reads THIS graph's rules and pre-fills what they require, so the author is
+    handed a checklist instead of a rejection."""
+    graph.rules("""\
+rules:
+  - id: deaths-must-name-a-cause
+    when_status: dead
+    require_field_one_of: {cause: [no_signal, weak_baseline]}
+    message: name the cause.
+""")
+    monkeypatch.chdir(graph.root)
+
+    main(["new", "hypothesis", "hyp-dead", "--status", "dead"])
+
+    assert "cause: TODO   # one of: no_signal, weak_baseline" in graph.read("hyp-dead")
+
+
+def test_init_ignores_the_lock_file(tmp_path, monkeypatch):
+    """The write lock lives in the graph root. Without this, every user's first
+    `git status` shows a file knoten created and they did not."""
+    monkeypatch.chdir(tmp_path)
+    main(["init", "my-topic"])
+
+    assert ".knoten.lock" in (tmp_path / "my-topic" / ".gitignore").read_text()

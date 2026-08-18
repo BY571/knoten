@@ -23,10 +23,11 @@ RULE_KEYS = {
     "require_sections",    # body must contain these `## ` headings
     "require_result",      # results must carry this key
     "require_result_min",  # {key: minimum} — numeric floor
+    "require_field_one_of",  # {field: [allowed]} — closed vocabulary
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
-GRAPH_KEYS = {"name", "description", "node_types", "statuses", "rules"}
+GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules"}
 
 
 @dataclass
@@ -49,7 +50,7 @@ def load_config(root: Path) -> dict:
             f"graph.yaml: unknown key(s) {', '.join(sorted(unknown))}. "
             f"Known keys: {', '.join(sorted(GRAPH_KEYS))}"
         )
-    for key in ("node_types", "statuses"):
+    for key in ("node_types", "statuses", "tags"):
         if key in cfg and not isinstance(cfg[key], list):
             raise GraphError(f"graph.yaml: `{key}` must be a list, got {cfg[key]!r}")
 
@@ -86,6 +87,18 @@ def _check_values(r: dict) -> None:
                 f"graph.yaml: rule '{rid}': `{key}` must be a single string, "
                 f"got {r[key]!r}")
 
+    if "require_field_one_of" in r:
+        fields = r["require_field_one_of"]
+        if not isinstance(fields, dict):
+            raise GraphError(
+                f"graph.yaml: rule '{rid}': `require_field_one_of` must be a mapping of "
+                f"{{field: [allowed, values]}}, got {fields!r}")
+        for k, v in fields.items():
+            if not isinstance(v, list) or not v:
+                raise GraphError(
+                    f"graph.yaml: rule '{rid}': `require_field_one_of` for '{k}' must be "
+                    f"a non-empty list of allowed values, got {v!r}")
+
     if "require_result_min" in r:
         floors = r["require_result_min"]
         if not isinstance(floors, dict):
@@ -97,6 +110,27 @@ def _check_values(r: dict) -> None:
                 raise GraphError(
                     f"graph.yaml: rule '{rid}': `require_result_min` floor for '{k}' must "
                     f"be a number, got {v!r}")
+
+
+def _tags(n: Node, cfg: dict) -> list[Violation]:
+    """Tags are the filter axis: they narrow a graph too big to read into a slice an
+    agent can take in one call. A typo'd tag is therefore not cosmetic — the node is
+    still in the graph but outside every filtered view of it, which is the same silent
+    disappearance as a typo'd status."""
+    raw = n.frontmatter.get("tags")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return [Violation(n.id, "malformed-tags",
+                          f"`tags` must be a list, got {type(raw).__name__} "
+                          f"({raw!r}). Write `tags: [{raw}]`.")]
+    if not (declared := cfg.get("tags")):
+        return []
+    known = {str(t) for t in declared}
+    return [Violation(n.id, "unknown-tag",
+                      f"tag '{t}' is not declared in graph.yaml "
+                      f"(tags: {', '.join(map(str, declared))})")
+            for t in map(str, raw) if t not in known]
 
 
 def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
@@ -114,6 +148,8 @@ def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
         out.append(Violation(n.id, "unknown-type",
                              f"type '{n.type}' is not declared in graph.yaml "
                              f"(node_types: {', '.join(map(str, types))})"))
+
+    out += _tags(n, cfg)
 
     if statuses := cfg.get("statuses"):
         if not n.status:
@@ -192,6 +228,13 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
 
             if (fld := r.get("require_result")) and fld not in n.results:
                 out.append(Violation(n.id, rid, msg))
+
+            for fld, allowed in (r.get("require_field_one_of") or {}).items():
+                got = n.frontmatter.get(fld)
+                if got is None or str(got) not in {str(a) for a in allowed}:
+                    out.append(Violation(n.id, rid,
+                                         f"{msg} ({fld}={got!r}, one of: "
+                                         f"{', '.join(map(str, allowed))})"))
 
             for key, floor in (r.get("require_result_min") or {}).items():
                 got = n.results.get(key)
