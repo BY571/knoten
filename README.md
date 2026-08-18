@@ -76,6 +76,7 @@ knoten init my-topic              # a new graph (it's a folder)
 knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
 knoten query <term>               # has this been tried?
 knoten frontier                   # what should I work on next?
+knoten gates                      # what must a claim survive here?
 knoten index                      # the whole graph, one line per node
 knoten index --tag decoding       # ...narrowed to one corner of it
 knoten show <node>                # edges, results, attachments
@@ -223,6 +224,25 @@ claim rather than a whole node: on a 500-node graph a broad query returned ~83k 
 the same graph's index is ~9k, and one tag narrows it to ~2.5k. `knoten index --status open`
 answers a third question the graph could not answer at all before: **what is still open?**
 
+## The gate, before the experiment
+
+A claim can only be marked `alive` if it cites a gate it survived — so an agent that
+discovers the gate at commit time has already spent the compute on an experiment whose
+result cannot be filed. `gates` puts the specification in front of the work:
+
+```
+$ knoten gates
+
+  method-compute-matched-baseline  (killed 1, survived by 1)
+    Gate: compute-matched baseline
+    the rule : Any method that spends more inference compute must be compared against a
+               baseline given the same budget — not against greedy decoding at 1x.
+```
+
+The record on the right is free — the back-links already exist — and it is the more
+interesting half. A gate that has killed nothing and validated nothing has never been
+applied, which is either a useless check or a check nobody is running.
+
 ## What now?
 
 A graph that only answers *"has this been tried?"* is a filing cabinet. `frontier` is the
@@ -280,6 +300,7 @@ pip install -e ".[mcp]"
 
 ```
 knoten_frontier()                                    ← what should I work on next?
+knoten_gates()                                       ← what must the result survive?
 knoten_index(tags=["decoding"])                      ← the graph, one line per node
 knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
 knoten_get("hyp-self-consistency")                   ← the full node, post-mortem included

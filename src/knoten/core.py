@@ -45,7 +45,7 @@ VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 OPEN = "open"
 REOPEN_SECTION = "What would reopen this"
 GATE_TYPE = "method"
-GATE_BACKLINKS = {"kn:gateKilled", "kn:gateSurvivedBy"}
+GATE_SECTIONS = ("The rule", "Why it exists")
 
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
@@ -381,6 +381,19 @@ def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str
     return None
 
 
+def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
+    """Every gate, with what it killed and what survived it: [(node, killed, survived)].
+
+    An agent used to meet a gate by being REJECTED by it, once the experiment had already
+    run. The gates are the reusable asset (SPEC §1), so they belong in front of the work
+    as a specification. The record is free — the back-links are already generated.
+    """
+    return [(n,
+             [b["to"] for b in n.backlinks if b["rel"] == "kn:gateKilled"],
+             [b["to"] for b in n.backlinks if b["rel"] == "kn:gateSurvivedBy"])
+            for n in sorted(nodes.values(), key=lambda n: n.id) if n.type == GATE_TYPE]
+
+
 def frontier(nodes: dict[str, Node]) -> dict:
     """What is worth doing next, in three buckets.
 
@@ -397,6 +410,6 @@ def frontier(nodes: dict[str, Node]) -> dict:
         "reopenable": [(n, offer) for n in ordered
                        if n.status in ("dead", "retracted")
                        and (offer := section(n.body, REOPEN_SECTION))],
-        "untested_gates": [n for n in ordered if n.type == GATE_TYPE
-                           and not {b["rel"] for b in n.backlinks} & GATE_BACKLINKS],
+        "untested_gates": [n for n, killed, survived in gates(nodes)
+                           if not killed and not survived],
     }

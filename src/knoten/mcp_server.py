@@ -30,8 +30,9 @@ except ImportError as e:  # pragma: no cover
 
 from . import attachments
 from .update import update as update_node
-from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, frontier,
-                   node_path, parse_text, retrieve, section, shortest_path)
+from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, Node, backlink, find_root,
+                   frontier, gates, node_path, parse_text, retrieve, section,
+                   shortest_path)
 from .core import load as load_graph
 from .validate import check, load_config
 
@@ -103,6 +104,17 @@ async def list_tools() -> list[Tool]:
                                          "{\"cause\": [\"weak_baseline\"]}"},
                 "limit": {"type": "integer", "description": f"default {INDEX_LIMIT}"},
             }},
+        ),
+        Tool(
+            name="knoten_gates",
+            description=(
+                "The methodological gates this graph holds every claim to: what to run, "
+                "why the check exists, and what each has killed or validated. CALL THIS "
+                "BEFORE YOU DESIGN AN EXPERIMENT. A claim cannot be recorded as alive "
+                "without citing a gate it survived, so learning about a gate at commit "
+                "time means the compute is already spent on an experiment whose result "
+                "cannot be filed."),
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="knoten_frontier",
@@ -275,6 +287,20 @@ async def _dispatch(name: str, args: dict) -> list[TextContent]:
                            f"or pass a query to rank by relevance, before concluding "
                            f"anything about what is NOT here.")
         return ok(out)
+
+    if name == "knoten_gates":
+        rule, why = GATE_SECTIONS
+        out = []
+        for n, killed, survived in gates(nodes):
+            row = {"id": n.id, "title": n.title, "killed": killed, "survived": survived}
+            if r := section(n.body, rule):
+                row["rule"] = r
+            if w := section(n.body, why):
+                row["why_it_exists"] = w
+            out.append(row)
+        return ok({"gates": out,
+                   "note": ("Design the experiment to pass these. A gate with nothing in "
+                            "`killed` or `survived` has never been applied.")})
 
     if name == "knoten_frontier":
         f = frontier(nodes)

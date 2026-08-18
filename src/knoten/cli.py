@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 from . import attachments
-from .core import (ID_RE, VERDICT, GraphError, find_root, frontier, load, node_path,
-                   retrieve, section, shortest_path)
+from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, find_root, frontier, gates,
+                   load, node_path, retrieve, section, shortest_path)
 from .hook import install as install_hook
 from .validate import _csv, applies, check, load_config
 
@@ -85,6 +85,20 @@ def index(root, tags, status, ntype, where, limit) -> int:
     if len(shown) < len(hits):
         # Never a silent cap: a truncated list reads as the whole graph.
         print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
+    return 0
+
+
+def gates_cmd(root) -> int:
+    """What every claim in this graph has to survive. Read it before you design the
+    experiment, not after the commit is refused."""
+    for n, killed, survived in gates(load(root)):
+        record = f"killed {len(killed)}, survived by {len(survived)}" if killed or survived \
+            else "never applied"
+        print(f"  {n.id}  ({record})")
+        print(f"    {n.title}")
+        if rule := section(n.body, GATE_SECTIONS[0]):
+            print(f"    the rule : {rule[:160]}")
+        print()
     return 0
 
 
@@ -324,6 +338,8 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("frontier", help="what should I work on next?")
 
+    sub.add_parser("gates", help="what must a claim survive here?")
+
     s = sub.add_parser("path", help="how did we get from A to B?")
     s.add_argument("a")
     s.add_argument("b")
@@ -359,6 +375,7 @@ def main(argv=None) -> int:
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
             "frontier": lambda: frontier_cmd(root),
+            "gates":  lambda: gates_cmd(root),
             "index":  lambda: index(root, args.tag, args.status, args.type,
                                     args.where, args.limit),
             "new":    lambda: new(root, args.type, args.id, args.status),

@@ -279,6 +279,7 @@ memory files.
 | tool | purpose |
 |---|---|
 | `knoten_index(...)` | *"anything LIKE this?"* / *"what is still open?"* → the graph, one line per node |
+| `knoten_gates()` | *"what must this survive?"* → the gates, their rule, and their record |
 | `knoten_frontier()` | *"what should I work on next?"* → open claims, standing offers, unused gates |
 | `knoten_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death |
 | `knoten_get(id)` | full node, including the post-mortem |
