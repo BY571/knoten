@@ -27,7 +27,8 @@ _BLOCK = re.compile(r"^(\w[\w-]*):", re.M)
 # `status` has an argument, `results` and `links` have theirs, `id` and `type` identify
 # the node, and `attachments` belong to the attach path. One key with two doors is one
 # key whose guards disagree.
-RESERVED = {"id", "type", "status", "results", "links", "attachments"}
+RESERVED = {"id", "type", "status", "results", "links", "attachments",
+            "created", "updated"}
 
 
 def _spans(fm: str) -> dict[str, tuple[int, int]]:
@@ -68,7 +69,8 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
     Returns the status the node now carries.
     """
     with graph_lock(root):
-        return _update(root, nid, status, results, links, append, fields)
+        return _update(root, nid, status=status, results=results, links=links,
+                       append=append, fields=fields)
 
 
 def _update(root: Path, nid: str, status, results, links, append, fields) -> str:
@@ -105,7 +107,11 @@ def _update(root: Path, nid: str, status, results, links, append, fields) -> str
                 f"its own argument or its own command, with its own guard.")
         # Guarded like `results`: a field already on the node is part of the published
         # claim, and replacing one in place is what retraction exists to do instead.
-        if clash := [k for k, v in fields.items() if k in fm and fm[k] != v]:
+        # Compared with str(), the way `require_field_one_of` and `--where` compare. A
+        # node committed with `seed: 2` holds an int; `--field seed=2` passes a string.
+        # With `!=` that refused as "a different value", so "the same value" would have
+        # meant something different here than everywhere else it is decided.
+        if clash := [k for k, v in fields.items() if k in fm and str(fm[k]) != str(v)]:
             raise GraphError(
                 f"'{nid}': {', '.join(sorted(clash))} already recorded with a different "
                 f"value. Retract or supersede the node rather than rewriting it.")

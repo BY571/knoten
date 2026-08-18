@@ -124,7 +124,8 @@ def test_a_refused_update_json_payload_is_on_stdout(open_node, capsys):
     assert json.loads(out)["status"] == "REJECTED"
 
 
-@pytest.mark.parametrize("flag,bad", [("--result", "acc"), ("--link", "method-x")])
+@pytest.mark.parametrize("flag,bad", [("--result", "acc"), ("--link", "method-x"),
+                                      ("--field", "cause")])
 def test_a_malformed_kv_flag_is_a_graph_error_not_a_crash(open_node, flag, bad):
     assert main(["update", "hyp-x", flag, bad]) == 1
 
@@ -186,9 +187,51 @@ def test_field_refuses_to_rewrite_what_is_already_recorded(graph, monkeypatch, c
     assert "Traceback" not in capsys.readouterr().err
 
 
-def test_a_malformed_field_is_a_clean_error(graph, monkeypatch, capsys):
+NUMERIC_VOCAB = """\
+name: t
+statuses: [open, dead]
+node_types: [hypothesis]
+rules:
+  - id: deaths-must-name-a-seed
+    when_status: dead
+    require_field_one_of: {seed: [1, 2, 3]}
+    message: name the seed.
+"""
+
+
+def test_a_field_is_stored_as_typed_not_coerced(graph, monkeypatch):
+    """`--field` reused `--result`'s parser, which coerces a numeric-looking value to
+    float because `require_result_min` compares numerically. `require_field_one_of` and
+    `--where` both compare with str(), so `--field seed=2` stored 2.0 and matched nothing
+    the graph declared — and the refusal quoted `seed=2.0`, a value the user never typed.
+
+    Worse, MCP passed `fields` through untouched, so the same logical call wrote `2` on
+    one surface and `2.0` on the other — divergence on the very argument ops.update
+    exists to unify."""
+    graph.rules(NUMERIC_VOCAB).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open",
+                                    "# c\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["update", "hyp-x", "--status", "dead", "--field", "seed=2"]) == 0
+    assert load(graph.root)["hyp-x"].frontmatter["seed"] == "2"
+
+
+def test_a_field_written_by_commit_round_trips_through_update(graph, monkeypatch):
+    """`commit` writes YAML, so `seed: 2` parses as an int. The clash guard compared with
+    `!=`, so re-setting it to the same value refused as "already recorded with a different
+    value". The rule engine and `--where` both compare with str(); the guard must agree,
+    or "the same value" means something different in each place."""
+    graph.rules(NUMERIC_VOCAB).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\n"
+                                             "seed: 2", "# c\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["update", "hyp-x", "--status", "dead", "--field", "seed=2"]) == 0
+
+
+def test_a_malformed_field_names_the_flag_the_user_typed(graph, monkeypatch, capsys):
+    """It said `--result takes key=value` when the user typed `--field`."""
     graph.rules(RULES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
     monkeypatch.chdir(graph.root)
 
     assert main(["update", "hyp-x", "--field", "cause"]) == 1
-    assert "Traceback" not in capsys.readouterr().err
+    assert "--field" in capsys.readouterr().err

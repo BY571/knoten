@@ -133,7 +133,6 @@ def test_an_update_that_changes_nothing_is_an_error(g):
         update(g.root, "hyp-x")
 
 
-
 # ------------------------------------------------------------------ top-level fields
 
 CAUSES = """\
@@ -164,6 +163,7 @@ def test_a_hypothesis_can_be_closed_when_the_graph_demands_a_cause(graph):
 
 
 def test_a_field_that_is_absent_is_set(graph):
+    """Also pins that `nothing to change` does not fire when a field is the only argument."""
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
 
     update(graph.root, "hyp-x", fields={"cause": "no_signal"})
@@ -199,10 +199,3 @@ def test_the_keys_with_their_own_paths_are_refused(graph, key):
 
     with pytest.raises(GraphError, match=key):
         update(graph.root, "hyp-x", fields={key: "whatever"})
-
-
-def test_fields_alone_counts_as_a_change(graph):
-    """`nothing to change` must not fire when the only thing passed is a field."""
-    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
-
-    update(graph.root, "hyp-x", fields={"cause": "no_signal"})   # must not raise

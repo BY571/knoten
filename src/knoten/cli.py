@@ -256,6 +256,18 @@ def _kv(pairs) -> dict:
     return out
 
 
+def _fields(pairs) -> dict:
+    """`--field cause=weak_baseline`, repeatable. Left as STRINGS, unlike `_kv`.
+
+    `_kv` coerces because `require_result_min` compares numerically. `require_field_one_of`
+    and `--where` both compare with `str()`, so coercing `--field seed=2` to 2.0 made it
+    match nothing the graph declared — and the refusal quoted `seed=2.0`, a value the user
+    never typed. Stripped, because this is the write side of `--where`, which strips: the
+    two must round-trip.
+    """
+    return {k: v.strip() for k, v in _pairs(pairs, "--field takes key=value, got '{}'")}
+
+
 def _links(pairs) -> list[dict]:
     """`--link kn:killedByGate=method-x`, repeatable."""
     out = []
@@ -289,7 +301,7 @@ def update_cmd(root, nid, status, append, results, links, fields, as_json) -> in
     # ops.update() is the ONE shape for both outcomes — this used to build its own
     # dict here, and a different one in mcp_server.py, and the two shapes drifted.
     payload = ops.update(root, nid, status=status, append=_read(append) if append else None,
-                         results=_kv(results), links=_links(links), fields=_kv(fields))
+                         results=_kv(results), links=_links(links), fields=_fields(fields))
     if payload["status"] == "REJECTED":
         return _fail(payload, payload["reason"], as_json)
     _emit(payload, as_json, render_update)
