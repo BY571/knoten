@@ -26,6 +26,15 @@ rules:
     require_sections: Why it died, What would reopen this
     message: The post-mortem IS the asset - a dead end must become a standing offer.
 
+  - id: deaths-must-name-a-cause
+    when_status: dead, retracted
+    require_field_one_of:
+      cause: [no_signal, cost_hurdle, structural_blocker, selection_bias,
+              weak_baseline, underpowered, crowding_decay]
+    message: >
+      A cause of death you cannot filter on is a story, not an index. Name it, and
+      "re-open everything that died of a weak baseline" becomes one query.
+
   # THIS graph's own domain rule. The core has no idea what a token budget is.
   - id: claims-must-report-token-budget
     when_type: hypothesis

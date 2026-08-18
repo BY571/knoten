@@ -142,3 +142,20 @@ def test_a_malformed_tag_string_does_not_match_single_letters(graph):
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\ntags: decoding")
 
     assert retrieve(load(graph.root), None, tags=["d"]) == []
+
+
+def test_where_filters_on_any_frontmatter_field(graph):
+    """The core knows no domain, so this is a generic field filter rather than a `cause`
+    parameter: "everything that died of a weak baseline" is one graph's question."""
+    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: dead\ncause: weak_baseline")
+    graph.node("hyp-b", "id: hyp-b\ntype: hypothesis\nstatus: dead\ncause: no_signal")
+
+    hits = retrieve(load(graph.root), None, where={"cause": ["weak_baseline"]})
+
+    assert ids(hits) == ["hyp-a"]
+
+
+def test_where_drops_a_node_that_lacks_the_field(graph):
+    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: dead")
+
+    assert retrieve(load(graph.root), None, where={"cause": ["no_signal"]}) == []

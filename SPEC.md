@@ -159,7 +159,25 @@ for research graphs. Your graph enforces the parts it cares about, as data:
     when_status: dead, retracted
     require_sections: Why it died, What would reopen this
     message: The post-mortem IS the asset — a dead end must become a standing offer.
+
+  - id: deaths-must-name-a-cause
+    when_status: dead, retracted
+    require_field_one_of:
+      cause: [no_signal, cost_hurdle, structural_blocker, selection_bias,
+              weak_baseline, underpowered, crowding_decay]
+    message: A cause of death you cannot filter on is a story, not an index.
 ```
+
+The second rule is what makes a death **queryable** rather than merely recorded:
+
+```bash
+knoten index --where cause=weak_baseline    # we have a stronger baseline now. what reopens?
+```
+
+That is a query when the cause is a field and a re-read of every post-mortem when it is
+prose — and it is the moment a research graph pays for itself. `require_field_one_of`
+constrains any frontmatter field to a declared set; the *values* live in `graph.yaml`, so
+a biology graph declares different ones and the core still knows no domain.
 
 ---
 
@@ -202,6 +220,7 @@ rules:
 | `require_sections` | body must contain these `## ` headings. |
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
+| `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
 
 **An unknown rule key is a hard error.** A rule the engine cannot understand would
 enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is

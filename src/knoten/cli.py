@@ -57,11 +57,24 @@ def query(root, term) -> int:
     return 0
 
 
-def index(root, tags, status, ntype, limit) -> int:
+def _where(pairs) -> dict:
+    """`--where cause=weak_baseline`, repeatable. Values for one field accumulate as
+    alternatives, so `--where cause=a --where cause=b` reads as "a or b"."""
+    out = {}
+    for p in pairs or []:
+        if "=" not in p:
+            raise GraphError(f"--where takes key=value, got '{p}'")
+        k, v = p.split("=", 1)
+        out.setdefault(k.strip(), []).append(v.strip())
+    return out
+
+
+def index(root, tags, status, ntype, where, limit) -> int:
     """The whole graph, one line per node. The answer to "have we done anything LIKE
     this?" that keyword search cannot give: a reader — human or agent — judges
     relatedness from the claims themselves."""
-    hits = retrieve(load(root), None, tags=tags, status=status, type=ntype)
+    hits = retrieve(load(root), None, tags=tags, status=status, type=ntype,
+                    where=_where(where))
     shown = hits[:limit] if limit else hits
     width = max((len(n.id) for n in shown), default=0)
     for n in shown:
@@ -213,15 +226,19 @@ def new(root, ntype, nid, status) -> int:
             raise GraphError(f"{field} '{value}' is not declared in graph.yaml "
                              f"({field}s: {', '.join(map(str, declared))})")
 
-    sections, results = [], []
+    sections, results, fields = [], [], {}
     for r in cfg.get("rules", []):
         if not applies(status, ntype, r):
             continue
         sections += _csv(r.get("require_sections"))
         results += [k for k in [r.get("require_result")] if k]
         results += list(r.get("require_result_min") or {})
+        fields.update(r.get("require_field_one_of") or {})
 
     fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}"]
+    # The allowed values go in the scaffold as a comment: a closed vocabulary the author
+    # has to go and look up is a closed vocabulary they will guess at.
+    fm += [f"{k}: TODO   # one of: {', '.join(map(str, v))}" for k, v in fields.items()]
     if results:
         fm.append("results:")
         fm += [f"  {k}: TODO" for k in dict.fromkeys(results)]
@@ -231,7 +248,8 @@ def new(root, ntype, nid, status) -> int:
 
     nf.write_text("---\n" + "\n".join(fm) + "\n---\n\n" + "\n".join(body), encoding="utf-8")
     print(f"  + nodes/{nid}.md  ({ntype}, {status})")
-    if wanted := [f"## {s}" for s in dict.fromkeys(sections)] + list(dict.fromkeys(results)):
+    if wanted := ([f"## {s}" for s in dict.fromkeys(sections)]
+                  + list(dict.fromkeys(results)) + list(fields)):
         print(f"    pre-filled what THIS graph's rules require: {', '.join(wanted)}")
     return 0
 
@@ -278,6 +296,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--tag", action="append", help="keep nodes carrying this tag (repeatable)")
     s.add_argument("--status", action="append")
     s.add_argument("--type", action="append")
+    s.add_argument("--where", action="append", metavar="KEY=VALUE",
+                   help="keep nodes whose frontmatter KEY is VALUE (repeatable)")
     s.add_argument("--limit", type=int, default=0, help="0 = no limit")
 
     s = sub.add_parser("path", help="how did we get from A to B?")
@@ -315,7 +335,7 @@ def main(argv=None) -> int:
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
             "index":  lambda: index(root, args.tag, args.status, args.type,
-                                    args.limit),
+                                    args.where, args.limit),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node),
             "hook":   lambda: hook(root, args.force),

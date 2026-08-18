@@ -19,6 +19,7 @@ humans, code to reproduce it.**
 id: hyp-self-consistency
 type: hypothesis
 status: dead
+cause: weak_baseline
 links:
   - {rel: kn:killedByGate, to: method-compute-matched-baseline}
 repro:
@@ -95,6 +96,19 @@ rules:
     when_type: hypothesis
     require_result_min: {n_independent: 30}
     message: A result on fewer than 30 independent questions is noise, not evidence.
+
+  - id: deaths-must-name-a-cause
+    when_status: dead
+    require_field_one_of:
+      cause: [no_signal, cost_hurdle, weak_baseline, underpowered, crowding_decay]
+    message: A cause of death you cannot filter on is a story, not an index.
+```
+
+That last one is what makes a dead end *reusable*. Once the cause is a field rather than
+a sentence, the question you actually ask six months later is a query:
+
+```bash
+knoten index --where cause=weak_baseline    # we have a stronger baseline now — what reopens?
 ```
 
 Your graph also declares its own vocabulary, and that is enforced too:

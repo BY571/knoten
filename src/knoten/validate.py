@@ -23,6 +23,7 @@ RULE_KEYS = {
     "require_sections",    # body must contain these `## ` headings
     "require_result",      # results must carry this key
     "require_result_min",  # {key: minimum} — numeric floor
+    "require_field_one_of",  # {field: [allowed]} — closed vocabulary
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
@@ -85,6 +86,18 @@ def _check_values(r: dict) -> None:
             raise GraphError(
                 f"graph.yaml: rule '{rid}': `{key}` must be a single string, "
                 f"got {r[key]!r}")
+
+    if "require_field_one_of" in r:
+        fields = r["require_field_one_of"]
+        if not isinstance(fields, dict):
+            raise GraphError(
+                f"graph.yaml: rule '{rid}': `require_field_one_of` must be a mapping of "
+                f"{{field: [allowed, values]}}, got {fields!r}")
+        for k, v in fields.items():
+            if not isinstance(v, list) or not v:
+                raise GraphError(
+                    f"graph.yaml: rule '{rid}': `require_field_one_of` for '{k}' must be "
+                    f"a non-empty list of allowed values, got {v!r}")
 
     if "require_result_min" in r:
         floors = r["require_result_min"]
@@ -215,6 +228,13 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
 
             if (fld := r.get("require_result")) and fld not in n.results:
                 out.append(Violation(n.id, rid, msg))
+
+            for fld, allowed in (r.get("require_field_one_of") or {}).items():
+                got = n.frontmatter.get(fld)
+                if got is None or str(got) not in {str(a) for a in allowed}:
+                    out.append(Violation(n.id, rid,
+                                         f"{msg} ({fld}={got!r}, one of: "
+                                         f"{', '.join(map(str, allowed))})"))
 
             for key, floor in (r.get("require_result_min") or {}).items():
                 got = n.results.get(key)

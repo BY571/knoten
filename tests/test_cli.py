@@ -235,3 +235,39 @@ def test_index_filters_by_status(graph, monkeypatch, capsys):
 
     assert "hyp-a" in out
     assert "hyp-b" not in out
+
+
+def test_index_filters_on_a_frontmatter_field(graph, monkeypatch, capsys):
+    monkeypatch.chdir(indexed(graph).root)
+    graph.node("hyp-w", "id: hyp-w\ntype: hypothesis\nstatus: dead\ncause: weak_baseline",
+               "# Weak\n")
+
+    main(["index", "--where", "cause=weak_baseline"])
+    out = capsys.readouterr().out
+
+    assert "hyp-w" in out
+    assert "hyp-a" not in out
+
+
+def test_a_malformed_where_is_a_clean_error(graph, monkeypatch, capsys):
+    monkeypatch.chdir(indexed(graph).root)
+
+    assert main(["index", "--where", "cause"]) == 1
+    assert "cause" in capsys.readouterr().err
+
+
+def test_new_scaffolds_a_field_the_rules_demand(graph, monkeypatch):
+    """`new` reads THIS graph's rules and pre-fills what they require, so the author is
+    handed a checklist instead of a rejection."""
+    graph.rules("""\
+rules:
+  - id: deaths-must-name-a-cause
+    when_status: dead
+    require_field_one_of: {cause: [no_signal, weak_baseline]}
+    message: name the cause.
+""")
+    monkeypatch.chdir(graph.root)
+
+    main(["new", "hypothesis", "hyp-dead", "--status", "dead"])
+
+    assert "cause: TODO   # one of: no_signal, weak_baseline" in graph.read("hyp-dead")

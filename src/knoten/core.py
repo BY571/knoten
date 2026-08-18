@@ -282,13 +282,19 @@ def fields(n: Node) -> tuple[set, set, set]:
     return n.tokens
 
 
-def _passes(n: Node, tags, status, type) -> bool:
+def _passes(n: Node, tags, status, type, where) -> bool:
     if status and n.status not in status:
         return False
     if type and n.type not in type:
         return False
     if tags and not set(n.tags) & set(tags):
         return False
+    # Generic, because the core knows no domain: "everything that died of a weak
+    # baseline" is one graph's question, and `cause` is one graph's field name.
+    for field, allowed in (where or {}).items():
+        got = n.frontmatter.get(field)
+        if got is None or str(got) not in {str(a) for a in allowed}:
+            return False
     return True
 
 
@@ -299,7 +305,7 @@ RELATIVE_FLOOR = 0.35
 
 
 def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
-             status=None, type=None) -> list[Node]:
+             status=None, type=None, where=None) -> list[Node]:
     """Rank nodes by relevance to `query`, narrowed by the filters. Ranked, not filtered:
 
     ANDing every token meant one unmatched word silenced the whole query, so
@@ -313,7 +319,7 @@ def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
     This is the ONE retrieval seam: `query`, `index` and the MCP tools all come through
     here, so a semantic backend replaces this body and nothing above it changes.
     """
-    pool = [n for n in nodes.values() if _passes(n, tags, status, type)]
+    pool = [n for n in nodes.values() if _passes(n, tags, status, type, where)]
     if query is None:
         return sorted(pool, key=lambda n: n.id)
 

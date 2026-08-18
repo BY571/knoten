@@ -97,6 +97,10 @@ async def list_tools() -> list[Tool]:
                          "description": "keep nodes carrying any of these tags"},
                 "status": {"type": "array", "items": {"type": "string"}},
                 "type": {"type": "array", "items": {"type": "string"}},
+                "where": {"type": "object",
+                          "description": "keep nodes whose frontmatter field is one of "
+                                         "these values, e.g. "
+                                         "{\"cause\": [\"weak_baseline\"]}"},
                 "limit": {"type": "integer", "description": f"default {INDEX_LIMIT}"},
             }},
         ),
@@ -246,7 +250,8 @@ async def _dispatch(name: str, args: dict) -> list[TextContent]:
 
     if name == "knoten_index":
         hits = retrieve(nodes, args.get("query"), tags=args.get("tags"),
-                        status=args.get("status"), type=args.get("type"))
+                        status=args.get("status"), type=args.get("type"),
+                        where=args.get("where"))
         limit = max(1, int(args.get("limit") or INDEX_LIMIT))
         rows = [{"id": n.id, "type": n.type,
                  "verdict": VERDICT.get(n.status, n.status or "-"),

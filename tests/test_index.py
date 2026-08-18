@@ -112,3 +112,16 @@ async def test_an_untruncated_index_says_so(cwd):
 
     assert res["truncated"] is False
     assert res["total"] == 3
+
+
+async def test_index_filters_on_an_arbitrary_frontmatter_field(cwd):
+    """"Re-open everything that died of a weak baseline" is a query if the cause is a
+    field, and a re-read of every post-mortem if it is prose."""
+    cwd.node("hyp-w", "id: hyp-w\ntype: hypothesis\nstatus: dead\ncause: weak_baseline",
+             "# Weak\n")
+    cwd.node("hyp-n", "id: hyp-n\ntype: hypothesis\nstatus: dead\ncause: no_signal",
+             "# None\n")
+
+    res = await index(where={"cause": ["weak_baseline"]})
+
+    assert [r["id"] for r in res["nodes"]] == ["hyp-w"]
