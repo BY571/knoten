@@ -262,6 +262,12 @@ my-graph/
   attachments/<id>/*       # the script that killed it, the plot that shows why
 ```
 
+`knoten new` and `knoten_commit` stamp `created:`; `knoten_update` stamps `updated:`.
+Both are plain ISO date strings, which the YAML 1.2 loader keeps as strings rather than
+coercing to `datetime.date`. Git knows when the *file* changed, which is not when the
+*claim* did — a typo fix and a status flip are the same event to git — and reading it
+would cost one subprocess per node to order a frontier.
+
 Git provides: history, blame, diff-a-claim-as-it-changed, branches-as-research-
 directions, **PRs-as-peer-review**, and hosting. We write none of it.
 

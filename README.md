@@ -79,6 +79,7 @@ knoten frontier                   # what should I work on next?
 knoten gates                      # what must a claim survive here?
 knoten index                      # the whole graph, one line per node
 knoten index --tag decoding       # ...narrowed to one corner of it
+knoten index --since 2026-08-01   # ...or to what moved this month
 knoten show <node>                # edges, results, attachments
 knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 try:
@@ -32,7 +33,7 @@ from . import attachments
 from .update import update as update_node
 from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, Node, backlink, find_root,
                    frontier, gates, node_path, parse_text, retrieve, section,
-                   shortest_path)
+                   shortest_path, today)
 from .core import load as load_graph
 from .validate import check, load_config
 
@@ -102,6 +103,9 @@ async def list_tools() -> list[Tool]:
                           "description": "keep nodes whose frontmatter field is one of "
                                          "these values, e.g. "
                                          "{\"cause\": [\"weak_baseline\"]}"},
+                "since": {"type": "string",
+                          "description": "YYYY-MM-DD — only nodes created or updated "
+                                         "on/after this day"},
                 "limit": {"type": "integer", "description": f"default {INDEX_LIMIT}"},
             }},
         ),
@@ -233,7 +237,12 @@ def _commit(root: Path, nodes: dict[str, Node], args: dict) -> dict:
                 "reason": f"'{nid}' already exists. Supersede or retract it instead of "
                           "overwriting — corrections are nodes, not edits."}
 
-    text = f"---\n{args['frontmatter'].strip()}\n---\n\n{args['body'].strip()}\n"
+    fm = args["frontmatter"].strip()
+    # Stamped unless the author said otherwise. A graph with no time axis cannot answer
+    # "what did we learn this week" or spot a hypothesis open since March.
+    if not re.search(r"^created:", fm, re.M):
+        fm += f"\ncreated: {today()}"
+    text = f"---\n{fm}\n---\n\n{args['body'].strip()}\n"
     try:
         candidate = parse_text(text, nid)
     except GraphError as e:
@@ -273,7 +282,7 @@ async def _dispatch(name: str, args: dict) -> list[TextContent]:
     if name == "knoten_index":
         hits = retrieve(nodes, args.get("query"), tags=args.get("tags"),
                         status=args.get("status"), type=args.get("type"),
-                        where=args.get("where"))
+                        where=args.get("where"), since=args.get("since"))
         limit = max(1, int(args.get("limit") or INDEX_LIMIT))
         rows = [{"id": n.id, "type": n.type,
                  "verdict": VERDICT.get(n.status, n.status or "-"),

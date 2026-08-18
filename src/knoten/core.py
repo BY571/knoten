@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import date
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,12 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
 # the graph, because only the MCP surface (where the id comes from an LLM) was guarded.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def today() -> str:
+    """The stamp knoten writes. A plain ISO date: it sorts lexicographically, survives
+    the YAML 1.2 loader as a string, and diffs cleanly in git."""
+    return date.today().isoformat()
 
 
 def node_path(root: Path, nid: str) -> Path:
@@ -290,7 +297,18 @@ def fields(n: Node) -> tuple[set, set, set]:
     return n.tokens
 
 
-def _passes(n: Node, tags, status, type, where) -> bool:
+def moved(n: Node) -> str:
+    """When this claim last moved — updated if it has, else created. Not when the FILE
+    changed: a typo fix and a status flip are the same event to git."""
+    fm = n.frontmatter
+    return max(str(fm.get("updated") or ""), str(fm.get("created") or ""))
+
+
+def _passes(n: Node, tags, status, type, where, since) -> bool:
+    # An unstamped node predates stamping and cannot answer a question about time. Better
+    # absent from a `since` view than silently assumed recent.
+    if since and moved(n) < str(since):
+        return False
     if status and n.status not in status:
         return False
     if type and n.type not in type:
@@ -313,7 +331,7 @@ RELATIVE_FLOOR = 0.35
 
 
 def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
-             status=None, type=None, where=None) -> list[Node]:
+             status=None, type=None, where=None, since=None) -> list[Node]:
     """Rank nodes by relevance to `query`, narrowed by the filters. Ranked, not filtered:
 
     ANDing every token meant one unmatched word silenced the whole query, so
@@ -327,7 +345,7 @@ def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
     This is the ONE retrieval seam: `query`, `index` and the MCP tools all come through
     here, so a semantic backend replaces this body and nothing above it changes.
     """
-    pool = [n for n in nodes.values() if _passes(n, tags, status, type, where)]
+    pool = [n for n in nodes.values() if _passes(n, tags, status, type, where, since)]
     if query is None:
         return sorted(pool, key=lambda n: n.id)
 

@@ -16,7 +16,8 @@ from pathlib import Path
 
 import yaml
 
-from .core import FM_RE, GraphError, backlink, load, node_path, parse_text, split
+from .core import (FM_RE, GraphError, backlink, load, node_path, parse_text, split,
+                   today)
 from .validate import check
 
 # A key we re-emit; everything else keeps its original text, comments included.
@@ -70,7 +71,7 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
     fm_text, body = FM_RE.match(text).groups()
     fm, _ = split(text, nf.name)
 
-    changed = {}
+    changed = {"updated": today()}
     if status:
         changed["status"] = status
     if links:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import attachments
 from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, find_root, frontier, gates,
-                   load, node_path, retrieve, section, shortest_path)
+                   load, node_path, retrieve, section, shortest_path, today)
 from .hook import install as install_hook
 from .validate import _csv, applies, check, load_config
 
@@ -69,12 +69,12 @@ def _where(pairs) -> dict:
     return out
 
 
-def index(root, tags, status, ntype, where, limit) -> int:
+def index(root, tags, status, ntype, where, since, limit) -> int:
     """The whole graph, one line per node. The answer to "have we done anything LIKE
     this?" that keyword search cannot give: a reader — human or agent — judges
     relatedness from the claims themselves."""
     hits = retrieve(load(root), None, tags=tags, status=status, type=ntype,
-                    where=_where(where))
+                    where=_where(where), since=since)
     shown = hits[:limit] if limit else hits
     width = max((len(n.id) for n in shown), default=0)
     for n in shown:
@@ -271,7 +271,7 @@ def new(root, ntype, nid, status) -> int:
         results += list(r.get("require_result_min") or {})
         fields.update(r.get("require_field_one_of") or {})
 
-    fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}"]
+    fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}", f"created: {today()}"]
     # The allowed values go in the scaffold as a comment: a closed vocabulary the author
     # has to go and look up is a closed vocabulary they will guess at.
     fm += [f"{k}: TODO   # one of: {', '.join(map(str, v))}" for k, v in fields.items()]
@@ -334,6 +334,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--type", action="append")
     s.add_argument("--where", action="append", metavar="KEY=VALUE",
                    help="keep nodes whose frontmatter KEY is VALUE (repeatable)")
+    s.add_argument("--since", metavar="YYYY-MM-DD",
+                   help="only nodes created or updated on/after this day")
     s.add_argument("--limit", type=int, default=0, help="0 = no limit")
 
     sub.add_parser("frontier", help="what should I work on next?")
@@ -377,7 +379,7 @@ def main(argv=None) -> int:
             "frontier": lambda: frontier_cmd(root),
             "gates":  lambda: gates_cmd(root),
             "index":  lambda: index(root, args.tag, args.status, args.type,
-                                    args.where, args.limit),
+                                    args.where, args.since, args.limit),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node),
             "hook":   lambda: hook(root, args.force),
