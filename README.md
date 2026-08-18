@@ -294,7 +294,7 @@ Point Claude Code, or any MCP client, at a graph. It then **accumulates knowledg
 topic across sessions** instead of starting cold every time:
 
 ```bash
-pip install -e ".[mcp]"
+pip install -e ".[mcp]"      # needs mcp 2.x
 ```
 
 ```jsonc
@@ -400,5 +400,7 @@ is told it was retracted — not just what the claim said:
 
 See `examples/llm-research/` for a worked graph and [SPEC.md](SPEC.md) for the design.
 
-MIT. One runtime dependency (PyYAML), plus the `mcp` SDK if you want the agent server.
-Seven source files, ~2k lines, no framework.
+MIT. One runtime dependency: PyYAML. The agent server additionally needs the `mcp` SDK
+(2.x — `pip install -U 'knoten[mcp]'` if you are coming from an older knoten). No
+framework, no database, no build step: a handful of small modules you can read in one
+sitting.

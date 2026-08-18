@@ -332,8 +332,13 @@ def _title(body: str) -> str:
 
 
 def fields(n: Node) -> tuple[set, set, set]:
-    """(id+title, tags, everything). Cached on the node — a 5k-node graph is tokenised
-    once per process, not once per query."""
+    """(id+title, tags, everything).
+
+    Cached on the node because `retrieve` walks the pool twice — once to count document
+    frequencies, once to score — and tokenising is the bulk of the work: 33ms vs 150ms
+    for one query over 500 nodes. The cache does NOT survive between calls; `load` builds
+    fresh Nodes, so every tool call pays the first pass.
+    """
     if n.tokens is None:
         strong = set(_tokens(f"{n.id} {_title(n.body)}"))
         medium = set(_tokens(" ".join(str(t) for t in (n.frontmatter.get("tags") or []))))
@@ -362,8 +367,8 @@ def _passes(n: Node, tags, status, type, where, since) -> bool:
         return False
     # Generic, because the core knows no domain: "everything that died of a weak
     # baseline" is one graph's question, and `cause` is one graph's field name.
-    for field, allowed in (where or {}).items():
-        got = n.frontmatter.get(field)
+    for key, allowed in (where or {}).items():
+        got = n.frontmatter.get(key)
         if got is None or str(got) not in {str(a) for a in allowed}:
             return False
     return True

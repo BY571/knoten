@@ -6,12 +6,14 @@ offer — but an offer nobody re-reads is just a note, and re-reading every post
 find the ones the world has caught up with is exactly the friction that kills a research
 log.
 """
-import json
-
 import pytest
 
+
+pytest.importorskip("knoten.mcp_server",
+                    reason="the agent server needs mcp>=2; the rest of the suite "
+                           "does not")
 from knoten.core import frontier, load
-from knoten.mcp_server import call_tool
+from knoten import mcp_server as M
 
 DEAD_WITH_OFFER = """\
 id: hyp-dead
@@ -70,19 +72,13 @@ def test_a_gate_that_killed_something_is_not_untested(g):
 
 # ------------------------------------------------------------------ surfaces
 
-pytestmark = pytest.mark.anyio
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-async def test_the_agent_surface_returns_all_three_buckets(g, monkeypatch):
+def test_the_agent_surface_returns_all_three_buckets(g, monkeypatch):
     monkeypatch.chdir(g.root)
     monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
 
-    res = json.loads((await call_tool("knoten_frontier", {}))[0].text)
+    res = M.knoten_frontier()
 
     assert [r["id"] for r in res["open"]] == ["hyp-open"]
     assert res["reopenable"][0]["reopen_if"].startswith("A task where")
