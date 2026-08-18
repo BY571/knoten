@@ -253,3 +253,23 @@ def test_the_allowed_values_must_be_a_list(graph):
 
     with pytest.raises(GraphError, match="cause"):
         load_rules(graph.root)
+
+
+def test_a_frontmatter_id_that_disagrees_with_the_filename_is_a_violation(graph):
+    """The real id is the filename — `parse_text` takes it from the stem and the
+    frontmatter `id:` is decorative. So a node whose `id:` says something else lies about
+    itself to every human reading it, while every query still resolves it by its filename.
+    Nothing caught that, which made `id` the one field an editor could corrupt silently."""
+    graph.node("hyp-x", "id: hyp-someone-else\ntype: hypothesis\nstatus: dead")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert [v.rule for v in violations] == ["mismatched-id"]
+    assert "hyp-someone-else" in violations[0].message
+
+
+def test_a_node_with_no_id_in_its_frontmatter_is_fine(graph):
+    """`knoten commit` does not write one — the filename already carries it."""
+    graph.node("hyp-x", "type: hypothesis\nstatus: dead")
+
+    assert check(load(graph.root), graph.root) == []

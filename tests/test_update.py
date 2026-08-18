@@ -171,15 +171,18 @@ def test_a_field_that_is_absent_is_set(graph):
     assert load(graph.root)["hyp-x"].frontmatter["cause"] == "no_signal"
 
 
-def test_a_field_already_recorded_cannot_be_silently_changed(graph):
-    """Guarded exactly like `results`. Without this, `--field` becomes the general node
-    editor `update` was deliberately not built to be, and a published claim could be
-    rewritten in place instead of retracted."""
+def test_a_field_already_recorded_can_be_changed(graph):
+    """`fields` is a general editor by design decision: it sets any top-level key to any
+    value, recorded or not. What stops a broken node is the same thing that stops one from
+    `commit` — the candidate is validated in memory and never reaches disk if it fails.
+    Correcting a published claim by retraction remains the convention; it is no longer
+    enforced by this path."""
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\ncause: no_signal",
                "# c\n")
 
-    with pytest.raises(GraphError, match="cause"):
-        update(graph.root, "hyp-x", fields={"cause": "weak_baseline"})
+    update(graph.root, "hyp-x", fields={"cause": "weak_baseline"})
+
+    assert load(graph.root)["hyp-x"].frontmatter["cause"] == "weak_baseline"
 
 
 def test_rewriting_a_field_to_the_same_value_is_not_an_error(graph):
@@ -191,11 +194,40 @@ def test_rewriting_a_field_to_the_same_value_is_not_an_error(graph):
     assert load(graph.root)["hyp-x"].frontmatter["cause"] == "no_signal"
 
 
-@pytest.mark.parametrize("key", ["id", "type", "status", "results", "links", "attachments"])
-def test_the_keys_with_their_own_paths_are_refused(graph, key):
-    """`status` has its own argument; the rest have their own machinery. Letting --field
-    reach them would give one key two ways in, with different guards on each."""
+@pytest.mark.parametrize("key,value", [("type", "method"), ("status", "dead"),
+                                       ("cause", "no_signal"), ("created", "2020-01-01")])
+def test_any_top_level_key_can_be_set(graph, key, value):
+    """No allow-list. `fields` reaches every top-level key — the rules decide what is
+    acceptable, not a hardcoded list of names."""
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
 
-    with pytest.raises(GraphError, match=key):
-        update(graph.root, "hyp-x", fields={key: "whatever"})
+    update(graph.root, "hyp-x", fields={key: value})
+
+    assert str(load(graph.root)["hyp-x"].frontmatter[key]) == value
+
+
+def test_a_node_the_rules_reject_still_never_reaches_disk(graph):
+    """The guard that remains, and the only one that ever mattered: capability is bounded
+    by the graph's own declared rules, not by a list of field names."""
+    graph.rules("""\
+name: t
+node_types: [hypothesis]
+statuses: [open, dead]
+rules: []
+""").node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+    before = graph.read("hyp-x")
+
+    with pytest.raises(GraphError, match="status"):
+        update(graph.root, "hyp-x", fields={"status": "bogus"})
+
+    assert graph.read("hyp-x") == before
+
+
+def test_a_frontmatter_id_that_would_disagree_with_the_filename_is_refused(graph):
+    """`--field id=x` was the one silent corruption left once the allow-list went: the
+    filename is the real id, so the node would have lied about itself while every query
+    still resolved it. Now `validate` refuses it, on this path and any other."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+
+    with pytest.raises(GraphError, match="mismatched-id"):
+        update(graph.root, "hyp-x", fields={"id": "hyp-someone-else"})

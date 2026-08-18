@@ -178,13 +178,13 @@ rules:
     assert load(graph.root)["hyp-x"].frontmatter["cause"] == "weak_baseline"
 
 
-def test_field_refuses_to_rewrite_what_is_already_recorded(graph, monkeypatch, capsys):
+def test_field_rewrites_what_is_already_recorded(graph, monkeypatch):
     graph.rules(RULES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\n"
                                      "cause: no_signal", "# c\n")
     monkeypatch.chdir(graph.root)
 
-    assert main(["update", "hyp-x", "--field", "cause=weak_baseline"]) == 1
-    assert "Traceback" not in capsys.readouterr().err
+    assert main(["update", "hyp-x", "--field", "cause=weak_baseline"]) == 0
+    assert load(graph.root)["hyp-x"].frontmatter["cause"] == "weak_baseline"
 
 
 NUMERIC_VOCAB = """\

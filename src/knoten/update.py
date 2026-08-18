@@ -23,13 +23,6 @@ from .validate import check
 # A key we re-emit; everything else keeps its original text, comments included.
 _BLOCK = re.compile(r"^(\w[\w-]*):", re.M)
 
-# Keys `fields` will not touch. Each already has its own way in, with its own guard:
-# `status` has an argument, `results` and `links` have theirs, `id` and `type` identify
-# the node, and `attachments` belong to the attach path. One key with two doors is one
-# key whose guards disagree.
-RESERVED = {"id", "type", "status", "results", "links", "attachments",
-            "created", "updated"}
-
 
 def _spans(fm: str) -> dict[str, tuple[int, int]]:
     """Line span of each top-level key. Anything not re-emitted is copied verbatim, which
@@ -101,21 +94,11 @@ def _update(root: Path, nid: str, status, results, links, append, fields) -> str
         changed["results"] = {**have, **results}
 
     if fields:
-        if bad := RESERVED & set(fields):
-            raise GraphError(
-                f"'{nid}': {', '.join(sorted(bad))} cannot be set with `fields` — each has "
-                f"its own argument or its own command, with its own guard.")
-        # Guarded like `results`: a field already on the node is part of the published
-        # claim, and replacing one in place is what retraction exists to do instead.
-        # Compared with str(), the way `require_field_one_of` and `--where` compare. A
-        # node committed with `seed: 2` holds an int; `--field seed=2` passes a string.
-        # With `!=` that refused as "a different value", so "the same value" would have
-        # meant something different here than everywhere else it is decided.
-        if clash := [k for k, v in fields.items() if k in fm and str(fm[k]) != str(v)]:
-            raise GraphError(
-                f"'{nid}': {', '.join(sorted(clash))} already recorded with a different "
-                f"value. Retract or supersede the node rather than rewriting it.")
-        changed.update({k: v for k, v in fields.items() if k not in fm})
+        # No allow-list and no immutability guard: `fields` sets any top-level key to any
+        # value, including one already recorded. What stops a broken node is the same
+        # thing that stops one from `commit` — the whole candidate is parsed and run
+        # through the graph's own rules below, and never reaches disk if it fails.
+        changed.update(fields)
 
     out = f"---\n{_rewrite(fm_text, changed)}\n---\n{body}"
     if append:

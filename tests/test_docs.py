@@ -60,11 +60,15 @@ def test_the_docs_actually_contain_the_examples_we_think_they_do():
 def test_a_documented_node_parses_and_obeys_the_example_graphs_rules(doc, block, example):
     """This is the check that would have caught the README's flagship node failing the
     `underpowered` rule the moment that rule was added."""
-    node = parse_text(block, "doc-example")
+    # Written under the id the block declares, not a fixed name: the filename IS the id,
+    # so renaming a documented node here would trip `mismatched-id` on the harness's own
+    # doing rather than on anything the docs got wrong.
+    nid = str(parse_text(block, "doc-example").frontmatter.get("id") or "doc-example")
+    node = parse_text(block, nid)
     assert node.type
 
-    (example / "nodes" / "doc-example.md").write_text(block, encoding="utf-8")
-    violations = [v for v in check(load(example), example) if v.node == "doc-example"]
+    (example / "nodes" / f"{nid}.md").write_text(block, encoding="utf-8")
+    violations = [v for v in check(load(example), example) if v.node == nid]
 
     assert not violations, f"{doc}: documented node violates the example graph's own rules: " \
                            + "; ".join(f"[{v.rule}] {v.message}" for v in violations)

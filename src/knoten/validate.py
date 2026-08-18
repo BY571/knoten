@@ -169,6 +169,13 @@ def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation
     out = []
     ids = set(nodes)
     for nid, n in nodes.items():
+        # The real id is the filename; `id:` in the frontmatter is decorative. A node
+        # whose `id:` says something else lies about itself to every human reading it
+        # while every query still resolves it by its filename.
+        if (declared := n.frontmatter.get("id")) and str(declared) != nid:
+            out.append(Violation(nid, "mismatched-id",
+                                 f"frontmatter says id '{declared}' but the file is "
+                                 f"{nid}.md — the filename is the id"))
         out += _vocabulary(n, cfg)
         for l in n.links:
             rel = l["rel"]
