@@ -208,6 +208,7 @@ The graph also declares its own vocabulary, and it is enforced:
 ```yaml
 node_types: [hypothesis, experiment, finding, method, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
+tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```
 
 The core invents neither list — declare none and none is checked (§2: the core knows no
@@ -217,7 +218,7 @@ every query.
 
 Always-on structural checks, which no graph has to declare: `dangling-edge`,
 `missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
-`unknown-type`, `unknown-status`.
+`unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`.
 
 A biology graph declares entirely different rules. The core never changes.
 
@@ -252,6 +253,7 @@ memory files.
 
 | tool | purpose |
 |---|---|
+| `knoten_index(...)` | *"anything LIKE this?"* / *"what is still open?"* → the graph, one line per node |
 | `knoten_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death |
 | `knoten_get(id)` | full node, including the post-mortem |
 | `knoten_commit(node)` | append a node (validates first; **rejects on rule violation**) |
@@ -267,6 +269,37 @@ until it is clean. And because the `id` becomes a filename and is authored by an
 is constrained to kebab-case — an id is not a path.
 
 ---
+
+### 8.1 Retrieval — two questions, two mechanisms
+
+*"Has this been tried?"* and *"have we done anything **like** this?"* are different
+questions, and one mechanism cannot answer both.
+
+`knoten_query` is keyword retrieval: tokens weighted by idf, ranked, capped. It was
+originally an **AND** over tokens, which made the tool's headline question fail on its own
+README example — `"has anyone tried self-consistency?"` matched nothing, because the node
+contains no "has", "anyone" or "tried", and the agent was told the work was untested. A
+false negative is the only failure mode of this system that causes real work to be redone.
+So: OR with ranking, the full frontmatter in the haystack (`repro.model` was unsearchable),
+and **a miss now says so honestly** — "no keyword match, this is NOT proof it is untested."
+
+`knoten_index` answers the second question, and it does so by **not being a search engine
+at all**. It emits the whole graph as one line per node — id, verdict, tags, claim — and
+lets the reader judge relatedness. The reader is an LLM; it is a better semantic matcher
+than any similarity metric we could ship, and it costs nothing to ship. On a 500-node
+graph a broad `query` returned ~83k tokens; the same graph's index is ~9k, and one tag
+narrows it to ~2.5k.
+
+That is why `tags:` is now a declared, enforced vocabulary. Tags are not a search
+mechanism — they are the **filter axis** that keeps the index readable as the graph grows,
+which is what makes the whole scheme survive the accumulation it exists to encourage.
+
+**Embeddings are deliberately not here.** The paraphrase gap they solve is real, but the
+agent already closes it; `sentence-transformers` would put torch behind a project whose
+pitch is one dependency, and an embedding API would end the offline story. All three
+surfaces go through one function, `core.retrieve()`, so a `knoten[semantic]` extra can
+replace that body without touching a tool schema — the day a graph outgrows a tag-filtered
+index, which the 1k–5k node case does not.
 
 ## 9. Phasing
 
@@ -297,8 +330,10 @@ Micropublications, nanopublications, PROV-O and LinkML are all open and safe to 
 
 1. **Do we emit RDF?** A `graph.ttl` export would make the graph interoperable with
    the nanopub ecosystem for ~nothing. Probably yes, phase 3.
-2. **Embeddings for `knoten_query`?** Start with grep + frontmatter filters. Add
-   semantic search only if grep demonstrably fails.
+2. ~~**Embeddings for `knoten_query`?**~~ **Answered (§8.1): no, and probably never.**
+   The consumer is an LLM, so the whole graph as a one-line-per-node index beats vector
+   similarity at the question that matters ("anything like this?") for zero dependencies.
+   Revisit only when a tag-filtered index stops fitting in a context window.
 3. **Multi-graph federation** — one agent querying trading *and* biology graphs.
    Defer until a second graph exists.
 4. **A closed `cause` vocabulary (§5) as a rule primitive?** Would need a

@@ -74,6 +74,8 @@ pip install -e .                  # add ".[mcp]" for the agent server
 knoten init my-topic              # a new graph (it's a folder)
 knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
 knoten query <term>               # has this been tried?
+knoten index                      # the whole graph, one line per node
+knoten index --tag decoding       # ...narrowed to one corner of it
 knoten show <node>                # edges, results, attachments
 knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>
@@ -100,11 +102,15 @@ Your graph also declares its own vocabulary, and that is enforced too:
 ```yaml
 node_types: [hypothesis, experiment, finding, method, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
+tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```
 
 `type: hypthesis` is a typo, not a new type. `status: ded` is worse than wrong — it would
 silently drop the claim out of every query, which is exactly the sort of quiet rot this
-tool exists to prevent. Both are now violations.
+tool exists to prevent. Both are now violations. So is `tags: [decodng]`: tags are the
+axis you filter a big graph on, so a typo'd tag leaves the node in the graph but outside
+every view of it. Declare no `tags:` and tagging stays free — the core invents no
+vocabulary, it only enforces the one you declared.
 
 A rule key — or a config key — `knoten` doesn't recognise is a **hard error**, not a
 shrug. Config that enforces nothing is decoration, and a rule that enforces nothing is
@@ -171,6 +177,37 @@ knoten show hyp-self-consistency     # edges, results, attachments
 knoten detach hyp-self-consistency accuracy_vs_budget.png
 ```
 
+## "Has this been tried?" — and "anything like it?"
+
+Two different questions. `query` answers the first by keyword, ranked by how well each
+node matches — partial matches surface, so a question phrased in words the node never
+used still finds it:
+
+```
+$ knoten query "has anyone tried self-consistency?"
+
+  [✗ DEAD] hyp-self-consistency
+      killed by : method-compute-matched-baseline
+      reopen if : A task where the majority-vote aggregation does real work…
+```
+
+But keyword search **cannot** answer the second. An idea worded differently from the node
+that already killed it will not match, and a confident "no prior work found" is the one
+failure of this tool that costs real work. So `index` prints the whole graph, one line per
+node, and lets the reader judge:
+
+```
+$ knoten index --tag decoding
+
+  hyp-self-consistency  ✗ DEAD  [decoding,reasoning]  Self-consistency (sample 5, majority vote) beats greedy decoding
+```
+
+That is cheap enough to read in full — the entire graph, not a guess about which part of
+it is relevant. For an agent it is cheaper still than a broad `query`, because a row is a
+claim rather than a whole node: on a 500-node graph a broad query returned ~83k tokens,
+the same graph's index is ~9k, and one tag narrows it to ~2.5k. `knoten index --status open`
+answers a third question the graph could not answer at all before: **what is still open?**
+
 ## Two readers, one file
 
 **Humans** skim the prose and get the story: what was tried, what killed it, what's
@@ -201,6 +238,7 @@ pip install -e ".[mcp]"
 ```
 
 ```
+knoten_index(tags=["decoding"])                      ← the graph, one line per node
 knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
 knoten_get("hyp-self-consistency")                   ← the full node, post-mortem included
 knoten_commit(node)                                  ← AFTER it finishes, pass or fail

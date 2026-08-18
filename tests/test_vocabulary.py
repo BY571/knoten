@@ -98,3 +98,64 @@ def test_node_types_must_be_a_list(graph):
 
     with pytest.raises(GraphError, match="node_types"):
         load_rules(graph.root)
+
+
+# ------------------------------------------------------------------ tags
+
+TAGGED = """\
+name: t
+node_types: [hypothesis, method]
+statuses: [alive, dead, retracted, active]
+tags: [decoding, prompting, evaluation]
+rules: []
+"""
+
+
+def test_a_tag_outside_the_declared_vocabulary_is_a_violation(graph):
+    """Tags are the axis that narrows a 5k-node graph to something an agent can read in
+    one call. `tags: [decodng]` is a node that drops out of that filter forever — the
+    same silent-disappearance bug as `status: ded`, one field over."""
+    vocab(graph, TAGGED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\n"
+                                       "tags: [decodng]")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert [v.rule for v in violations] == ["unknown-tag"]
+    assert "decodng" in violations[0].message
+
+
+def test_tags_are_unconstrained_when_the_graph_declares_none(graph):
+    """The core invents no vocabulary (SPEC §2). Declaring no `tags:` means free tagging,
+    exactly as `node_types` behaves."""
+    vocab(graph).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\ntags: [anything]")
+
+    assert check(load(graph.root), graph.root) == []
+
+
+def test_every_declared_tag_on_a_node_is_checked(graph):
+    """One good tag must not vouch for a bad one sitting beside it."""
+    vocab(graph, TAGGED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\n"
+                                       "tags: [decoding, promting]")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert [v.rule for v in violations] == ["unknown-tag"]
+    assert "promting" in violations[0].message
+
+
+def test_tags_must_be_a_list_in_graph_yaml(graph):
+    vocab(graph, "name: t\ntags: decoding\nrules: []")
+
+    with pytest.raises(GraphError, match="must be a list"):
+        load_rules(graph.root)
+
+
+def test_a_node_whose_tags_are_not_a_list_is_a_violation(graph):
+    """`tags: decoding` (a bare string) is legal YAML and iterates as characters, which
+    would report every letter as an unknown tag."""
+    vocab(graph, TAGGED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\n"
+                                       "tags: decoding")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert [v.rule for v in violations] == ["malformed-tags"]

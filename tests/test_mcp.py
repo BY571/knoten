@@ -113,3 +113,32 @@ async def test_get_surfaces_that_a_claim_was_retracted(cwd):
     assert res["retracted_by"] == ["ret-oops"]
     assert "ret-oops" in res["warning"]
 
+
+
+async def test_query_caps_its_own_response_and_says_so(cwd):
+    """A broad query on a 500-node graph returned every match in full — ~83k tokens in
+    one response. The tool got LESS usable the more the graph accumulated, which is
+    backwards for a thing whose whole purpose is to accumulate. Cap it, rank it, and
+    never let the cap be silent."""
+    for i in range(60):
+        cwd.node(f"hyp-{i:03d}", f"id: hyp-{i:03d}\ntype: hypothesis\nstatus: dead",
+                 f"# decoding experiment {i}\n")
+
+    out = await call_tool("knoten_query", {"query": "decoding"})
+    res = json.loads(out[0].text)
+
+    assert res["total"] == 60
+    assert len(res["claims"]) < 60
+    assert res["truncated"] is True
+    assert "knoten_index" in res["note"]
+
+
+async def test_query_ranks_the_closest_claim_first(cwd):
+    cwd.node("hyp-far", "id: hyp-far\ntype: hypothesis\nstatus: dead", "# decoding\n")
+    cwd.node("hyp-near", "id: hyp-near\ntype: hypothesis\nstatus: dead",
+             "# decoding with majority vote sampling\n")
+
+    res = json.loads((await call_tool(
+        "knoten_query", {"query": "majority vote sampling"}))[0].text)
+
+    assert res["claims"][0]["id"] == "hyp-near"

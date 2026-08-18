@@ -29,12 +29,21 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 from . import attachments
-from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, matches,
-                   node_path, parse_text, section, shortest_path)
+from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, node_path,
+                   parse_text, retrieve, section, shortest_path)
 from .core import load as load_graph
-from .validate import check
+from .validate import check, load_config
 
 app = Server("knoten")
+
+# A row is ~45 tokens once JSON key overhead is counted, so 200 rows is ~9k — readable
+# in one go, where the same graph's broad query was 83k. It is a CAP, never a silent one:
+# `truncated` and `total` always say what was left out.
+INDEX_LIMIT = 200
+
+# A query returns FULL summaries (post-mortem, results, repro) — a few hundred tokens
+# each. Twenty is a read; sixty is a context flood that buries the top hit.
+QUERY_LIMIT = 20
 
 
 def _root() -> Path:
@@ -72,6 +81,24 @@ def _summarise(n: Node) -> dict:
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
+        Tool(
+            name="knoten_index",
+            description=(
+                "The whole graph, one line per node: id, type, verdict, tags, claim. USE "
+                "THIS TO ASK 'have we done anything LIKE this?' — read the lines and judge "
+                "relatedness yourself; a differently-worded idea will not be found by "
+                "keyword search. Also answers 'what is still open?' (status=['open']). "
+                "Narrow a large graph with tags/status/type before reading it."),
+            inputSchema={"type": "object", "properties": {
+                "query": {"type": "string",
+                          "description": "optional — rank the rows by relevance to this"},
+                "tags": {"type": "array", "items": {"type": "string"},
+                         "description": "keep nodes carrying any of these tags"},
+                "status": {"type": "array", "items": {"type": "string"}},
+                "type": {"type": "array", "items": {"type": "string"}},
+                "limit": {"type": "integer", "description": f"default {INDEX_LIMIT}"},
+            }},
+        ),
         Tool(
             name="knoten_query",
             description=(
@@ -189,14 +216,46 @@ async def _dispatch(name: str, args: dict) -> list[TextContent]:
     root = _root()
     nodes = load_graph(root)
 
+    if name == "knoten_index":
+        hits = retrieve(nodes, args.get("query"), tags=args.get("tags"),
+                        status=args.get("status"), type=args.get("type"))
+        limit = max(1, int(args.get("limit") or INDEX_LIMIT))
+        rows = [{"id": n.id, "type": n.type,
+                 "verdict": VERDICT.get(n.status, n.status or "-"),
+                 "tags": n.tags, "title": n.title} for n in hits[:limit]]
+        out = {"total": len(hits), "truncated": len(hits) > limit, "nodes": rows,
+               "declared_tags": [str(t) for t in (load_config(root).get("tags") or [])]}
+        if out["truncated"]:
+            # A silent cap reads as "that is the whole graph" — the same false negative
+            # the AND-query bug produced, arriving by a different route.
+            out["note"] = (f"Showing {limit} of {len(hits)}. Narrow with tags/status/type, "
+                           f"or pass a query to rank by relevance, before concluding "
+                           f"anything about what is NOT here.")
+        return ok(out)
+
     if name == "knoten_query":
-        hits = [n for n in nodes.values() if matches(n, args["query"])]
-        claims = [_summarise(n) for n in hits if n.status in VERDICT]
-        return ok({"query": args["query"], "claims": claims,
-                   "related_methods": [n.id for n in hits if n.type == "method"],
-                   "note": ("Claims marked DEAD or RETRACTED have already been tested. "
-                            "Read 'what_would_reopen_this' before re-running them.")
-                   if claims else "No prior work found. This appears untested."})
+        hits = retrieve(nodes, args["query"])
+        claims = [n for n in hits if n.status in VERDICT]      # already relevance-ranked
+        shown = claims[:QUERY_LIMIT]
+        out = {"query": args["query"], "total": len(claims),
+               "truncated": len(claims) > QUERY_LIMIT,
+               "claims": [_summarise(n) for n in shown],
+               "related_methods": [n.id for n in hits if n.type == "method"]}
+        if out["truncated"]:
+            out["note"] = (f"Showing the {QUERY_LIMIT} closest of {len(claims)} matching "
+                           f"claims. Use knoten_index for the full picture in one line "
+                           f"per node.")
+        elif claims:
+            out["note"] = ("Claims marked DEAD or RETRACTED have already been tested. "
+                           "Read 'what_would_reopen_this' before re-running them.")
+        else:
+            # Keyword search cannot find an idea phrased in words the node never used.
+            # Saying "untested" here without that caveat is how an agent re-runs a dead
+            # experiment — the exact failure this tool exists to prevent.
+            out["note"] = ("No keyword match. This is NOT proof the idea is untested — a "
+                           "differently-worded node will not match. Call knoten_index "
+                           "and read the claims yourself before concluding it is new.")
+        return ok(out)
 
     if name == "knoten_get":
         n = nodes.get(args["id"])

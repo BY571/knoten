@@ -26,7 +26,7 @@ RULE_KEYS = {
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
-GRAPH_KEYS = {"name", "description", "node_types", "statuses", "rules"}
+GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules"}
 
 
 @dataclass
@@ -49,7 +49,7 @@ def load_config(root: Path) -> dict:
             f"graph.yaml: unknown key(s) {', '.join(sorted(unknown))}. "
             f"Known keys: {', '.join(sorted(GRAPH_KEYS))}"
         )
-    for key in ("node_types", "statuses"):
+    for key in ("node_types", "statuses", "tags"):
         if key in cfg and not isinstance(cfg[key], list):
             raise GraphError(f"graph.yaml: `{key}` must be a list, got {cfg[key]!r}")
 
@@ -99,6 +99,27 @@ def _check_values(r: dict) -> None:
                     f"be a number, got {v!r}")
 
 
+def _tags(n: Node, cfg: dict) -> list[Violation]:
+    """Tags are the filter axis: they narrow a graph too big to read into a slice an
+    agent can take in one call. A typo'd tag is therefore not cosmetic — the node is
+    still in the graph but outside every filtered view of it, which is the same silent
+    disappearance as a typo'd status."""
+    raw = n.frontmatter.get("tags")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return [Violation(n.id, "malformed-tags",
+                          f"`tags` must be a list, got {type(raw).__name__} "
+                          f"({raw!r}). Write `tags: [{raw}]`.")]
+    if not (declared := cfg.get("tags")):
+        return []
+    known = {str(t) for t in declared}
+    return [Violation(n.id, "unknown-tag",
+                      f"tag '{t}' is not declared in graph.yaml "
+                      f"(tags: {', '.join(map(str, declared))})")
+            for t in map(str, raw) if t not in known]
+
+
 def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
     """A node's `type` and `status` must be words THIS graph declared.
 
@@ -114,6 +135,8 @@ def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
         out.append(Violation(n.id, "unknown-type",
                              f"type '{n.type}' is not declared in graph.yaml "
                              f"(node_types: {', '.join(map(str, types))})"))
+
+    out += _tags(n, cfg)
 
     if statuses := cfg.get("statuses"):
         if not n.status:

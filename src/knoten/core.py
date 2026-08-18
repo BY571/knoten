@@ -8,8 +8,9 @@ A node that silently vanishes leaves the graph reporting itself healthy.
 """
 from __future__ import annotations
 
+import math
 import re
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -104,6 +105,7 @@ class Node:
     sections: list = field(default_factory=list)
     backlinks: list = field(default_factory=list)
     attachments: list = field(default_factory=list)
+    tokens: tuple | None = field(default=None, repr=False, compare=False)
 
     @property
     def status(self) -> str:
@@ -112,6 +114,20 @@ class Node:
     @property
     def type(self) -> str:
         return str(self.frontmatter.get("type", ""))
+
+    @property
+    def title(self) -> str:
+        """The H1 — the claim itself, in one line. This is what makes an index row
+        judgeable: an id alone cannot be compared against a new idea."""
+        return _title(self.body)
+
+    @property
+    def tags(self) -> list:
+        """A bare `tags: decoding` is legal YAML that iterates as characters. `validate`
+        reports it as malformed-tags; here it reads as untagged rather than as five
+        one-letter tags."""
+        raw = self.frontmatter.get("tags")
+        return [str(x) for x in raw] if isinstance(raw, list) else []
 
     def rels(self) -> set:
         return {l["rel"] for l in self.links}
@@ -211,15 +227,118 @@ def _tokens(s: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", s.lower()) if t]
 
 
-def matches(n: Node, term: str) -> bool:
-    """Does this node answer "has this been tried?" for `term`?
+# Function words an agent's question carries and a node never means. Domain words are
+# NEVER listed here — a corpus-common word like "accuracy" is handled by idf below,
+# which is adaptive; a hardcoded one would be a permanent blind spot.
+_STOP = {
+    "a", "about", "again", "all", "an", "and", "any", "anybody", "anyone", "anything",
+    "are", "as", "at", "be", "been", "before", "being", "but", "by", "did", "do", "does",
+    "done", "ever", "for", "from", "had", "has", "have", "how", "i", "if", "in", "into",
+    "is", "it", "its", "of", "on", "or", "over", "should", "so", "some", "someone",
+    "something", "than", "that", "the", "then", "these", "this", "those", "to", "was",
+    "we", "were", "what", "when", "where", "which", "who", "whom", "whose", "why",
+    "will", "with", "would", "you",
+}
 
-    Every token must appear. A substring match meant `query "self consistency"` found
-    NOTHING, because the node is `self-consistency` — the headline question failing on a
-    space, and answering "untested" for work that is already dead.
+# knoten's own schema words. Their VALUES are searchable; the key names are not, since
+# they appear in every node and would make `query "status"` return the whole graph.
+_STRUCTURAL = {"id", "type", "status", "tags", "links", "rel", "to", "note",
+               "results", "repro", "attachments"}
+
+# id and title carry the claim; tags are a curated label; everything else is context.
+_STRONG, _MEDIUM, _WEAK = 3.0, 2.0, 1.0
+
+
+def _flatten(obj, out: list) -> list:
+    """Every scalar in the frontmatter, plus the keys a human chose (`tokens_per_question`,
+    `acc_greedy`). The haystack was id + body + tags, so `repro.model: Qwen3-8B` was
+    unsearchable and two nodes that ran on the same benchmark answered as one."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k) not in _STRUCTURAL:
+                out.append(str(k))
+            _flatten(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _flatten(v, out)
+    elif obj is not None:
+        out.append(str(obj))
+    return out
+
+
+def _title(body: str) -> str:
+    m = re.search(r"^#\s+(.+)$", body, re.M)
+    return m.group(1) if m else ""
+
+
+def fields(n: Node) -> tuple[set, set, set]:
+    """(id+title, tags, everything). Cached on the node — a 5k-node graph is tokenised
+    once per process, not once per query."""
+    if n.tokens is None:
+        strong = set(_tokens(f"{n.id} {_title(n.body)}"))
+        medium = set(_tokens(" ".join(str(t) for t in (n.frontmatter.get("tags") or []))))
+        weak = set(_tokens(" ".join(_flatten(n.frontmatter, []) + [n.body]))) | strong | medium
+        n.tokens = (strong, medium, weak)
+    return n.tokens
+
+
+def _passes(n: Node, tags, status, type) -> bool:
+    if status and n.status not in status:
+        return False
+    if type and n.type not in type:
+        return False
+    if tags and not set(n.tags) & set(tags):
+        return False
+    return True
+
+
+# Keep a hit only if it scores within this fraction of the best hit. Adaptive, so there
+# is no absolute threshold to tune per graph: one strong match suppresses the long tail
+# of nodes that merely share a common word with the query.
+RELATIVE_FLOOR = 0.35
+
+
+def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
+             status=None, type=None) -> list[Node]:
+    """Rank nodes by relevance to `query`, narrowed by the filters. Ranked, not filtered:
+
+    ANDing every token meant one unmatched word silenced the whole query, so
+    `"has anyone tried self-consistency?"` — the README's own example — answered "no
+    prior work found" about a hypothesis the graph was holding, dead and documented.
+    A false "untested" is the only failure of this tool that costs real work.
+
+    Tokens are weighted by idf, so a word in every node counts for nothing without
+    anybody having to list it, and a rare one dominates.
+
+    This is the ONE retrieval seam: `query`, `index` and the MCP tools all come through
+    here, so a semantic backend replaces this body and nothing above it changes.
     """
-    hay = " ".join(_tokens(f"{n.id} {n.body} {n.frontmatter.get('tags', '')}"))
-    return all(t in hay for t in _tokens(term))
+    pool = [n for n in nodes.values() if _passes(n, tags, status, type)]
+    if query is None:
+        return sorted(pool, key=lambda n: n.id)
+
+    qt = [t for t in dict.fromkeys(_tokens(query)) if t not in _STOP]
+    if not qt or not pool:
+        return []
+
+    df = Counter(t for n in pool for t in qt if t in fields(n)[2])
+    total = len(pool)
+
+    scored = []
+    for n in pool:
+        strong, medium, weak = fields(n)
+        s = sum(
+            (_STRONG if t in strong else _MEDIUM if t in medium else _WEAK)
+            * math.log(1 + total / (1 + df[t]))
+            for t in qt if t in weak
+        )
+        if s > 0:
+            scored.append((s, n))
+    if not scored:
+        return []
+
+    floor = RELATIVE_FLOOR * max(s for s, _ in scored)
+    return [n for s, n in sorted(scored, key=lambda p: (-p[0], p[1].id)) if s >= floor]
 
 
 def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str]] | None:

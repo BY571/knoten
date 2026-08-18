@@ -1,0 +1,114 @@
+"""`knoten_index` — the whole graph as one line per node.
+
+The agent surface answered "has this been tried?" and nothing else. It could not answer
+"what is still open?", and a broad `knoten_query` returned every matching node in full:
+on a 500-node graph that was ~83k tokens in one response, so the tool got LESS usable
+the more it accumulated, which is backwards for a thing whose purpose is to accumulate.
+
+One line per node is ~15 tokens. A tag-filtered slice of a 5k-node graph fits in a single
+call, and the agent — which is already an LLM — does the semantic matching itself.
+"""
+import json
+
+import pytest
+
+from knoten.mcp_server import call_tool
+
+pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+async def index(**args):
+    return json.loads((await call_tool("knoten_index", args))[0].text)
+
+
+@pytest.fixture(autouse=True)
+def cwd(graph, monkeypatch):
+    monkeypatch.chdir(graph.root)
+    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
+    (graph.root / "graph.yaml").write_text(
+        "name: t\nnode_types: [hypothesis, method]\n"
+        "statuses: [open, alive, dead, active]\nrules: []\n", encoding="utf-8")
+    graph.node("hyp-alpha", "id: hyp-alpha\ntype: hypothesis\nstatus: open\n"
+                            "tags: [decoding]", "# Alpha beats greedy\n")
+    graph.node("hyp-beta", "id: hyp-beta\ntype: hypothesis\nstatus: dead\n"
+                           "tags: [prompting]", "# Beta improves accuracy\n")
+    graph.node("method-gate", "id: method-gate\ntype: method\nstatus: active",
+               "# Gate: compute-matched baseline\n")
+    return graph
+
+
+async def test_index_lists_every_node(cwd):
+    res = await index()
+
+    assert {r["id"] for r in res["nodes"]} == {"hyp-alpha", "hyp-beta", "method-gate"}
+
+
+async def test_a_row_carries_the_claim_not_just_the_id(cwd):
+    """An id alone cannot be judged for relatedness. The H1 IS the claim."""
+    row = next(r for r in (await index())["nodes"] if r["id"] == "hyp-alpha")
+
+    assert row["title"] == "Alpha beats greedy"
+    assert row["verdict"] == "open"       # not a verdict yet, so the raw status
+    assert row["type"] == "hypothesis"
+    assert row["tags"] == ["decoding"]
+
+
+async def test_a_row_carries_the_verdict_for_a_settled_claim(cwd):
+    row = next(r for r in (await index())["nodes"] if r["id"] == "hyp-beta")
+
+    assert row["verdict"] == "DEAD"
+
+
+async def test_index_filters_by_status(cwd):
+    """"What is still open?" — unanswerable before, because query needed a search term
+    and `status` is not prose."""
+    res = await index(status=["open"])
+
+    assert [r["id"] for r in res["nodes"]] == ["hyp-alpha"]
+
+
+async def test_index_filters_by_tag(cwd):
+    res = await index(tags=["prompting"])
+
+    assert [r["id"] for r in res["nodes"]] == ["hyp-beta"]
+
+
+async def test_index_filters_by_type(cwd):
+    res = await index(type=["method"])
+
+    assert [r["id"] for r in res["nodes"]] == ["method-gate"]
+
+
+async def test_index_reports_the_graphs_declared_tags(cwd):
+    """The agent must know which tags it can filter on before it can filter."""
+    (cwd.root / "graph.yaml").write_text(
+        "name: t\ntags: [decoding, prompting]\nrules: []\n", encoding="utf-8")
+
+    assert (await index())["declared_tags"] == ["decoding", "prompting"]
+
+
+async def test_truncation_is_loud(cwd):
+    """A silent cap reads as "that is the whole graph" — the same false-negative as the
+    AND-query bug, arriving by a different route."""
+    for i in range(30):
+        cwd.node(f"hyp-{i:03d}", f"id: hyp-{i:03d}\ntype: hypothesis\nstatus: open",
+                 f"# claim {i}\n")
+
+    res = await index(limit=5)
+
+    assert len(res["nodes"]) == 5
+    assert res["total"] == 33
+    assert res["truncated"] is True
+    assert "narrow" in res["note"].lower()
+
+
+async def test_an_untruncated_index_says_so(cwd):
+    res = await index()
+
+    assert res["truncated"] is False
+    assert res["total"] == 3

@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 from . import attachments
-from .core import (ID_RE, VERDICT, GraphError, find_root, load, matches, node_path, section,
-                   shortest_path)
+from .core import (ID_RE, VERDICT, GraphError, find_root, load, node_path, retrieve,
+                   section, shortest_path)
 from .hook import install as install_hook
 from .validate import _csv, applies, check, load_config
 
@@ -35,10 +35,12 @@ def validate(root) -> int:
 
 def query(root, term) -> int:
     nodes = load(root)
-    hits = [n for n in nodes.values() if matches(n, term)]
+    hits = retrieve(nodes, term)
     claims = [n for n in hits if n.status in VERDICT]
     print(f'"{term}" → {len(hits)} node(s), {len(claims)} claim(s)\n')
-    for n in sorted(claims, key=lambda x: x.status):
+    # Relevance order, NOT status order: the closest match must be first, because an
+    # agent reads the top of this list and stops.
+    for n in claims:
         print(f"  [{MARK[n.status]}] {n.id}")
         for rel, label in [("kn:killedByGate", "killed by"), ("kn:survivedGate", "survived ")]:
             if ts := [l["to"] for l in n.links if l["rel"] == rel]:
@@ -52,6 +54,24 @@ def query(root, term) -> int:
         print()
     if others := [n for n in hits if n.status not in VERDICT]:
         print("  also: " + ", ".join(n.id for n in others))
+    return 0
+
+
+def index(root, tags, status, ntype, limit) -> int:
+    """The whole graph, one line per node. The answer to "have we done anything LIKE
+    this?" that keyword search cannot give: a reader — human or agent — judges
+    relatedness from the claims themselves."""
+    hits = retrieve(load(root), None, tags=tags, status=status, type=ntype)
+    shown = hits[:limit] if limit else hits
+    width = max((len(n.id) for n in shown), default=0)
+    for n in shown:
+        mark = MARK.get(n.status, n.status or "-")
+        tag = f"[{','.join(n.tags)}]" if n.tags else ""
+        print(f"  {n.id:{width}}  {mark:12} {tag:24} {n.title}")
+    print(f"\n  {len(shown)} of {len(hits)} node(s)")
+    if len(shown) < len(hits):
+        # Never a silent cap: a truncated list reads as the whole graph.
+        print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
     return 0
 
 
@@ -129,6 +149,10 @@ description: TODO — what question is this graph about?
 # with a typo'd status silently drops out of every query. Edit them for YOUR topic.
 node_types: [hypothesis, experiment, finding, method, source, retraction]
 statuses:   [open, alive, dead, retracted, superseded, active]
+
+# The axis `knoten index --tag` filters on. Declare them and a typo is a violation;
+# declare none and tagging is free. Add tags as the topic tells you what they are.
+# tags: [decoding, evaluation]
 
 # Reused standards: mp:supports / mp:challenges (Micropublications),
 #   npx:retracts / npx:supersedes (Nanopublications),
@@ -250,6 +274,12 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("query", help='"has this been tried?" -> verdicts + causes of death')
     s.add_argument("term")
 
+    s = sub.add_parser("index", help="the whole graph, one line per node")
+    s.add_argument("--tag", action="append", help="keep nodes carrying this tag (repeatable)")
+    s.add_argument("--status", action="append")
+    s.add_argument("--type", action="append")
+    s.add_argument("--limit", type=int, default=0, help="0 = no limit")
+
     s = sub.add_parser("path", help="how did we get from A to B?")
     s.add_argument("a")
     s.add_argument("b")
@@ -284,6 +314,8 @@ def main(argv=None) -> int:
         return {
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
+            "index":  lambda: index(root, args.tag, args.status, args.type,
+                                    args.limit),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node),
             "hook":   lambda: hook(root, args.force),
