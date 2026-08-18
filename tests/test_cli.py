@@ -1,8 +1,11 @@
 """The CLI is the first thing a new user touches. It should never hand them a
 traceback. `main()` returns an exit code; the console script exits with it."""
+import json
+
 import pytest
 
-from knoten.cli import main
+from knoten import ops
+from knoten.cli import _parser, main
 from knoten.core import load
 from knoten.validate import check
 
@@ -45,6 +48,61 @@ def test_path_reports_an_unknown_node_as_unknown(graph, monkeypatch, capsys):
 
     assert main(["path", "hyp-x", "hyp-typo"]) == 1
     assert "hyp-typo" in capsys.readouterr().err
+
+
+def test_path_error_in_json_mode_is_a_stdout_payload_not_stderr_prose(graph, monkeypatch, capsys):
+    """`show`/`commit`/`update` already put an error on stdout under --json; `path` and
+    `index` raised straight through main()'s GraphError handler and printed prose to
+    stderr regardless of --json, leaving a machine reader nothing to parse."""
+    monkeypatch.chdir(graph.root)
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
+
+    code = main(["path", "hyp-x", "hyp-typo", "--json"])
+    out, err = capsys.readouterr()
+
+    assert code == 1
+    assert err == ""
+    assert "hyp-typo" in json.loads(out)["error"]
+
+
+def test_index_where_error_in_json_mode_is_a_stdout_payload(graph, monkeypatch, capsys):
+    monkeypatch.chdir(graph.root)
+
+    code = main(["index", "--where", "bad", "--json"])
+    out, err = capsys.readouterr()
+
+    assert code == 1
+    assert err == ""
+    assert json.loads(out)["error"]
+
+
+def test_index_limit_help_states_the_real_default(capsys):
+    """`--limit 0` never meant uncapped — `ops.index` treats 0 as falsy and falls back
+    to INDEX_LIMIT — but the help text used to claim '0 = no limit'. Read through
+    `--help`, which is what a user actually sees, rather than argparse internals."""
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["index", "--help"])
+    help_text = capsys.readouterr().out
+
+    assert "no limit" not in help_text.lower()
+    assert str(ops.INDEX_LIMIT) in help_text
+
+
+def test_index_accepts_a_query_flag_for_relevance_ranking(graph, monkeypatch, capsys):
+    """`ops.index(query=...)` was reachable from MCP but had no CLI flag — the CLI is
+    primary and should not be missing a parameter of the shared implementation."""
+    monkeypatch.chdir(graph.root)
+    graph.node("hyp-decoding", "id: hyp-decoding\ntype: hypothesis\nstatus: open",
+               "# Self-consistency beats greedy decoding\n")
+    graph.node("hyp-other", "id: hyp-other\ntype: hypothesis\nstatus: open",
+               "# Unrelated claim about something else\n")
+
+    code = main(["index", "--query", "self-consistency decoding", "--json"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    ids = [n["id"] for n in json.loads(out)["nodes"]]
+    assert ids[0] == "hyp-decoding"
 
 
 def test_validate_returns_nonzero_on_violation(graph, monkeypatch):

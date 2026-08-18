@@ -273,14 +273,38 @@ directions, **PRs-as-peer-review**, and hosting. We write none of it.
 
 ---
 
-## 8. The agent surface (MCP) — this is what makes it compound
+## 8. The agent surface — CLI first
+
+This section used to be titled "The agent surface (MCP) — this is what makes it
+compound," and meant it. That claim is now wrong, and this is the reversal, stated
+plainly rather than slid past.
 
 The previous attempt failed because the graph was a **byproduct of automation**: when
 the orchestrator did not run, nothing was written. Meanwhile a plain chat session
 produced 15 experiments whose knowledge would have evaporated without hand-written
-memory files.
+memory files. The fix was still right — make the graph primary, and make writing to it
+the path of least resistance — but MCP turned out to be the expensive way to deliver it
+to an agent that already has a shell.
 
-**Fix: make the graph primary, and make writing to it the path of least resistance.**
+**The measurement.** knoten's MCP surface loads ~2,340 tokens into every session whether
+the agent touches the graph or not (1,928 of tool schema + 412 of instructions).
+`knoten --help` costs ~304 tokens, and only when the agent asks for it — most sessions
+never pay even that. And format compounds the gap: the same 55 nodes cost ~2,551 tokens
+as MCP's JSON (46/node) against ~1,185 as the CLI's columnar prose (21/node) — 2.2x. That
+is why prose is the CLI's default and `--json` is opt-in, not the other way round.
+
+**So: the CLI is now the primary agent surface.** `ops.py` holds the one implementation
+of every read — index, query, frontier, gates, show, validate, path — as a plain
+function returning a dict; the CLI renders it as prose or dumps it with `--json`, and MCP
+serialises the same dict as a tool result. `commit` and `update` are likewise shared
+functions, not surface-specific code paths. `SKILL.md`, at the repo root, is how an agent
+now learns the loop: `frontier` → `index`/`query` → `show` → `gates` → `commit`/`update`
+→ `attach`.
+
+**MCP is retained, not deleted.** It is the right surface for a client that has no
+shell — a chat UI wired to MCP servers rather than a coding agent with Bash. Those tools
+still exist, still delegate to the same `ops`/`commit`/`update` functions, and still carry
+the loop as the server's `instructions`:
 
 | tool | purpose |
 |---|---|
@@ -295,18 +319,19 @@ memory files.
 | `knoten_path(start, end)` | show the research path — how did we get from A to B? |
 | `knoten_validate()` | run the graph's own declared rules |
 
-The gate is the point: **`knoten_commit` refuses a `status: alive` node with no
-`kn:survivedGate` edge.** The system will not let an agent — or a human — record an
-unchallenged claim as a finding.
+The gate is the point, on either surface: **a `status: alive` node with no
+`kn:survivedGate` edge is refused**, whether it arrives via `knoten commit` or
+`knoten_commit`. The system will not let an agent — or a human — record an unchallenged
+claim as a finding.
 
 The candidate node is parsed and checked **in memory**; nothing reaches the filesystem
 until it is clean.
 
-Each tool is a plain function: its name is the tool name, its docstring is the description
-the agent reads, and its annotated signature IS the input schema. There is no second copy
-of any of that to drift — the failure mode being avoided is a hand-written schema that
-quietly stops matching the code it documents. The loop above lives once, in the server's
-`instructions`, rather than being re-asserted by every tool description.
+Each MCP tool is a plain function: its name is the tool name, its docstring is the
+description the agent reads, and its annotated signature IS the input schema. There is no
+second copy of any of that to drift — the failure mode being avoided is a hand-written
+schema that quietly stops matching the code it documents. The loop above lives once, in
+the server's `instructions`, rather than being re-asserted by every tool description.
 
 And because the `id` becomes a filename and is authored by an LLM, it is constrained to
 kebab-case — an id is not a path.
@@ -353,7 +378,8 @@ index, which the 1k–5k node case does not.
 |---|---|---|
 | **0** | **Dogfood** — encode a real investigation by hand | ✅ done |
 | **1** | `knoten` CLI (`init/new/validate/query/index/frontier/gates/path/show/attach`) + rule engine | ✅ done |
-| **2** | **MCP server** (the tools above) | ✅ done — the compounding step |
+| **2** | **MCP server** (the tools above) | ✅ done — later demoted to the shell-less fallback (§8) |
+| **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind CLI/MCP, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
 | 4 | Hosted multi-graph service | probably never needed |
 

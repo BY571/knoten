@@ -7,13 +7,9 @@ so they belong in front of the work, as a specification, not behind it as a puni
 """
 import pytest
 
-
-pytest.importorskip("knoten.mcp_server",
-                    reason="the agent server needs mcp>=2; the rest of the suite "
-                           "does not")
+from knoten import ops
 from knoten.cli import main
 from knoten.core import gates, load
-from knoten import mcp_server as M
 
 GATE = """\
 id: method-compute-matched
@@ -65,13 +61,10 @@ def test_only_method_nodes_are_gates(g):
 
 
 
-def test_the_agent_gets_the_rule_and_the_reason_up_front(g, monkeypatch):
+def test_the_agent_gets_the_rule_and_the_reason_up_front(g):
     """Knowing a gate exists is not enough to design an experiment that passes it. The
     agent needs what to run, and why the check is there at all."""
-    monkeypatch.chdir(g.root)
-    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
-
-    res = M.knoten_gates()
+    res = ops.gates(g.root)
     gate = next(x for x in res["gates"] if x["id"] == "method-compute-matched")
 
     assert gate["rule"].startswith("Compare at an equal token budget")
