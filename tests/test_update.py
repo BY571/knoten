@@ -132,3 +132,77 @@ def test_an_update_that_changes_nothing_is_an_error(g):
     with pytest.raises(GraphError, match="nothing to change"):
         update(g.root, "hyp-x")
 
+
+
+# ------------------------------------------------------------------ top-level fields
+
+CAUSES = """\
+name: t
+statuses: [open, alive, dead]
+node_types: [hypothesis, method]
+rules:
+  - id: deaths-must-name-a-cause
+    when_status: dead
+    require_field_one_of:
+      cause: [no_signal, weak_baseline]
+    message: A cause of death you cannot filter on is a story, not an index.
+"""
+
+
+def test_a_hypothesis_can_be_closed_when_the_graph_demands_a_cause(graph):
+    """The whole issue. `require_field_one_of` made a rule that the lifecycle could not
+    satisfy: you learn a cause of death WHEN the experiment dies, but `update` could only
+    reach `status`, `results`, `links` and prose — never a top-level field. A hypothesis
+    that cannot be closed is the ghost-on-the-frontier problem, one field over."""
+    graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+
+    update(graph.root, "hyp-x", status="dead", fields={"cause": "weak_baseline"})
+
+    n = load(graph.root)["hyp-x"]
+    assert n.status == "dead"
+    assert n.frontmatter["cause"] == "weak_baseline"
+
+
+def test_a_field_that_is_absent_is_set(graph):
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+
+    update(graph.root, "hyp-x", fields={"cause": "no_signal"})
+
+    assert load(graph.root)["hyp-x"].frontmatter["cause"] == "no_signal"
+
+
+def test_a_field_already_recorded_cannot_be_silently_changed(graph):
+    """Guarded exactly like `results`. Without this, `--field` becomes the general node
+    editor `update` was deliberately not built to be, and a published claim could be
+    rewritten in place instead of retracted."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\ncause: no_signal",
+               "# c\n")
+
+    with pytest.raises(GraphError, match="cause"):
+        update(graph.root, "hyp-x", fields={"cause": "weak_baseline"})
+
+
+def test_rewriting_a_field_to_the_same_value_is_not_an_error(graph):
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\ncause: no_signal",
+               "# c\n")
+
+    update(graph.root, "hyp-x", fields={"cause": "no_signal"})   # idempotent retry
+
+    assert load(graph.root)["hyp-x"].frontmatter["cause"] == "no_signal"
+
+
+@pytest.mark.parametrize("key", ["id", "type", "status", "results", "links", "attachments"])
+def test_the_keys_with_their_own_paths_are_refused(graph, key):
+    """`status` has its own argument; the rest have their own machinery. Letting --field
+    reach them would give one key two ways in, with different guards on each."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+
+    with pytest.raises(GraphError, match=key):
+        update(graph.root, "hyp-x", fields={key: "whatever"})
+
+
+def test_fields_alone_counts_as_a_change(graph):
+    """`nothing to change` must not fire when the only thing passed is a field."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+
+    update(graph.root, "hyp-x", fields={"cause": "no_signal"})   # must not raise

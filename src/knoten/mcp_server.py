@@ -238,6 +238,9 @@ def knoten_update(
                     "value.")] = None,
     links: Annotated[list[dict] | None, Field(
         description="edges to add, e.g. [{rel: kn:killedByGate, to: method-x}]")] = None,
+    fields: Annotated[dict | None, Field(
+        description="top-level frontmatter fields to set, e.g. {\"cause\": "
+                    "\"weak_baseline\"}. Refuses to change one already recorded.")] = None,
 ) -> dict:
     """Move a node through its lifecycle and append to it: open -> alive / dead /
     retracted. CALL THIS WHEN AN EXPERIMENT YOU OPENED FINISHES, especially when it fails
@@ -247,7 +250,7 @@ def knoten_update(
     knoten_commit.
     """
     return ops.update(_root(), id, status=status, results=results,
-                      links=links, append=append)
+                      links=links, append=append, fields=fields)
 
 
 # ------------------------------------------------------------ 6. leave the evidence

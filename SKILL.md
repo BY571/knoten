@@ -23,9 +23,10 @@ A research graph that remembers what did NOT work. Run `knoten` in the graph dir
    experiment; a claim cannot be filed as alive without citing a gate it survived.
 5. `knoten commit <id> --frontmatter <file> --body <file>` — file the claim when the
    work concludes, INCLUDING when it fails. `knoten update <id> --status dead --append
-   <file>` if you opened the node earlier and are now closing it — but `update` only
-   appends and moves status, it cannot set a NEW top-level field, so if this graph
-   requires one on death (`require_field_one_of`) set it at `commit` time instead.
+   <file> --field cause=<value>` if you opened the node earlier and are now closing it.
+   `--field` sets a top-level field this graph's rules require on death; `update` refuses
+   to change a field or result already recorded — correct a published claim by retracting
+   or superseding it, not by editing it.
 6. `knoten attach <id> <files...>` — the script that ran it and the plot that shows it.
    A claim nobody can re-run is a claim nobody trusts in six months.
 

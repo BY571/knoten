@@ -153,3 +153,42 @@ def test_a_typod_input_path_is_an_error_not_a_traceback(graph, monkeypatch, caps
     assert code == 1
     assert err == ""
     assert json.loads(out)["error"]
+
+
+def test_field_closes_a_node_the_graph_demands_a_cause_for(graph, monkeypatch, tmp_path):
+    """Issue #12 end to end, through the surface an agent actually uses."""
+    graph.rules("""\
+name: t
+statuses: [open, dead]
+node_types: [hypothesis]
+rules:
+  - id: deaths-must-name-a-cause
+    when_status: dead
+    require_field_one_of: {cause: [no_signal, weak_baseline]}
+    message: name the cause.
+""").node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+    monkeypatch.chdir(graph.root)
+    (tmp_path / "app").write_text("## Why it died\nnoise\n", encoding="utf-8")
+
+    code = main(["update", "hyp-x", "--status", "dead",
+                 "--append", str(tmp_path / "app"), "--field", "cause=weak_baseline"])
+
+    assert code == 0
+    assert load(graph.root)["hyp-x"].frontmatter["cause"] == "weak_baseline"
+
+
+def test_field_refuses_to_rewrite_what_is_already_recorded(graph, monkeypatch, capsys):
+    graph.rules(RULES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\n"
+                                     "cause: no_signal", "# c\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["update", "hyp-x", "--field", "cause=weak_baseline"]) == 1
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_a_malformed_field_is_a_clean_error(graph, monkeypatch, capsys):
+    graph.rules(RULES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["update", "hyp-x", "--field", "cause"]) == 1
+    assert "Traceback" not in capsys.readouterr().err

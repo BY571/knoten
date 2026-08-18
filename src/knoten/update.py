@@ -23,6 +23,12 @@ from .validate import check
 # A key we re-emit; everything else keeps its original text, comments included.
 _BLOCK = re.compile(r"^(\w[\w-]*):", re.M)
 
+# Keys `fields` will not touch. Each already has its own way in, with its own guard:
+# `status` has an argument, `results` and `links` have theirs, `id` and `type` identify
+# the node, and `attachments` belong to the attach path. One key with two doors is one
+# key whose guards disagree.
+RESERVED = {"id", "type", "status", "results", "links", "attachments"}
+
 
 def _spans(fm: str) -> dict[str, tuple[int, int]]:
     """Line span of each top-level key. Anything not re-emitted is copied verbatim, which
@@ -55,22 +61,23 @@ def _rewrite(fm: str, changed: dict) -> str:
 
 
 def update(root: Path, nid: str, status: str | None = None, results: dict | None = None,
-           links: list | None = None, append: str | None = None) -> str:
+           links: list | None = None, append: str | None = None,
+           fields: dict | None = None) -> str:
     """Append to a node and/or move its status. Raises GraphError, having written nothing.
 
     Returns the status the node now carries.
     """
     with graph_lock(root):
-        return _update(root, nid, status, results, links, append)
+        return _update(root, nid, status, results, links, append, fields)
 
 
-def _update(root: Path, nid: str, status, results, links, append) -> str:
+def _update(root: Path, nid: str, status, results, links, append, fields) -> str:
     nf = node_path(root, nid)                  # rejects a traversal before it is a path
     if not nf.exists():
         raise GraphError(f"no node '{nid}'")
-    if not any([status, results, links, append]):
-        raise GraphError(f"'{nid}': nothing to change — pass status, results, links "
-                         f"or append.")
+    if not any([status, results, links, append, fields]):
+        raise GraphError(f"'{nid}': nothing to change — pass status, results, links, "
+                         f"fields or append.")
 
     text = nf.read_text(encoding="utf-8")
     fm_text, body = FM_RE.match(text).groups()
@@ -90,6 +97,19 @@ def _update(root: Path, nid: str, status, results, links, append) -> str:
                 f"'{nid}': {', '.join(sorted(clash))} already recorded with a different "
                 f"value. Retract or supersede the node rather than rewriting a result.")
         changed["results"] = {**have, **results}
+
+    if fields:
+        if bad := RESERVED & set(fields):
+            raise GraphError(
+                f"'{nid}': {', '.join(sorted(bad))} cannot be set with `fields` — each has "
+                f"its own argument or its own command, with its own guard.")
+        # Guarded like `results`: a field already on the node is part of the published
+        # claim, and replacing one in place is what retraction exists to do instead.
+        if clash := [k for k, v in fields.items() if k in fm and fm[k] != v]:
+            raise GraphError(
+                f"'{nid}': {', '.join(sorted(clash))} already recorded with a different "
+                f"value. Retract or supersede the node rather than rewriting it.")
+        changed.update({k: v for k, v in fields.items() if k not in fm})
 
     out = f"---\n{_rewrite(fm_text, changed)}\n---\n{body}"
     if append:

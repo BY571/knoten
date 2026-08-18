@@ -285,11 +285,11 @@ def render_update(payload: dict) -> None:
     print(f"  {payload['node']} -> {payload['node_status']}")
 
 
-def update_cmd(root, nid, status, append, results, links, as_json) -> int:
+def update_cmd(root, nid, status, append, results, links, fields, as_json) -> int:
     # ops.update() is the ONE shape for both outcomes — this used to build its own
     # dict here, and a different one in mcp_server.py, and the two shapes drifted.
     payload = ops.update(root, nid, status=status, append=_read(append) if append else None,
-                         results=_kv(results), links=_links(links))
+                         results=_kv(results), links=_links(links), fields=_kv(fields))
     if payload["status"] == "REJECTED":
         return _fail(payload, payload["reason"], as_json)
     _emit(payload, as_json, render_update)
@@ -508,6 +508,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="markdown to append — file path, or - for stdin")
     s.add_argument("--result", action="append", metavar="KEY=VALUE",
                    help="result to record (repeatable)")
+    s.add_argument("--field", action="append", metavar="KEY=VALUE",
+                   help="set a top-level frontmatter field the graph's rules require "
+                        "(repeatable). Refuses to change one already recorded.")
     s.add_argument("--link", action="append", metavar="REL=TO",
                    help="edge to add, e.g. kn:killedByGate=method-x (repeatable)")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
@@ -547,7 +550,8 @@ def main(argv=None) -> int:
                                          body=args.body, as_json=args.json),
             "update": lambda: update_cmd(root, nid=args.id, status=args.status,
                                          append=args.append, results=args.result,
-                                         links=args.link, as_json=args.json),
+                                         links=args.link, fields=args.field,
+                                         as_json=args.json),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
