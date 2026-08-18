@@ -11,8 +11,10 @@ import sys
 from pathlib import Path
 
 from . import attachments, ops
+from .commit import commit
 from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook
+from .update import update
 from .validate import _csv, applies, load_config
 
 # Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
@@ -210,6 +212,85 @@ def show(root, nid, as_json=False) -> int:
 
 # ---------------------------------------------------------------- write commands
 
+def _read(arg: str) -> str:
+    """A file path, or `-` for stdin. Frontmatter and bodies are multi-line YAML and
+    markdown; passing them as shell arguments is how quoting bugs get into a research
+    record."""
+    return sys.stdin.read() if arg == "-" else Path(arg).read_text(encoding="utf-8")
+
+
+def _kv(pairs) -> dict:
+    """`--result acc=0.7`, repeatable. Typed rather than left as strings, because
+    `require_result_min` compares numerically."""
+    out = {}
+    for p in pairs or []:
+        if "=" not in p:
+            raise GraphError(f"--result takes key=value, got '{p}'")
+        k, v = p.split("=", 1)
+        try:
+            v = float(v)
+        except ValueError:
+            pass
+        out[k.strip()] = v
+    return out
+
+
+def _links(pairs) -> list[dict]:
+    """`--link kn:killedByGate=method-x`, repeatable."""
+    out = []
+    for p in pairs or []:
+        if "=" not in p:
+            raise GraphError(f"--link takes rel=to, got '{p}'")
+        rel, to = p.split("=", 1)
+        out.append({"rel": rel.strip(), "to": to.strip()})
+    return out
+
+
+def render_commit(payload: dict) -> None:
+    print(f"  + {payload['path']}  ({payload['graph_size']} nodes)")
+    if warning := payload.get("warning"):
+        print(f"\n  ! {warning}")
+        for s in payload["similar"]:
+            print(f"    {s['id']}  [{MARK.get(s['verdict'], s['verdict'])}]  {s['title']}")
+
+
+def commit_cmd(root, nid, frontmatter, body, as_json) -> int:
+    res = commit(root, nid, _read(frontmatter), _read(body))
+    if res["status"] == "REJECTED":
+        # Same stream contract as `show`: --json keeps the payload on stdout even on
+        # failure, so a machine reader never has to check a second stream for the error.
+        if as_json:
+            print(json.dumps(res, indent=2, default=str))
+        else:
+            reason = res.get("reason") or "; ".join(
+                f"[{v['rule']}] {v['message']}" for v in res["violations"])
+            print(f"knoten: {reason}", file=sys.stderr)
+        return 1
+    _emit(res, as_json, render_commit)
+    return 0
+
+
+def render_update(payload: dict) -> None:
+    print(f"  {payload['node']} -> {payload['node_status']}")
+
+
+def update_cmd(root, nid, status, append, results, links, as_json) -> int:
+    try:
+        now = update(root, nid, status=status, append=_read(append) if append else None,
+                     results=_kv(results), links=_links(links))
+    except GraphError as e:
+        # update() raises on refusal, unlike commit()'s REJECTED dict — caught here so
+        # --json still gets a payload on stdout instead of a bare stderr line.
+        if as_json:
+            print(json.dumps({"status": "REJECTED", "node": nid, "reason": str(e)},
+                             indent=2, default=str))
+        else:
+            print(f"knoten: {e}", file=sys.stderr)
+        return 1
+    _emit({"node": nid, "node_status": now}, as_json, render_update)
+    return 0
+
+
 def attach(root, nid, files) -> int:
     res = attachments.attach(root, nid, files)
     for w in res.warnings:
@@ -404,6 +485,25 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("node")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
 
+    s = sub.add_parser("commit", help="file a new claim — gate-checked before it touches disk")
+    s.add_argument("id")
+    s.add_argument("--frontmatter", required=True, metavar="FILE",
+                   help="YAML frontmatter (no --- fences) — file path, or - for stdin")
+    s.add_argument("--body", required=True, metavar="FILE",
+                   help="markdown body — file path, or - for stdin")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
+
+    s = sub.add_parser("update", help="move a node through its lifecycle and append to it")
+    s.add_argument("id")
+    s.add_argument("--status", help="the new status, e.g. dead")
+    s.add_argument("--append", metavar="FILE",
+                   help="markdown to append — file path, or - for stdin")
+    s.add_argument("--result", action="append", metavar="KEY=VALUE",
+                   help="result to record (repeatable)")
+    s.add_argument("--link", action="append", metavar="REL=TO",
+                   help="edge to add, e.g. kn:killedByGate=method-x (repeatable)")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
+
     s = sub.add_parser("attach", help="attach a script / plot / notebook to a node")
     s.add_argument("node")
     s.add_argument("files", nargs="+")
@@ -434,6 +534,9 @@ def main(argv=None) -> int:
                                     args.where, args.since, args.limit, args.json),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node, args.json),
+            "commit": lambda: commit_cmd(root, args.id, args.frontmatter, args.body, args.json),
+            "update": lambda: update_cmd(root, args.id, args.status, args.append,
+                                         args.result, args.link, args.json),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
