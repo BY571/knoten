@@ -253,3 +253,43 @@ def test_the_allowed_values_must_be_a_list(graph):
 
     with pytest.raises(GraphError, match="cause"):
         load_rules(graph.root)
+
+
+def test_a_frontmatter_id_that_disagrees_with_the_filename_is_a_violation(graph):
+    """The real id is the filename — `parse_text` takes it from the stem and the
+    frontmatter `id:` is decorative. So a node whose `id:` says something else lies about
+    itself to every human reading it, while every query still resolves it by its filename.
+    Nothing caught that, which made `id` the one field an editor could corrupt silently."""
+    graph.node("hyp-x", "id: hyp-someone-else\ntype: hypothesis\nstatus: dead")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert [v.rule for v in violations] == ["mismatched-id"]
+    assert "hyp-someone-else" in violations[0].message
+
+
+def test_a_node_with_no_id_in_its_frontmatter_is_fine(graph):
+    """`knoten commit` does not write one — the filename already carries it."""
+    graph.node("hyp-x", "type: hypothesis\nstatus: dead")
+
+    assert check(load(graph.root), graph.root) == []
+
+
+@pytest.mark.parametrize("block", ["results", "repro"])
+def test_a_structured_block_that_is_a_scalar_is_a_violation_not_a_crash(graph, block):
+    """`results: 5` reached `n.results.get(key)` in the `require_result_min` loop and came
+    back as `AttributeError: 'int' object has no attribute 'get'` — a traceback, from the
+    validator whose entire job is refusing bad nodes politely. Reachable from `commit`
+    long before `--field` existed; `--field` just made it easy to hit."""
+    graph.rules("""\
+name: t
+rules:
+  - id: underpowered
+    when_type: hypothesis
+    require_result_min: {n: 30}
+    message: too few.
+""").node("hyp-x", f"id: hyp-x\ntype: hypothesis\nstatus: dead\n{block}: 5")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert f"malformed-{block}" in [v.rule for v in violations]

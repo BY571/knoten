@@ -5,9 +5,12 @@ a new node, not an edit. But that left the lifecycle SPEC §3 draws with no way 
 an agent could open a hypothesis and never close it. Its only outs were writing the file
 directly, which bypasses every gate, or a second node leaving the first `open` forever.
 
-So this is deliberately not a node editor. It appends and it moves the status, and the
-candidate goes through the same in-memory validation `knoten_commit` uses, so the gate
-survives the new write path. Git holds the before/after; that is what living in git buys.
+What bounds an edit is the graph's own declared rules, not a list of things this module
+refuses: the amended candidate goes through the same in-memory validation `knoten_commit`
+uses, and never reaches disk if it fails. `fields` therefore sets any top-level key,
+including one already recorded — `results` is the exception, guarded because a number you
+already published is a different kind of claim from a label. Git holds the before and
+after; that is what living in git buys.
 """
 from __future__ import annotations
 
@@ -55,22 +58,25 @@ def _rewrite(fm: str, changed: dict) -> str:
 
 
 def update(root: Path, nid: str, status: str | None = None, results: dict | None = None,
-           links: list | None = None, append: str | None = None) -> str:
-    """Append to a node and/or move its status. Raises GraphError, having written nothing.
+           links: list | None = None, append: str | None = None,
+           fields: dict | None = None) -> str:
+    """Append to a node, move its status, set its fields. Raises GraphError, having
+    written nothing.
 
     Returns the status the node now carries.
     """
     with graph_lock(root):
-        return _update(root, nid, status, results, links, append)
+        return _update(root, nid, status=status, results=results, links=links,
+                       append=append, fields=fields)
 
 
-def _update(root: Path, nid: str, status, results, links, append) -> str:
+def _update(root: Path, nid: str, status, results, links, append, fields) -> str:
     nf = node_path(root, nid)                  # rejects a traversal before it is a path
     if not nf.exists():
         raise GraphError(f"no node '{nid}'")
-    if not any([status, results, links, append]):
-        raise GraphError(f"'{nid}': nothing to change — pass status, results, links "
-                         f"or append.")
+    if not any([status, results, links, append, fields]):
+        raise GraphError(f"'{nid}': nothing to change — pass status, results, links, "
+                         f"fields or append.")
 
     text = nf.read_text(encoding="utf-8")
     fm_text, body = FM_RE.match(text).groups()
@@ -90,6 +96,17 @@ def _update(root: Path, nid: str, status, results, links, append) -> str:
                 f"'{nid}': {', '.join(sorted(clash))} already recorded with a different "
                 f"value. Retract or supersede the node rather than rewriting a result.")
         changed["results"] = {**have, **results}
+
+    if fields:
+        # No allow-list and no immutability guard: `fields` sets any top-level key to any
+        # value, including one already recorded. What stops a broken node is the same
+        # thing that stops one from `commit` — the whole candidate is parsed and run
+        # through the graph's own rules below, and never reaches disk if it fails.
+        #
+        # Applied LAST, so `fields={"status": ...}` beats the `status` argument and
+        # `fields={"updated": ...}` beats the stamp this call just computed. Deliberate:
+        # "sets any top-level key" would be a lie if another argument could quietly win.
+        changed.update(fields)
 
     out = f"---\n{_rewrite(fm_text, changed)}\n---\n{body}"
     if append:

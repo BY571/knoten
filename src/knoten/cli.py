@@ -246,7 +246,7 @@ def _kv(pairs) -> dict:
     `require_result_min` compares numerically."""
     out = {}
     for k, v in _pairs(pairs, "--result takes key=value, got '{}'"):
-        # Deliberately NOT stripped — unlike `_where`/`_links`, `--result "note= fine "`
+        # Deliberately NOT stripped — alone among the four parsers. `--result "note= fine "`
         # writes ' fine ' to disk as-is. That asymmetry is existing behaviour, kept.
         try:
             v = float(v)
@@ -254,6 +254,18 @@ def _kv(pairs) -> dict:
             pass
         out[k] = v
     return out
+
+
+def _fields(pairs) -> dict:
+    """`--field cause=weak_baseline`, repeatable. Left as STRINGS, unlike `_kv`.
+
+    `_kv` coerces because `require_result_min` compares numerically. `require_field_one_of`
+    and `--where` both compare with `str()`, so coercing `--field seed=2` to 2.0 made it
+    match nothing the graph declared — and the refusal quoted `seed=2.0`, a value the user
+    never typed. Stripped, because this is the write side of `--where`, which strips: the
+    two must round-trip.
+    """
+    return {k: v.strip() for k, v in _pairs(pairs, "--field takes key=value, got '{}'")}
 
 
 def _links(pairs) -> list[dict]:
@@ -285,11 +297,11 @@ def render_update(payload: dict) -> None:
     print(f"  {payload['node']} -> {payload['node_status']}")
 
 
-def update_cmd(root, nid, status, append, results, links, as_json) -> int:
+def update_cmd(root, nid, status, append, results, links, fields, as_json) -> int:
     # ops.update() is the ONE shape for both outcomes — this used to build its own
     # dict here, and a different one in mcp_server.py, and the two shapes drifted.
     payload = ops.update(root, nid, status=status, append=_read(append) if append else None,
-                         results=_kv(results), links=_links(links))
+                         results=_kv(results), links=_links(links), fields=_fields(fields))
     if payload["status"] == "REJECTED":
         return _fail(payload, payload["reason"], as_json)
     _emit(payload, as_json, render_update)
@@ -508,6 +520,10 @@ def _parser() -> argparse.ArgumentParser:
                    help="markdown to append — file path, or - for stdin")
     s.add_argument("--result", action="append", metavar="KEY=VALUE",
                    help="result to record (repeatable)")
+    s.add_argument("--field", action="append", metavar="KEY=VALUE",
+                   help="set any top-level frontmatter field, including one already "
+                        "recorded (repeatable). The graph's rules decide what is "
+                        "accepted.")
     s.add_argument("--link", action="append", metavar="REL=TO",
                    help="edge to add, e.g. kn:killedByGate=method-x (repeatable)")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
@@ -547,7 +563,8 @@ def main(argv=None) -> int:
                                          body=args.body, as_json=args.json),
             "update": lambda: update_cmd(root, nid=args.id, status=args.status,
                                          append=args.append, results=args.result,
-                                         links=args.link, as_json=args.json),
+                                         links=args.link, fields=args.field,
+                                         as_json=args.json),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),

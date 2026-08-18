@@ -324,10 +324,22 @@ Reach for `--json`; don't default to it.
 knoten update hyp-idea --status alive --link kn:survivedGate=method-compute-matched-baseline
 ```
 
-`knoten update` appends and moves status; it cannot set a NEW top-level frontmatter
-field. If your graph declares `require_field_one_of` on a field the node doesn't already
-carry (the example graph's `deaths-must-name-a-cause`, e.g.), set it at `knoten commit`
-time — `update` will refuse the transition until you do.
+`knoten update` appends, moves the status, and sets the fields a death is supposed to
+name:
+
+```bash
+knoten update hyp-self-consistency --status dead \
+  --append post-mortem.md --field cause=weak_baseline
+```
+
+`--field` sets any top-level key, including one already recorded. `--result` still refuses
+to change a number the node already carries — appending to a claim is the lifecycle, and
+rewriting a published result is what retraction is for.
+
+What bounds an edit is the graph's own rules, not a list of field names: the amended node
+is parsed and checked in memory, and never reaches disk if it fails. `validate` also
+refuses a frontmatter `id:` that disagrees with the filename — the filename is the id, so
+a node claiming otherwise lies about itself while every query still resolves it.
 
 Exit code is the signal: `0` succeeded, `1` means refused or violated a rule. A refusal
 is the feature — read the message, fix the node, run it again.

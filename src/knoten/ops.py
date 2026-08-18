@@ -172,7 +172,8 @@ def path(root: Path, start: str, end: str) -> dict:
 
 
 def update(root: Path, nid: str, status: str | None = None, results: dict | None = None,
-          links: list | None = None, append: str | None = None) -> dict:
+          links: list | None = None, append: str | None = None,
+          fields: dict | None = None) -> dict:
     """Move a node through its lifecycle, or report why it was refused — ONE shape for
     both outcomes. Update used to be built twice: the CLI's success omitted `status`
     entirely and its refusal had no `hint`, while MCP's success carried `status:
@@ -181,7 +182,7 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
     """
     try:
         now = _update_node(root, nid, status=status, results=results,
-                           links=links, append=append)
+                           links=links, append=append, fields=fields)
     except GraphError as e:
         return {"status": "REJECTED", "node": nid, "reason": str(e),
                 "hint": "Fix it and update again. The gate is the point."}

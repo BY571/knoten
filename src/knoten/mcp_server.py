@@ -238,16 +238,20 @@ def knoten_update(
                     "value.")] = None,
     links: Annotated[list[dict] | None, Field(
         description="edges to add, e.g. [{rel: kn:killedByGate, to: method-x}]")] = None,
+    fields: Annotated[dict | None, Field(
+        description="top-level frontmatter fields to set, e.g. {\"cause\": "
+                    "\"weak_baseline\"}. Sets any key, including one already "
+                    "recorded; the graph's own rules decide what is accepted.")] = None,
 ) -> dict:
     """Move a node through its lifecycle and append to it: open -> alive / dead /
     retracted. CALL THIS WHEN AN EXPERIMENT YOU OPENED FINISHES, especially when it fails
-    — a hypothesis left 'open' forever is a ghost on every future frontier. Appends only:
-    it cannot rewrite prose or overwrite a result that was already recorded (retract or
-    supersede the node for that). VALIDATES FIRST and REFUSES on rule violation, same as
+    — a hypothesis left 'open' forever is a ghost on every future frontier. It cannot
+    rewrite prose, nor overwrite a result already recorded (retract or supersede the node for that), but
+    `fields` sets any top-level key. VALIDATES FIRST and REFUSES on rule violation, same as
     knoten_commit.
     """
     return ops.update(_root(), id, status=status, results=results,
-                      links=links, append=append)
+                      links=links, append=append, fields=fields)
 
 
 # ------------------------------------------------------------ 6. leave the evidence
