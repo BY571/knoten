@@ -273,3 +273,23 @@ def test_a_node_with_no_id_in_its_frontmatter_is_fine(graph):
     graph.node("hyp-x", "type: hypothesis\nstatus: dead")
 
     assert check(load(graph.root), graph.root) == []
+
+
+@pytest.mark.parametrize("block", ["results", "repro"])
+def test_a_structured_block_that_is_a_scalar_is_a_violation_not_a_crash(graph, block):
+    """`results: 5` reached `n.results.get(key)` in the `require_result_min` loop and came
+    back as `AttributeError: 'int' object has no attribute 'get'` — a traceback, from the
+    validator whose entire job is refusing bad nodes politely. Reachable from `commit`
+    long before `--field` existed; `--field` just made it easy to hit."""
+    graph.rules("""\
+name: t
+rules:
+  - id: underpowered
+    when_type: hypothesis
+    require_result_min: {n: 30}
+    message: too few.
+""").node("hyp-x", f"id: hyp-x\ntype: hypothesis\nstatus: dead\n{block}: 5")
+
+    violations = check(load(graph.root), graph.root)
+
+    assert f"malformed-{block}" in [v.rule for v in violations]

@@ -63,8 +63,8 @@ def test_a_documented_node_parses_and_obeys_the_example_graphs_rules(doc, block,
     # Written under the id the block declares, not a fixed name: the filename IS the id,
     # so renaming a documented node here would trip `mismatched-id` on the harness's own
     # doing rather than on anything the docs got wrong.
-    nid = str(parse_text(block, "doc-example").frontmatter.get("id") or "doc-example")
-    node = parse_text(block, nid)
+    node = parse_text(block, "doc-example")
+    nid = str(node.frontmatter.get("id") or "doc-example")
     assert node.type
 
     (example / "nodes" / f"{nid}.md").write_text(block, encoding="utf-8")

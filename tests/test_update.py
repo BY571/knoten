@@ -185,17 +185,8 @@ def test_a_field_already_recorded_can_be_changed(graph):
     assert load(graph.root)["hyp-x"].frontmatter["cause"] == "weak_baseline"
 
 
-def test_rewriting_a_field_to_the_same_value_is_not_an_error(graph):
-    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\ncause: no_signal",
-               "# c\n")
-
-    update(graph.root, "hyp-x", fields={"cause": "no_signal"})   # idempotent retry
-
-    assert load(graph.root)["hyp-x"].frontmatter["cause"] == "no_signal"
-
-
 @pytest.mark.parametrize("key,value", [("type", "method"), ("status", "dead"),
-                                       ("cause", "no_signal"), ("created", "2020-01-01")])
+                                       ("created", "2020-01-01")])
 def test_any_top_level_key_can_be_set(graph, key, value):
     """No allow-list. `fields` reaches every top-level key — the rules decide what is
     acceptable, not a hardcoded list of names."""

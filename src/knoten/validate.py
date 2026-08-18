@@ -133,6 +133,22 @@ def _tags(n: Node, cfg: dict) -> list[Violation]:
             for t in map(str, raw) if t not in known]
 
 
+def _blocks(n: Node) -> list[Violation]:
+    """`results:` and `repro:` must be mappings.
+
+    `results: 5` used to reach `n.results.get(key)` in the require_result_min loop and come
+    back as `AttributeError: 'int' object has no attribute 'get'` — a traceback out of the
+    validator whose whole job is refusing bad nodes politely. `parse_text` keeps whatever
+    the YAML held, so the check belongs here rather than in the parser: a scalar is a
+    malformed node, not an unparseable one.
+    """
+    return [Violation(n.id, f"malformed-{name}",
+                      f"`{name}` must be a mapping of key: value, got "
+                      f"{type(raw).__name__} ({raw!r})")
+            for name in ("results", "repro")
+            if (raw := n.frontmatter.get(name)) is not None and not isinstance(raw, dict)]
+
+
 def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
     """A node's `type` and `status` must be words THIS graph declared.
 
@@ -176,7 +192,7 @@ def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation
             out.append(Violation(nid, "mismatched-id",
                                  f"frontmatter says id '{declared}' but the file is "
                                  f"{nid}.md — the filename is the id"))
-        out += _vocabulary(n, cfg)
+        out += _blocks(n) + _vocabulary(n, cfg)
         for l in n.links:
             rel = l["rel"]
             if rel in GENERATED:
@@ -243,7 +259,10 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
                                          f"{msg} ({fld}={got!r}, one of: "
                                          f"{', '.join(map(str, allowed))})"))
 
-            for key, floor in (r.get("require_result_min") or {}).items():
+            # `_blocks` already reported a non-mapping; skip rather than crash on it
+            # in the same pass.
+            for key, floor in ((r.get("require_result_min") or {}).items()
+                               if isinstance(n.results, dict) else []):
                 got = n.results.get(key)
                 # `bool` is a subclass of `int`: `accuracy: true` would otherwise sail
                 # through a floor of 0.8 as the number 1.

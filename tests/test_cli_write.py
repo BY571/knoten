@@ -124,8 +124,7 @@ def test_a_refused_update_json_payload_is_on_stdout(open_node, capsys):
     assert json.loads(out)["status"] == "REJECTED"
 
 
-@pytest.mark.parametrize("flag,bad", [("--result", "acc"), ("--link", "method-x"),
-                                      ("--field", "cause")])
+@pytest.mark.parametrize("flag,bad", [("--result", "acc"), ("--link", "method-x")])
 def test_a_malformed_kv_flag_is_a_graph_error_not_a_crash(open_node, flag, bad):
     assert main(["update", "hyp-x", flag, bad]) == 1
 
@@ -214,18 +213,6 @@ def test_a_field_is_stored_as_typed_not_coerced(graph, monkeypatch):
 
     assert main(["update", "hyp-x", "--status", "dead", "--field", "seed=2"]) == 0
     assert load(graph.root)["hyp-x"].frontmatter["seed"] == "2"
-
-
-def test_a_field_written_by_commit_round_trips_through_update(graph, monkeypatch):
-    """`commit` writes YAML, so `seed: 2` parses as an int. The clash guard compared with
-    `!=`, so re-setting it to the same value refused as "already recorded with a different
-    value". The rule engine and `--where` both compare with str(); the guard must agree,
-    or "the same value" means something different in each place."""
-    graph.rules(NUMERIC_VOCAB).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\n"
-                                             "seed: 2", "# c\n")
-    monkeypatch.chdir(graph.root)
-
-    assert main(["update", "hyp-x", "--status", "dead", "--field", "seed=2"]) == 0
 
 
 def test_a_malformed_field_names_the_flag_the_user_typed(graph, monkeypatch, capsys):

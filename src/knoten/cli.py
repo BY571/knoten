@@ -246,7 +246,7 @@ def _kv(pairs) -> dict:
     `require_result_min` compares numerically."""
     out = {}
     for k, v in _pairs(pairs, "--result takes key=value, got '{}'"):
-        # Deliberately NOT stripped — unlike `_where`/`_links`, `--result "note= fine "`
+        # Deliberately NOT stripped — alone among the four parsers. `--result "note= fine "`
         # writes ' fine ' to disk as-is. That asymmetry is existing behaviour, kept.
         try:
             v = float(v)
@@ -521,8 +521,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--result", action="append", metavar="KEY=VALUE",
                    help="result to record (repeatable)")
     s.add_argument("--field", action="append", metavar="KEY=VALUE",
-                   help="set a top-level frontmatter field the graph's rules require "
-                        "(repeatable). Refuses to change one already recorded.")
+                   help="set any top-level frontmatter field, including one already "
+                        "recorded (repeatable). The graph's rules decide what is "
+                        "accepted.")
     s.add_argument("--link", action="append", metavar="REL=TO",
                    help="edge to add, e.g. kn:killedByGate=method-x (repeatable)")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
