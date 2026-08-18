@@ -10,6 +10,10 @@ handshake. A tool description says what the tool does and where it sits.
 """
 import pytest
 
+
+pytest.importorskip("knoten.mcp_server",
+                    reason="the agent server needs mcp>=2; the rest of the suite "
+                           "does not")
 from knoten import mcp_server
 
 pytestmark = pytest.mark.anyio
@@ -81,3 +85,43 @@ async def test_a_required_argument_is_enforced_by_the_schema():
     disagree with the signature. This pins that it is actually happening."""
     with pytest.raises(Exception):
         await mcp_server.app.call_tool("knoten_query", {})
+
+
+# Wire arguments for every tool. This doubles as the record of each tool's public
+# argument NAMES — the migration renamed knoten_path's `from`/`to` to `start`/`end`
+# because `from` is a Python keyword, and nothing would have caught that.
+WIRE_ARGS = {
+    "knoten_frontier": {},
+    "knoten_index": {"status": ["dead"]},
+    "knoten_query": {"query": "claim"},
+    "knoten_get": {"id": "hyp-x"},
+    "knoten_gates": {},
+    "knoten_commit": {"id": "hyp-new", "frontmatter": "type: hypothesis\nstatus: dead",
+                      "body": "# Another claim\n"},
+    "knoten_update": {"id": "hyp-x", "append": "## Note\ntext\n"},
+    "knoten_attach": {"id": "hyp-x", "files": []},
+    "knoten_path": {"start": "hyp-x", "end": "hyp-x"},
+    "knoten_validate": {},
+}
+
+
+async def test_every_tool_has_wire_arguments_pinned():
+    """If a tool is added and not listed above, the dispatch test below silently stops
+    covering it."""
+    assert {t.name for t in await mcp_server.app.list_tools()} == set(WIRE_ARGS)
+
+
+@pytest.mark.parametrize("name", sorted(WIRE_ARGS))
+async def test_every_tool_dispatches_through_the_real_server(name, graph, monkeypatch):
+    """The other tests call the tool functions directly — simpler and faster, but that
+    path never touches registration or argument validation. Before this, only
+    knoten_query went through real MCP dispatch, so renaming an argument on any other
+    tool would have passed the whole suite green.
+    """
+    monkeypatch.chdir(graph.root)
+    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead", "# A claim\n")
+
+    res = await mcp_server.app.call_tool(name, WIRE_ARGS[name])
+
+    assert not res.is_error, res.content

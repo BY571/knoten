@@ -3,6 +3,10 @@ quietly stopped at prose. An agent that runs an experiment produces a script and
 and had no way to put either in the graph."""
 import pytest
 
+
+pytest.importorskip("knoten.mcp_server",
+                    reason="the agent server needs mcp>=2; the rest of the suite "
+                           "does not")
 from knoten import mcp_server as M
 from knoten.core import load
 from knoten.validate import check

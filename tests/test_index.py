@@ -10,6 +10,10 @@ call, and the agent — which is already an LLM — does the semantic matching i
 """
 import pytest
 
+
+pytest.importorskip("knoten.mcp_server",
+                    reason="the agent server needs mcp>=2; the rest of the suite "
+                           "does not")
 from knoten import mcp_server as M
 
 def index(**args):

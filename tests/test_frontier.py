@@ -8,6 +8,10 @@ log.
 """
 import pytest
 
+
+pytest.importorskip("knoten.mcp_server",
+                    reason="the agent server needs mcp>=2; the rest of the suite "
+                           "does not")
 from knoten.core import frontier, load
 from knoten import mcp_server as M
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 import functools
 import inspect
 import os
-import re
 from pathlib import Path
 from typing import Annotated
 
@@ -33,10 +32,11 @@ except ImportError as e:  # pragma: no cover
         have = version("mcp")
     except Exception:
         have = None
-    # Distinguish "not installed" from "installed but too old". They need different
-    # commands, and telling someone to install what they already have is a dead end:
-    # `MCPServer` arrived in mcp 2.0, so a 1.x install fails here looking identical.
-    raise SystemExit(
+    # ImportError, NOT SystemExit. SystemExit is a BaseException, so pytest cannot demote
+    # it to a collection error: on a machine with mcp 1.x, `pytest` aborted the ENTIRE run
+    # with INTERNALERROR and ran none of the tests that never touch MCP. The friendly exit
+    # belongs in main(), where a human is reading stderr.
+    raise ImportError(
         f"knoten-mcp needs mcp>=2 (you have {have}). Upgrade with:\n\n"
         f"    pip install -U 'knoten[mcp]'\n"
         if have else
@@ -44,9 +44,9 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 from . import attachments
-from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, Node, backlink, fields,
-                   find_root, frontier, gates, graph_lock, node_path, parse_text, retrieve,
-                   section, shortest_path, today, write_atomic)
+from .commit import commit as commit_node
+from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, Node, find_root,
+                   frontier, gates, retrieve, section, shortest_path)
 from .core import load as load_graph
 from .update import update as update_node
 from .validate import check, load_config
@@ -303,34 +303,6 @@ def knoten_gates() -> dict:
 # ------------------------------------------------------------ 5. record the outcome
 
 
-def _similar(nodes: dict[str, Node], candidate: Node, keep: int = 3) -> list[dict]:
-    """Settled claims that look like the same question, worded differently.
-
-    A warning and never a block: two claims can be genuinely close and genuinely
-    different — a compute-matched rerun of a dead idea IS a new claim, and that is the
-    whole point of a gate. Refusing would make the tool wrong in the interesting case and
-    push the agent to route around it.
-
-    Settled claims only — `open` is not an answer, and reporting one would tell the agent
-    the question is closed when it is exactly what is still being asked. Plus at least two
-    shared title words, so a single shared "accuracy" does not fire.
-
-    Two is a loose bar on purpose. A false positive costs one line of JSON the agent can
-    dismiss; a false negative costs a duplicated experiment, which is the failure this
-    whole tool exists to prevent. The asymmetry says lean permissive.
-    """
-    mine = fields(candidate)[0]
-    out = []
-    for n in retrieve(nodes, candidate.title or candidate.id):
-        if n.status not in VERDICT or len(mine & fields(n)[0]) < 2:
-            continue
-        row = {"id": n.id, "verdict": VERDICT[n.status], "title": n.title}
-        if why := section(n.body, "Why it died"):
-            row["why_it_died"] = why[:200]
-        out.append(row)
-    return out[:keep]
-
-
 @tool
 def knoten_commit(
     id: NodeId,
@@ -347,47 +319,7 @@ def knoten_commit(
     is the most valuable node in the graph. Also reports settled claims the new node
     resembles, so the same question is not filed twice.
     """
-    root, nodes = _graph()
-    with graph_lock(root):
-        try:
-            path = node_path(root, id)
-        except GraphError as e:
-            return {"status": "REJECTED", "node": id, "reason": str(e)}
-        if path.exists():
-            return {"status": "REJECTED", "node": id,
-                    "reason": f"'{id}' already exists. Supersede or retract it instead of "
-                              "overwriting — corrections are nodes, not edits."}
-
-        fm = frontmatter.strip()
-        # Stamped unless the author said otherwise. A graph with no time axis cannot
-        # answer "what did we learn this week" or spot a hypothesis open since March.
-        if not re.search(r"^created:", fm, re.M):
-            fm += f"\ncreated: {today()}"
-        text = f"---\n{fm}\n---\n\n{body.strip()}\n"
-
-        try:
-            candidate = parse_text(text, id)
-        except GraphError as e:
-            return {"status": "REJECTED", "node": id, "reason": str(e)}
-
-        if errs := [e for e in check(backlink({**nodes, id: candidate}), root)
-                    if e.node == id]:
-            return {"status": "REJECTED", "node": id,
-                    "violations": [{"rule": e.rule, "message": e.message} for e in errs],
-                    "hint": "Fix the violations and commit again. The gate is the point."}
-
-        write_atomic(path, text)
-
-    out = {"status": "COMMITTED", "node": id, "path": f"nodes/{id}.md",
-           "graph_size": len(nodes) + 1,
-           "next": "git add + commit to version this."}
-    if similar := _similar(nodes, candidate):
-        out["similar"] = similar
-        out["warning"] = (
-            f"This resembles {len(similar)} settled claim(s). If it is the same question, "
-            f"supersede or retract that node (npx:supersedes / npx:retracts) rather than "
-            f"leaving two answers in the graph.")
-    return out
+    return commit_node(_root(), id, frontmatter, body)
 
 
 @tool
@@ -478,6 +410,9 @@ def knoten_validate() -> dict:
 
 
 def main() -> None:
+    """The console-script entry point. Import errors reach a human here, as a clean
+    message on stderr rather than a traceback — see the ImportError above for why the
+    module itself must not exit."""
     import asyncio
 
     asyncio.run(app.run_stdio_async())

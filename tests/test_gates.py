@@ -7,6 +7,10 @@ so they belong in front of the work, as a specification, not behind it as a puni
 """
 import pytest
 
+
+pytest.importorskip("knoten.mcp_server",
+                    reason="the agent server needs mcp>=2; the rest of the suite "
+                           "does not")
 from knoten.cli import main
 from knoten.core import gates, load
 from knoten import mcp_server as M

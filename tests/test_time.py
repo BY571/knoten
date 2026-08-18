@@ -6,8 +6,14 @@ knows when the FILE changed, which is not when the CLAIM did — a typo fix and 
 flip from open to dead are the same event to git — and reading it costs one subprocess
 per node.
 """
+import pytest
+
 from datetime import date
 
+
+pytest.importorskip("knoten.mcp_server",
+                    reason="the agent server needs mcp>=2; the rest of the suite "
+                           "does not")
 from knoten.cli import main
 from knoten.core import load, retrieve, today
 from knoten.update import update

@@ -305,8 +305,13 @@ Each tool is a plain function: its name is the tool name, its docstring is the d
 the agent reads, and its annotated signature IS the input schema. There is no second copy
 of any of that to drift — the failure mode being avoided is a hand-written schema that
 quietly stops matching the code it documents. The loop above lives once, in the server's
-`instructions`, rather than being re-asserted by every tool description. And because the `id` becomes a filename and is authored by an LLM, it
-is constrained to kebab-case — an id is not a path.
+`instructions`, rather than being re-asserted by every tool description.
+
+And because the `id` becomes a filename and is authored by an LLM, it is constrained to
+kebab-case — an id is not a path.
+
+`knoten_path` takes `start` / `end`. It took `from` / `to` until the 2.0 migration, where
+the schema is derived from the function signature and `from` is a Python keyword.
 
 ---
 
