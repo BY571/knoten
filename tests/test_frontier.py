@@ -8,12 +8,8 @@ log.
 """
 import pytest
 
-
-pytest.importorskip("knoten.mcp_server",
-                    reason="the agent server needs mcp>=2; the rest of the suite "
-                           "does not")
+from knoten import ops
 from knoten.core import frontier, load
-from knoten import mcp_server as M
 
 DEAD_WITH_OFFER = """\
 id: hyp-dead
@@ -74,11 +70,8 @@ def test_a_gate_that_killed_something_is_not_untested(g):
 
 
 
-def test_the_agent_surface_returns_all_three_buckets(g, monkeypatch):
-    monkeypatch.chdir(g.root)
-    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
-
-    res = M.knoten_frontier()
+def test_the_agent_surface_returns_all_three_buckets(g):
+    res = ops.frontier(g.root)
 
     assert [r["id"] for r in res["open"]] == ["hyp-open"]
     assert res["reopenable"][0]["reopen_if"].startswith("A task where")

@@ -10,14 +10,12 @@ call, and the agent — which is already an LLM — does the semantic matching i
 """
 import pytest
 
+from knoten import ops
+from knoten.core import find_root
 
-pytest.importorskip("knoten.mcp_server",
-                    reason="the agent server needs mcp>=2; the rest of the suite "
-                           "does not")
-from knoten import mcp_server as M
 
 def index(**args):
-    return M.knoten_index(**args)
+    return ops.index(find_root(), **args)
 
 
 @pytest.fixture(autouse=True)

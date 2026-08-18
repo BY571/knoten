@@ -14,7 +14,6 @@ from . import attachments, ops
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook
-from .update import update
 from .validate import _csv, applies, load_config
 
 # Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
@@ -64,6 +63,11 @@ def render_query(payload: dict) -> None:
         print()
     if payload["related"]:
         print("  also: " + ", ".join(payload["related"]))
+    if note := payload.get("note"):
+        # The guard against the one failure knoten exists to prevent (a false
+        # "untested") lives in `note`. Dropping it in prose left an agent reading the
+        # surface SKILL.md tells it to prefer with no caveat at all.
+        print(f"\n  {note}")
 
 
 def query(root, term, as_json=False) -> int:
@@ -95,13 +99,15 @@ def render_index(payload: dict) -> None:
     if payload["truncated"]:
         # Never a silent cap: a truncated list reads as the whole graph.
         print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
+    if note := payload.get("note"):
+        print(f"\n  {note}")
 
 
-def index(root, tags, status, ntype, where, since, limit, as_json=False) -> int:
+def index(root, tags, status, ntype, where, since, limit, query=None, as_json=False) -> int:
     """The whole graph, one line per node. The answer to "have we done anything LIKE
     this?" that keyword search cannot give: a reader — human or agent — judges
     relatedness from the claims themselves."""
-    payload = ops.index(root, tags=tags, status=status, type=ntype,
+    payload = ops.index(root, query=query, tags=tags, status=status, type=ntype,
                         where=_where(where), since=since, limit=limit or None)
     _emit(payload, as_json, render_index)
     return 0
@@ -117,6 +123,8 @@ def render_gates(payload: dict) -> None:
         if rule := g.get("rule"):
             print(f"    the rule : {rule[:160]}")
         print()
+    if note := payload.get("note"):
+        print(f"  {note}")
 
 
 def gates_cmd(root, as_json=False) -> int:
@@ -143,6 +151,8 @@ def render_frontier(payload: dict) -> None:
             print(f"    {n['id']:24}  {n['title']}")
     if not (payload["open"] or payload["reopenable"] or payload["untested_gates"]):
         print("  nothing open, nothing reopenable, every gate has fired.")
+    if note := payload.get("note"):
+        print(f"\n  {note}")
 
 
 def frontier_cmd(root, as_json=False) -> int:
@@ -189,10 +199,11 @@ def render_get(payload: dict) -> None:
             print(f"\n  {label}:")
             for k, v in d.items():
                 print(f"    {k}: {v}")
-    if atts := payload.get("attachments"):
+    if atts := payload.get("attachment_files"):
         print("\n  attachments:")
         for a in atts:
-            print(f"    {a}")
+            sz = f"{a['size_kb']:.1f} KB" if "size_kb" in a else "MISSING"
+            print(f"    {a['path']}  ({sz})")
 
 
 def show(root, nid, as_json=False) -> int:
@@ -204,7 +215,7 @@ def show(root, nid, as_json=False) -> int:
         if as_json:
             print(json.dumps(payload, indent=2, default=str))
         else:
-            print(err, file=sys.stderr)
+            print(f"knoten: {err}", file=sys.stderr)
         return 1
     _emit(payload, as_json, render_get)
     return 0
@@ -275,19 +286,19 @@ def render_update(payload: dict) -> None:
 
 
 def update_cmd(root, nid, status, append, results, links, as_json) -> int:
-    try:
-        now = update(root, nid, status=status, append=_read(append) if append else None,
-                     results=_kv(results), links=_links(links))
-    except GraphError as e:
-        # update() raises on refusal, unlike commit()'s REJECTED dict — caught here so
-        # --json still gets a payload on stdout instead of a bare stderr line.
+    # ops.update() is the ONE shape for both outcomes — this used to build its own
+    # dict here, and a different one in mcp_server.py, and the two shapes drifted.
+    payload = ops.update(root, nid, status=status, append=_read(append) if append else None,
+                         results=_kv(results), links=_links(links))
+    if payload["status"] == "REJECTED":
+        # Same stream contract as `show`/`commit`: --json keeps the payload on stdout
+        # even on failure, so a machine reader never has to check a second stream.
         if as_json:
-            print(json.dumps({"status": "REJECTED", "node": nid, "reason": str(e)},
-                             indent=2, default=str))
+            print(json.dumps(payload, indent=2, default=str))
         else:
-            print(f"knoten: {e}", file=sys.stderr)
+            print(f"knoten: {payload['reason']}", file=sys.stderr)
         return 1
-    _emit({"node": nid, "node_status": now}, as_json, render_update)
+    _emit(payload, as_json, render_update)
     return 0
 
 
@@ -456,6 +467,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("index", help="the whole graph, one line per node")
+    s.add_argument("--query", help="rank the rows by relevance to this, instead of by id")
     s.add_argument("--tag", action="append", help="keep nodes carrying this tag (repeatable)")
     s.add_argument("--status", action="append")
     s.add_argument("--type", action="append")
@@ -463,7 +475,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="keep nodes whose frontmatter KEY is VALUE (repeatable)")
     s.add_argument("--since", metavar="YYYY-MM-DD",
                    help="only nodes created or updated on/after this day")
-    s.add_argument("--limit", type=int, default=0, help="0 = no limit")
+    s.add_argument("--limit", type=int, default=0,
+                   help=f"0 = the default cap ({ops.INDEX_LIMIT}); never uncapped, so a "
+                        f"truncated list can't silently read as the whole graph")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("frontier", help="what should I work on next?")
@@ -531,7 +545,8 @@ def main(argv=None) -> int:
             "frontier": lambda: frontier_cmd(root, args.json),
             "gates":  lambda: gates_cmd(root, args.json),
             "index":  lambda: index(root, args.tag, args.status, args.type,
-                                    args.where, args.since, args.limit, args.json),
+                                    args.where, args.since, args.limit, args.query,
+                                    args.json),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node, args.json),
             "commit": lambda: commit_cmd(root, args.id, args.frontmatter, args.body, args.json),
@@ -541,8 +556,17 @@ def main(argv=None) -> int:
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
         }[args.cmd]()
-    except GraphError as e:
-        print(f"knoten: {e}", file=sys.stderr)
+    except (GraphError, OSError) as e:
+        # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error,
+        # not a traceback — mcp_server.tool already guards this for the same reason.
+        #
+        # Both land here so --json mode gets the SAME contract every other error on
+        # this surface gets: the payload on stdout, never bare prose to stderr, so a
+        # machine reader never has to guess which stream carries the failure.
+        if getattr(args, "json", False):
+            print(json.dumps({"error": str(e)}, indent=2, default=str))
+        else:
+            print(f"knoten: {e}", file=sys.stderr)
         return 1
 
 

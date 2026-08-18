@@ -138,3 +138,33 @@ def test_a_malformed_kv_flag_is_a_graph_error_not_a_crash(graph, monkeypatch, fl
     monkeypatch.chdir(graph.root)
 
     assert main(["update", "hyp-x", flag, bad]) == 1
+
+
+def test_a_typod_input_path_is_an_error_not_a_traceback(graph, monkeypatch, capsys):
+    """`_read()` raises FileNotFoundError for a bad --frontmatter/--body/--append path.
+    A typo'd path is ordinary user error, not something `main()` should let escape as a
+    traceback with no exit-code contract."""
+    graph.rules(RULES)
+    monkeypatch.chdir(graph.root)
+
+    code = main(["commit", "hyp-x", "--frontmatter", "/nonexistent/fm",
+                "--body", "/nonexistent/body"])
+    out, err = capsys.readouterr()
+
+    assert code == 1
+    assert out == ""
+    assert "Traceback" not in err
+    assert err.startswith("knoten: ")
+
+
+def test_a_typod_input_path_in_json_mode_is_a_payload_not_prose(graph, monkeypatch, capsys):
+    graph.rules(RULES)
+    monkeypatch.chdir(graph.root)
+
+    code = main(["commit", "hyp-x", "--frontmatter", "/nonexistent/fm",
+                "--body", "/nonexistent/body", "--json"])
+    out, err = capsys.readouterr()
+
+    assert code == 1
+    assert err == ""
+    assert json.loads(out)["error"]

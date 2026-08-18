@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .core import (GATE_SECTIONS, VERDICT, Node, frontier as _frontier,
+from .core import (GATE_SECTIONS, VERDICT, GraphError, Node, frontier as _frontier,
                    gates as _gates, load, retrieve, section, shortest_path)
+from .update import update as _update_node
 from .validate import check, load_config
 
 # A row is ~45 tokens once JSON key overhead is counted, so 200 rows is ~9k — readable
@@ -97,8 +98,8 @@ def query(root: Path, term: str) -> dict:
            "related": [n.id for n in hits if n.status not in VERDICT]}
     if out["truncated"]:
         out["note"] = (f"Showing the {QUERY_LIMIT} closest of {len(claims)} matching "
-                       f"claims. Use knoten_index for the full picture in one line per "
-                       f"node.")
+                       f"claims. List the whole graph, one line per node, and read it "
+                       f"yourself for the full picture.")
     elif claims:
         out["note"] = ("Claims marked DEAD or RETRACTED have already been tested. Read "
                        "'what_would_reopen_this' before re-running them.")
@@ -107,8 +108,9 @@ def query(root: Path, term: str) -> dict:
         # "untested" here without that caveat is how an agent re-runs a dead experiment —
         # the exact failure this tool exists to prevent.
         out["note"] = ("No keyword match. This is NOT proof the idea is untested — a "
-                       "differently-worded node will not match. Call knoten_index and "
-                       "read the claims yourself before concluding it is new.")
+                       "differently-worded node will not match. List the whole graph, "
+                       "one line per node, and read the claims yourself before "
+                       "concluding it is new.")
     return out
 
 
@@ -116,8 +118,23 @@ def get(root: Path, nid: str) -> dict:
     nodes = load(root)
     if not (n := nodes.get(nid)):
         return {"error": f"no node '{nid}'", "available": sorted(nodes)}
-    return {**summarise(n), "frontmatter": n.frontmatter,
-            "links": n.links, "backlinks": n.backlinks, "body": n.body}
+    out = {**summarise(n), "frontmatter": n.frontmatter,
+           "links": n.links, "backlinks": n.backlinks, "body": n.body}
+    if n.attachments:
+        # A path string alone can't tell a reader whether the file is still there —
+        # `show` used to print size / MISSING from the filesystem directly; additive
+        # here so both surfaces (not just the CLI) can see it.
+        details = []
+        for a in n.attachments:
+            p = root / "attachments" / nid / a
+            row = {"path": f"attachments/{nid}/{a}"}
+            if p.exists():
+                row["size_kb"] = round(p.stat().st_size / 1024, 1)
+            else:
+                row["missing"] = True
+            details.append(row)
+        out["attachment_files"] = details
+    return out
 
 
 def gates(root: Path) -> dict:
@@ -152,3 +169,21 @@ def path(root: Path, start: str, end: str) -> dict:
     return {"path": [{"node": nid, "via": rel} if rel else {"node": nid}
                      for nid, rel in p],
             "hops": len(p) - 1}
+
+
+def update(root: Path, nid: str, status: str | None = None, results: dict | None = None,
+          links: list | None = None, append: str | None = None) -> dict:
+    """Move a node through its lifecycle, or report why it was refused — ONE shape for
+    both outcomes. Update used to be built twice: the CLI's success omitted `status`
+    entirely and its refusal had no `hint`, while MCP's success carried `status:
+    "UPDATED"` and its refusal did. That drift is the exact bug this module exists to
+    prevent, so this mirrors `commit()`'s convention instead of inventing a third shape.
+    """
+    try:
+        now = _update_node(root, nid, status=status, results=results,
+                           links=links, append=append)
+    except GraphError as e:
+        return {"status": "REJECTED", "node": nid, "reason": str(e),
+                "hint": "Fix it and update again. The gate is the point."}
+    return {"status": "UPDATED", "node": nid, "node_status": now,
+            "next": "git add + commit to version this."}

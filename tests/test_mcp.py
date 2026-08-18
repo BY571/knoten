@@ -124,7 +124,10 @@ def test_query_caps_its_own_response_and_says_so(cwd):
     assert res["total"] == 60
     assert len(res["claims"]) < 60
     assert res["truncated"] is True
-    assert "knoten_index" in res["note"]
+    # Surface-neutral: one dict serves the CLI and MCP, so its prose must not name
+    # either surface's command by name — describe the action instead.
+    assert "knoten_index" not in res["note"]
+    assert "whole graph" in res["note"]
 
 
 def test_query_ranks_the_closest_claim_first(cwd):

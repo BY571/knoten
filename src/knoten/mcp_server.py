@@ -53,7 +53,6 @@ except ImportError as e:  # pragma: no cover
 from . import attachments, ops
 from .commit import commit as commit_node
 from .core import ID_RE, GraphError, find_root
-from .update import update as update_node
 
 INSTRUCTIONS = """\
 knoten is a research graph that remembers what did NOT work. Each node is a claim; a dead
@@ -247,14 +246,8 @@ def knoten_update(
     supersede the node for that). VALIDATES FIRST and REFUSES on rule violation, same as
     knoten_commit.
     """
-    try:
-        now = update_node(_root(), id, status=status, results=results,
-                          links=links, append=append)
-    except GraphError as e:
-        return {"status": "REJECTED", "node": id, "reason": str(e),
-                "hint": "Fix it and update again. The gate is the point."}
-    return {"status": "UPDATED", "node": id, "node_status": now,
-            "next": "git add + commit to version this."}
+    return ops.update(_root(), id, status=status, results=results,
+                      links=links, append=append)
 
 
 # ------------------------------------------------------------ 6. leave the evidence
