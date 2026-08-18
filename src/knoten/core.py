@@ -39,6 +39,14 @@ GENERATED = set(INVERSE.values())
 # The claim lifecycle. A node with any other status is not a claim (a method, a source).
 VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 
+# The three conventions `frontier` reads. They are conventions, not core vocabulary — a
+# graph that names things differently gets an empty bucket, not a wrong answer. They are
+# named here rather than buried so that stays obvious.
+OPEN = "open"
+REOPEN_SECTION = "What would reopen this"
+GATE_TYPE = "method"
+GATE_BACKLINKS = {"kn:gateKilled", "kn:gateSurvivedBy"}
+
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
 # An id becomes a filename, so anything else is a path traversal. Go through node_path()
@@ -371,3 +379,24 @@ def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str
                 seen.add(nxt)
                 q.append(p + [(nxt, rel)])
     return None
+
+
+def frontier(nodes: dict[str, Node]) -> dict:
+    """What is worth doing next, in three buckets.
+
+    `## What would reopen this` is the standing offer SPEC §5 insists on, and until now
+    the only way to act on one was to re-read every post-mortem and notice the world had
+    changed. This does not try to decide whether a condition is *met* — that is a
+    judgement, and encoding it as a predicate would be either trivially wrong or an
+    ontology project. It presents the offers cheaply and lets the reader judge, the same
+    bargain `retrieve` makes with an index.
+    """
+    ordered = sorted(nodes.values(), key=lambda n: n.id)
+    return {
+        "open": [n for n in ordered if n.status == OPEN],
+        "reopenable": [(n, offer) for n in ordered
+                       if n.status in ("dead", "retracted")
+                       and (offer := section(n.body, REOPEN_SECTION))],
+        "untested_gates": [n for n in ordered if n.type == GATE_TYPE
+                           and not {b["rel"] for b in n.backlinks} & GATE_BACKLINKS],
+    }

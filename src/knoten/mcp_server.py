@@ -30,8 +30,8 @@ except ImportError as e:  # pragma: no cover
 
 from . import attachments
 from .update import update as update_node
-from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, node_path,
-                   parse_text, retrieve, section, shortest_path)
+from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, frontier,
+                   node_path, parse_text, retrieve, section, shortest_path)
 from .core import load as load_graph
 from .validate import check, load_config
 
@@ -103,6 +103,16 @@ async def list_tools() -> list[Tool]:
                                          "{\"cause\": [\"weak_baseline\"]}"},
                 "limit": {"type": "integer", "description": f"default {INDEX_LIMIT}"},
             }},
+        ),
+        Tool(
+            name="knoten_frontier",
+            description=(
+                "What is worth doing next: claims left OPEN, dead claims that stated what "
+                "would reopen them, and gates no claim has ever been through. CALL THIS "
+                "WHEN CHOOSING WHAT TO WORK ON. A dead end with a standing offer is a "
+                "cheaper experiment than a new idea, because the design is already "
+                "written down."),
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="knoten_query",
@@ -265,6 +275,17 @@ async def _dispatch(name: str, args: dict) -> list[TextContent]:
                            f"or pass a query to rank by relevance, before concluding "
                            f"anything about what is NOT here.")
         return ok(out)
+
+    if name == "knoten_frontier":
+        f = frontier(nodes)
+        return ok({
+            "open": [{"id": n.id, "title": n.title} for n in f["open"]],
+            "reopenable": [{"id": n.id, "title": n.title, "reopen_if": offer}
+                           for n, offer in f["reopenable"]],
+            "untested_gates": [{"id": n.id, "title": n.title} for n in f["untested_gates"]],
+            "note": ("A reopenable claim states its own condition. Judge whether it holds "
+                     "now — knoten does not, because that is the research."),
+        })
 
     if name == "knoten_query":
         hits = retrieve(nodes, args["query"])

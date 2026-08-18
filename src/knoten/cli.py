@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 from . import attachments
-from .core import (ID_RE, VERDICT, GraphError, find_root, load, node_path, retrieve,
-                   section, shortest_path)
+from .core import (ID_RE, VERDICT, GraphError, find_root, frontier, load, node_path,
+                   retrieve, section, shortest_path)
 from .hook import install as install_hook
 from .validate import _csv, applies, check, load_config
 
@@ -85,6 +85,28 @@ def index(root, tags, status, ntype, where, limit) -> int:
     if len(shown) < len(hits):
         # Never a silent cap: a truncated list reads as the whole graph.
         print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
+    return 0
+
+
+def frontier_cmd(root) -> int:
+    """The one screen that answers "what now?". Kept short on purpose — a frontier you
+    have to scroll is a frontier nobody reads."""
+    f = frontier(load(root))
+    if f["open"]:
+        print("  OPEN — started, never settled")
+        for n in f["open"]:
+            print(f"    {n.id:24}  {n.title}")
+    if f["reopenable"]:
+        print("\n  REOPENABLE — died, but said what would bring them back")
+        for n, offer in f["reopenable"]:
+            print(f"    {n.id:24}  {n.title}")
+            print(f"      reopen if : {offer[:120]}…")
+    if f["untested_gates"]:
+        print("\n  UNTESTED GATES — no claim has been through them")
+        for n in f["untested_gates"]:
+            print(f"    {n.id:24}  {n.title}")
+    if not any(f.values()):
+        print("  nothing open, nothing reopenable, every gate has fired.")
     return 0
 
 
@@ -300,6 +322,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="keep nodes whose frontmatter KEY is VALUE (repeatable)")
     s.add_argument("--limit", type=int, default=0, help="0 = no limit")
 
+    sub.add_parser("frontier", help="what should I work on next?")
+
     s = sub.add_parser("path", help="how did we get from A to B?")
     s.add_argument("a")
     s.add_argument("b")
@@ -334,6 +358,7 @@ def main(argv=None) -> int:
         return {
             "query":  lambda: query(root, args.term),
             "path":   lambda: path(root, args.a, args.b),
+            "frontier": lambda: frontier_cmd(root),
             "index":  lambda: index(root, args.tag, args.status, args.type,
                                     args.where, args.limit),
             "new":    lambda: new(root, args.type, args.id, args.status),

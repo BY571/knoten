@@ -75,6 +75,7 @@ pip install -e .                  # add ".[mcp]" for the agent server
 knoten init my-topic              # a new graph (it's a folder)
 knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
 knoten query <term>               # has this been tried?
+knoten frontier                   # what should I work on next?
 knoten index                      # the whole graph, one line per node
 knoten index --tag decoding       # ...narrowed to one corner of it
 knoten show <node>                # edges, results, attachments
@@ -222,6 +223,32 @@ claim rather than a whole node: on a 500-node graph a broad query returned ~83k 
 the same graph's index is ~9k, and one tag narrows it to ~2.5k. `knoten index --status open`
 answers a third question the graph could not answer at all before: **what is still open?**
 
+## What now?
+
+A graph that only answers *"has this been tried?"* is a filing cabinet. `frontier` is the
+one screen that answers *"what next?"*:
+
+```
+$ knoten frontier
+
+  OPEN — started, never settled
+    hyp-batch-schedule        Does the LR schedule interact with batch size?
+
+  REOPENABLE — died, but said what would bring them back
+    hyp-self-consistency      Self-consistency (sample 5, majority vote) beats greedy
+      reopen if : A task where the majority-vote aggregation is doing real work…
+
+  UNTESTED GATES — no claim has been through them
+    method-holdout-period     Gate: hold out the last 20%
+```
+
+A dead end with a standing offer is a **cheaper experiment than a new idea**, because the
+design is already written down — that is what `## What would reopen this` was for, and
+until now the only way to act on one was to re-read every post-mortem.
+
+knoten does not decide whether a condition is *met*. That is a judgement, and it is the
+research. It puts the offers where you cannot walk past them.
+
 ## Two readers, one file
 
 **Humans** skim the prose and get the story: what was tried, what killed it, what's
@@ -252,6 +279,7 @@ pip install -e ".[mcp]"
 ```
 
 ```
+knoten_frontier()                                    ← what should I work on next?
 knoten_index(tags=["decoding"])                      ← the graph, one line per node
 knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
 knoten_get("hyp-self-consistency")                   ← the full node, post-mortem included
