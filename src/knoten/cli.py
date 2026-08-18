@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from . import attachments
-from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, find_root, frontier, gates,
+from .core import (GATE_SECTIONS, ID_RE, LOCK, VERDICT, GraphError, find_root, frontier, gates,
                    load, node_path, retrieve, section, shortest_path, today)
 from .hook import install as install_hook
 from .validate import _csv, applies, check, load_config
@@ -298,6 +298,8 @@ def init(name) -> int:
         raise GraphError(f"{root} already exists")
     (root / "nodes").mkdir(parents=True)
     (root / "graph.yaml").write_text(TEMPLATE_GRAPH.format(name=name), encoding="utf-8")
+    # knoten's own write lock. Nobody should have to see it in `git status`.
+    (root / ".gitignore").write_text(f"{LOCK}\n", encoding="utf-8")
     (root / "nodes" / "method-example-gate.md").write_text(TEMPLATE_METHOD, encoding="utf-8")
     print(f"created graph '{name}'\n")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")

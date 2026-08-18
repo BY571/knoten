@@ -16,8 +16,8 @@ from pathlib import Path
 
 import yaml
 
-from .core import (FM_RE, GraphError, backlink, load, node_path, parse_text, split,
-                   today)
+from .core import (FM_RE, GraphError, backlink, graph_lock, load, node_path, parse_text,
+                   split, today, write_atomic)
 from .validate import check
 
 # A key we re-emit; everything else keeps its original text, comments included.
@@ -60,6 +60,11 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
 
     Returns the status the node now carries.
     """
+    with graph_lock(root):
+        return _update(root, nid, status, results, links, append)
+
+
+def _update(root: Path, nid: str, status, results, links, append) -> str:
     nf = node_path(root, nid)                  # rejects a traversal before it is a path
     if not nf.exists():
         raise GraphError(f"no node '{nid}'")
@@ -97,5 +102,5 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
     if errs := [e for e in check(nodes, root) if e.node == nid]:
         raise GraphError("; ".join(f"[{e.rule}] {e.message}" for e in errs))
 
-    nf.write_text(out, encoding="utf-8")
+    write_atomic(nf, out)
     return candidate.status

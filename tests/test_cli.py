@@ -271,3 +271,12 @@ rules:
     main(["new", "hypothesis", "hyp-dead", "--status", "dead"])
 
     assert "cause: TODO   # one of: no_signal, weak_baseline" in graph.read("hyp-dead")
+
+
+def test_init_ignores_the_lock_file(tmp_path, monkeypatch):
+    """The write lock lives in the graph root. Without this, every user's first
+    `git status` shows a file knoten created and they did not."""
+    monkeypatch.chdir(tmp_path)
+    main(["init", "my-topic"])
+
+    assert ".knoten.lock" in (tmp_path / "my-topic" / ".gitignore").read_text()

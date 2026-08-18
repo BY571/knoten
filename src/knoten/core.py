@@ -9,13 +9,23 @@ A node that silently vanishes leaves the graph reporting itself healthy.
 from __future__ import annotations
 
 import math
+import os
 import re
+import tempfile
+from contextlib import contextmanager
 from datetime import date
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+try:                                          # POSIX only; Windows falls back to no lock
+    import fcntl
+except ImportError:                           # pragma: no cover
+    fcntl = None
+
+LOCK = ".knoten.lock"
 
 
 class GraphError(Exception):
@@ -54,6 +64,41 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
 # the graph, because only the MCP surface (where the id comes from an LLM) was guarded.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+@contextmanager
+def graph_lock(root: Path):
+    """One writer at a time, for the read-modify-write windows.
+
+    `attach` reads a node's frontmatter, copies files, then rewrites the list. Two agents
+    doing that at once lost one of the two lists — and the file stayed parseable, so
+    `validate` passed while the frontmatter no longer mentioned a file on disk. Parallel
+    agents are the obvious way to scale a research loop, and this is the step most likely
+    to happen at the same moment.
+    """
+    if fcntl is None:                         # pragma: no cover
+        yield
+        return
+    with open(root / LOCK, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, then rename. A reader either sees the
+    old node or the new one — never the half-written one, which does not parse and takes
+    the whole graph down with it, since load() raises rather than skips."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def today() -> str:

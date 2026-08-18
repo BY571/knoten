@@ -32,8 +32,8 @@ except ImportError as e:  # pragma: no cover
 from . import attachments
 from .update import update as update_node
 from .core import (GATE_SECTIONS, ID_RE, VERDICT, GraphError, Node, backlink, find_root,
-                   fields, frontier, gates, node_path, parse_text, retrieve, section,
-                   shortest_path, today)
+                   fields, frontier, gates, graph_lock, node_path, parse_text, retrieve,
+                   section, shortest_path, today, write_atomic)
 from .core import load as load_graph
 from .validate import check, load_config
 
@@ -253,7 +253,7 @@ def _commit(root: Path, nodes: dict[str, Node], args: dict) -> dict:
                 "violations": [{"rule": e.rule, "message": e.message} for e in errs],
                 "hint": "Fix the violations and commit again. The gate is the point."}
 
-    path.write_text(text, encoding="utf-8")
+    write_atomic(path, text)
     out = {"status": "COMMITTED", "node": nid, "path": f"nodes/{nid}.md",
            "graph_size": len(nodes) + 1,
            "next": "git add + commit to version this."}
@@ -389,7 +389,8 @@ async def _dispatch(name: str, args: dict) -> list[TextContent]:
                    "links": n.links, "backlinks": n.backlinks, "body": n.body})
 
     if name == "knoten_commit":
-        return ok(_commit(root, nodes, args))
+        with graph_lock(root):
+            return ok(_commit(root, nodes, args))
 
     if name == "knoten_update":
         try:
