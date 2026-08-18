@@ -1,7 +1,14 @@
-"""MCP server — the reason this project exists.
+"""MCP server — the surface for clients without a shell. The CLI is the primary agent
+surface (see SKILL.md); every tool here delegates to `ops`, `commit` or `update`.
+
+That used to be reversed: this docstring once called MCP "the reason this project
+exists." It loads ~2,340 tokens of schema and instructions into every session whether the
+agent touches the graph or not, versus ~304 for `knoten --help` — and only when asked. A
+client with a shell should use the CLI. This server exists for the one that can't.
 
 A knowledge base that depends on someone REMEMBERING to write to it will be empty in six
-months. So make the graph reachable from inside the work, not alongside it:
+months. So make the graph reachable from inside the work, not alongside it — that holds
+for either surface:
 
     knoten_index()        BEFORE starting   -> don't redo dead work
     knoten_commit(node)   AFTER finishing   -> the graph writes itself

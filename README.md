@@ -70,7 +70,7 @@ $ knoten query "self-consistency"
 ## Use it
 
 ```bash
-pip install -e .                  # add ".[mcp]" for the agent server
+pip install -e .                  # the CLI is the agent surface; add ".[mcp]" only for shell-less clients
 
 knoten init my-topic              # a new graph (it's a folder)
 
@@ -85,6 +85,8 @@ knoten gates                      # what must a claim survive here?
 
 # recording what happened
 knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
+knoten commit <node> --frontmatter <f> --body <f>   # file a claim, gate-checked before it touches disk
+knoten update <node> --status dead --append <f>     # move a node through its lifecycle, append to it
 knoten attach <node> <file>...    # attach a script, plot or notebook
 knoten detach <node> <file>
 
@@ -93,6 +95,9 @@ knoten validate                   # enforce this graph's own rules
 knoten hook                       # make `git commit` refuse a broken graph
 knoten path A B                   # how did we get from A to B?
 ```
+
+Every read command above also takes `--json`; prose is the default because it's cheaper
+to read (see "For coding agents" below), `--json` is there for scripts and nested data.
 
 Each graph declares its own rules in `graph.yaml`. `knoten` knows nothing about your
 field. It enforces whatever *you* said matters. The example graph requires every claim to
@@ -288,10 +293,85 @@ prose.
 
 The same file serves both. That's the whole design.
 
-## For coding agents (MCP)
+## For coding agents
 
-Point Claude Code, or any MCP client, at a graph. It then **accumulates knowledge about a
-topic across sessions** instead of starting cold every time:
+`SKILL.md`, at the repo root, is how an agent learns knoten — point Claude Code, or
+anything else with a shell, at it. The loop is the CLI itself, and it **accumulates
+knowledge about a topic across sessions** instead of starting cold every time:
+
+```bash
+knoten frontier                                                 # 1. what should I work on next?
+knoten index --tag decoding                                     # 2. anything LIKE this been tried?
+knoten query "self-consistency"                                 #    ...or by keyword, if it has a name
+knoten show hyp-self-consistency                                # 3. the full node, post-mortem included
+knoten gates                                                    # 4. what must the result survive?
+knoten commit hyp-idea --frontmatter fm.yaml --body body.md     # 5. file it, pass or fail
+knoten update hyp-idea --status dead --append postmortem.md     #    ...or close one opened earlier
+knoten attach hyp-idea script.py plot.png                       # 6. and the code that proves it
+knoten path A B                                                 # how did we get from A to B?
+```
+
+Output is prose by default — read it. `--json` exists on every read command above, for
+scripts and nested data, but it costs more to read than it saves: the same 55-node graph
+is ~1,185 tokens as columnar prose against ~2,551 as JSON (21 vs 46 tokens/node — 2.2x).
+Reach for `--json`; don't default to it.
+
+`--frontmatter`, `--body` and `--append` each take a file path or `-` for stdin.
+`knoten update` also takes `--result key=value` (repeatable, records a result) and
+`--link rel=to` (repeatable, adds an edge — e.g. the gate a claim just survived):
+
+```bash
+knoten update hyp-idea --status alive --link kn:survivedGate=method-compute-matched-baseline
+```
+
+Exit code is the signal: `0` succeeded, `1` means refused or violated a rule. A refusal
+is the feature — read the message, fix the node, run it again.
+
+An experiment that takes a week does not finish in the session that started it. So the
+agent can open a hypothesis as `open` (`knoten index --status open` shows what was
+started and never finished), come back later, and close it. `knoten update` appends and
+moves the status; it cannot rewrite prose or change a result that was already recorded,
+and it runs the same gate `knoten commit` does — so a claim still cannot become `alive`
+without citing something it survived. A correction to a claim is still a new node. Git
+holds the before and after.
+
+The agent reads the graph before running an experiment and writes back when it's done,
+**including when the experiment fails.** A dead hypothesis with a documented cause of death
+is the most valuable node in the graph, and the one that would otherwise be lost. It writes
+back the *evidence* too: `knoten attach` puts the script it ran and the plot it made into
+the node — a claim you can't re-run is a claim nobody trusts in six months.
+
+It also tells the agent when it is about to file the same question twice. A loop running
+for weeks *will* re-propose an idea it already settled, worded differently, under a new
+id — so `knoten commit` reports settled claims the new node resembles, and refuses one
+that records a shiny result citing no test it survived:
+
+```json
+{"status": "COMMITTED",
+ "similar": [{"id": "hyp-self-consistency", "verdict": "DEAD",
+              "why_it_died": "The gain was compute, not method…"}],
+ "warning": "This resembles 1 settled claim. If it is the same question, supersede or
+             retract that node rather than leaving two answers in the graph."}
+```
+
+```json
+{"status": "REJECTED",
+ "violations": [{"rule": "live-claims-must-cite-their-gates",
+                 "message": "An unchallenged claim is not a finding, it is a hope."}]}
+```
+
+`ops.py` holds the one implementation behind every read — index, query, frontier, gates,
+show, validate, path — as a plain function returning a dict. The CLI renders that dict as
+prose or dumps it with `--json`; `commit` and `update` are shared functions too. There is
+one behavior to keep correct, not two that can drift apart.
+
+### Clients without a shell (MCP)
+
+Not every agent has Bash. For a chat UI wired to MCP servers rather than a coding agent,
+the graph is still reachable — just at a price the CLI doesn't pay: MCP loads ~2,340
+tokens of tool schema and instructions into every session whether the agent touches the
+graph or not (1,928 of schema + 412 of instructions), where `knoten --help` costs ~304,
+and only when asked. Use the CLI and `SKILL.md` above if the client can run one.
 
 ```bash
 pip install -e ".[mcp]"      # needs mcp 2.x
@@ -319,55 +399,9 @@ knoten_validate()                                    ← run the graph's own rul
 
 The server hands that order to the client at connect time as its `instructions`, so the
 agent is told how the loop fits together once, rather than guessing it from ten tool
-descriptions.
-
-An experiment that takes a week does not finish in the session that started it. So the
-agent can open a hypothesis as `open`, come back later, and close it:
-
-```
-knoten_index(status=["open"])          ← what did we start and never finish?
-knoten_update("hyp-bigger-batch", status="dead",
-              append="## Why it died\n…\n## What would reopen this\n…")
-```
-
-`knoten_update` appends and moves the status; it cannot rewrite prose or change a result
-that was already recorded, and it runs the same gate `knoten_commit` does — so a claim
-still cannot become `alive` without citing something it survived. A correction to a claim
-is still a new node. Git holds the before and after.
-
-The agent reads the graph before running an experiment and writes back when it's done,
-**including when the experiment fails.** A dead hypothesis with a documented cause of death
-is the most valuable node in the graph, and the one that would otherwise be lost.
-
-It writes back the *evidence* too, not just the prose: `knoten_attach` puts the script it
-ran and the plot it made into the node. A claim you can't re-run is a claim nobody trusts
-in six months — so the agent that killed a hypothesis leaves behind the thing that killed
-it, ready for the next agent to run.
-
-It also tells the agent when it is about to file the same question twice. A loop running
-for weeks *will* re-propose an idea it already settled, worded differently, under a new
-id — so `knoten_commit` reports settled claims the new node resembles:
-
-```json
-{"status": "COMMITTED",
- "similar": [{"id": "hyp-self-consistency", "verdict": "DEAD",
-              "why_it_died": "The gain was compute, not method…"}],
- "warning": "This resembles 1 settled claim. If it is the same question, supersede or
-             retract that node rather than leaving two answers in the graph."}
-```
-
-A warning, never a block: a compute-matched rerun of a dead idea *is* a new claim, and
-that is the entire point of a gate.
-
-`knoten_commit` **validates before writing and refuses on violation** — the candidate node
-is parsed and checked in memory, so an invalid node never reaches your filesystem. An agent
-cannot record a shiny result that cites no test it survived:
-
-```json
-{"status": "REJECTED",
- "violations": [{"rule": "live-claims-must-cite-their-gates",
-                 "message": "An unchallenged claim is not a finding, it is a hope."}]}
-```
+descriptions. Every tool here is a thin wrapper over the same `ops` / `commit` / `update`
+functions the CLI calls — same gates, same refusals, same JSON shown above, just
+serialised as a tool result instead of printed as prose.
 
 ## Why bother
 
@@ -400,7 +434,7 @@ is told it was retracted — not just what the claim said:
 
 See `examples/llm-research/` for a worked graph and [SPEC.md](SPEC.md) for the design.
 
-MIT. One runtime dependency: PyYAML. The agent server additionally needs the `mcp` SDK
+MIT. One runtime dependency: PyYAML. The MCP fallback additionally needs the `mcp` SDK
 (2.x — `pip install -U 'knoten[mcp]'` if you are coming from an older knoten). No
 framework, no database, no build step: a handful of small modules you can read in one
 sitting.
