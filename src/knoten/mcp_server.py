@@ -29,6 +29,7 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 from . import attachments
+from .update import update as update_node
 from .core import (ID_RE, VERDICT, GraphError, Node, backlink, find_root, node_path,
                    parse_text, retrieve, section, shortest_path)
 from .core import load as load_graph
@@ -137,6 +138,33 @@ async def list_tools() -> list[Tool]:
                          "description": "Markdown. Dead/retracted nodes MUST contain "
                                         "'## Why it died' and '## What would reopen this'."},
             }, "required": ["id", "frontmatter", "body"]},
+        ),
+        Tool(
+            name="knoten_update",
+            description=(
+                "Move a node through its lifecycle and append to it: open -> alive / dead "
+                "/ retracted. CALL THIS WHEN AN EXPERIMENT YOU OPENED FINISHES, especially "
+                "when it fails — a hypothesis left 'open' forever is a ghost on every "
+                "future frontier. Appends only: it cannot rewrite prose or overwrite a "
+                "result that was already recorded (retract or supersede the node for "
+                "that). VALIDATES FIRST and REFUSES on rule violation, same as "
+                "knoten_commit."),
+            inputSchema={"type": "object", "properties": {
+                "id": {"type": "string"},
+                "status": {"type": "string",
+                           "description": "the new status, e.g. dead. Must be one the "
+                                          "graph declares."},
+                "append": {"type": "string",
+                           "description": "markdown appended to the body — this is where "
+                                          "'## Why it died' and '## What would reopen "
+                                          "this' go."},
+                "results": {"type": "object",
+                            "description": "result keys to add. An existing key cannot be "
+                                           "changed to a different value."},
+                "links": {"type": "array", "items": {"type": "object"},
+                          "description": "edges to add, e.g. "
+                                         "[{rel: kn:killedByGate, to: method-x}]"},
+            }, "required": ["id"]},
         ),
         Tool(
             name="knoten_attach",
@@ -266,6 +294,17 @@ async def _dispatch(name: str, args: dict) -> list[TextContent]:
 
     if name == "knoten_commit":
         return ok(_commit(root, nodes, args))
+
+    if name == "knoten_update":
+        try:
+            now = update_node(root, args["id"], status=args.get("status"),
+                              results=args.get("results"), links=args.get("links"),
+                              append=args.get("append"))
+        except GraphError as e:
+            return ok({"status": "REJECTED", "node": args["id"], "reason": str(e),
+                       "hint": "Fix it and update again. The gate is the point."})
+        return ok({"status": "UPDATED", "node": args["id"], "node_status": now,
+                   "next": "git add + commit to version this."})
 
     if name == "knoten_attach":
         nid = args["id"]

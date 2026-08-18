@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from knoten.core import load
 from knoten.mcp_server import call_tool
 
 pytestmark = pytest.mark.anyio
@@ -142,3 +143,38 @@ async def test_query_ranks_the_closest_claim_first(cwd):
         "knoten_query", {"query": "majority vote sampling"}))[0].text)
 
     assert res["claims"][0]["id"] == "hyp-near"
+
+
+# ---------------------------------------------------------------- knoten_update
+
+
+async def update(**args):
+    return json.loads((await call_tool("knoten_update", args))[0].text)
+
+
+async def test_the_loop_can_close_what_it_opened(cwd):
+    """open -> run -> record the verdict. Step three had no tool at all: knoten_commit
+    refuses to overwrite, so an agent could open a hypothesis and never close it."""
+    cwd.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# A claim\n")
+
+    res = await update(id="hyp-x", status="dead", append="## Why it died\nnoise\n")
+
+    assert res["status"] == "UPDATED"
+    assert res["node_status"] == "dead"
+    assert load(cwd.root)["hyp-x"].status == "dead"
+
+
+async def test_an_update_that_breaks_a_rule_comes_back_as_json(cwd):
+    """The gate survives the new write path, and an MCP server answers rather than
+    exploding."""
+    cwd.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead", "# A claim\n")
+
+    res = await update(id="hyp-x", status="alive")
+
+    assert res["status"] == "REJECTED"
+    assert "live-claims-must-cite-their-gates" in json.dumps(res)
+    assert load(cwd.root)["hyp-x"].status == "dead"
+
+
+async def test_updating_an_unknown_node_is_reported_not_raised(cwd):
+    assert (await update(id="hyp-nope", status="dead"))["status"] == "REJECTED"

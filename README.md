@@ -242,10 +242,25 @@ knoten_index(tags=["decoding"])                      ← the graph, one line per
 knoten_query("has anyone tried self-consistency?")   ← BEFORE it starts work
 knoten_get("hyp-self-consistency")                   ← the full node, post-mortem included
 knoten_commit(node)                                  ← AFTER it finishes, pass or fail
+knoten_update(node, status="dead", append=…)         ← or CLOSE one it opened earlier
 knoten_attach(node, [script, plot])                  ← and the code that proves it
 knoten_path(a, b)                                    ← how did we get from A to B?
 knoten_validate()                                    ← run the graph's own rules
 ```
+
+An experiment that takes a week does not finish in the session that started it. So the
+agent can open a hypothesis as `open`, come back later, and close it:
+
+```
+knoten_index(status=["open"])          ← what did we start and never finish?
+knoten_update("hyp-bigger-batch", status="dead",
+              append="## Why it died\n…\n## What would reopen this\n…")
+```
+
+`knoten_update` appends and moves the status; it cannot rewrite prose or change a result
+that was already recorded, and it runs the same gate `knoten_commit` does — so a claim
+still cannot become `alive` without citing something it survived. A correction to a claim
+is still a new node. Git holds the before and after.
 
 The agent reads the graph before running an experiment and writes back when it's done,
 **including when the experiment fails.** A dead hypothesis with a documented cause of death

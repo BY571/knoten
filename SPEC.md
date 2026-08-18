@@ -87,6 +87,12 @@ open ──► alive ──────► superseded
    └───► retracted     (WE WERE WRONG — the most valuable node type)
 ```
 
+Every arrow above is walkable from the agent surface via `knoten_update`, which appends
+and moves the status but cannot rewrite a claim. Immutability protects **what was
+claimed**, never the status field — the status field *is* the lifecycle, and git already
+holds the before and after (§7). Without this an agent could open a hypothesis and never
+close it, leaving a settled question `open` on every future frontier.
+
 `retracted` is first-class. Three claims in the source session were withdrawn. **A
 graph that records only conclusions and never corrections lies to you in six months.**
 The retracted node *stays*, with its post-mortem attached.
@@ -257,6 +263,7 @@ memory files.
 | `knoten_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death |
 | `knoten_get(id)` | full node, including the post-mortem |
 | `knoten_commit(node)` | append a node (validates first; **rejects on rule violation**) |
+| `knoten_update(id, …)` | move a node's status and append to it — the lifecycle in §3, walkable |
 | `knoten_path(a, b)` | show the research path — how did we get from A to B? |
 | `knoten_validate()` | run the graph's own declared rules |
 
