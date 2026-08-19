@@ -70,7 +70,7 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
 # An id becomes a filename, so anything else is a path traversal. Go through node_path()
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
-# the graph, because only the MCP surface (where the id comes from an LLM) was guarded.
+# the graph: only one surface guarded the id, and it was not the one people used.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
@@ -272,8 +272,8 @@ def backlink(nodes: dict[str, Node]) -> dict[str, Node]:
 
 
 # ---------------------------------------------------------------------------------
-# Shared by BOTH surfaces. These lived twice — once in cli.py, once in mcp_server.py —
-# and drifted: the CLI's path printed relation labels while the MCP's did not, and a
+# Shared. These lived twice — once in cli.py, once in the MCP server that has since been
+# removed — and drifted: one path printed relation labels and the other did not, and a
 # search fix landed in one copy and not the other.
 
 def find_root(start: Path | None = None) -> Path:
@@ -400,7 +400,7 @@ def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
     Tokens are weighted by idf, so a word in every node counts for nothing without
     anybody having to list it, and a rare one dominates.
 
-    This is the ONE retrieval seam: `query`, `index` and the MCP tools all come through
+    This is the ONE retrieval seam: `query`, `index` and `frontier` all come through
     here, so a semantic backend replaces this body and nothing above it changes.
     """
     pool = [n for n in nodes.values() if _passes(n, tags, status, type, where, since)]

@@ -1,9 +1,9 @@
 """Every question the graph answers, as a dict. One implementation; the CLI renders it,
---json dumps it, the MCP tool serialises it. These lived twice before and drifted."""
+--json dumps it. These lived twice before — once per surface — and drifted."""
 from knoten import ops
 
 
-def test_index_returns_the_same_shape_the_mcp_tool_did(graph):
+def test_index_returns_one_shape_both_renderings_share(graph):
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\ntags: [decoding]",
                "# A claim\n")
 

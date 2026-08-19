@@ -1,5 +1,6 @@
-"""--json must emit exactly the dict ops returns. That equality is what stops the CLI
-and the MCP server from drifting, which is this repo's most repeated bug."""
+"""--json must emit exactly the dict ops returns. Anything computed on the way out is a
+second implementation of the answer, and this repo's most repeated bug was exactly that:
+the same question answered twice, differently."""
 import json
 
 import pytest
@@ -68,9 +69,8 @@ def test_show_error_is_stderr_in_prose_and_stdout_in_json(graph, monkeypatch, ca
 
 
 def test_update_rejection_json_equals_the_ops_dict(g, monkeypatch, capsys):
-    """The bug this branch exists to eliminate: `update`'s refusal used to be built
-    twice, and the CLI's copy had no `hint` where MCP's did. Pin both the shape AND
-    that a refusal never touches the file, on either surface."""
+    """`update`'s refusal used to be built twice, and one copy had no `hint` where the
+    other did. Pin both the shape AND that a refusal never touches the file."""
     g.rules("name: t\nstatuses: [open, dead]\nnode_types: [hypothesis]\nrules: []\n")
     monkeypatch.chdir(g.root)
 
@@ -138,7 +138,7 @@ def test_show_prose_reports_attachment_size_and_missing(graph, monkeypatch, caps
 
 
 def test_query_also_line_keeps_non_gate_related_nodes(graph, monkeypatch, capsys):
-    """`related_gates` is the MCP contract (type == GATE_TYPE); the CLI's "also:" line
+    """`related_gates` selects `type == GATE_TYPE`; the CLI's "also:" line
     needs everything else that matched but isn't a claim, or a source node like this one
     silently vanishes from the one place a human sees it."""
     monkeypatch.chdir(graph.root)

@@ -1,7 +1,7 @@
 """Filing a claim.
 
 This lived inside the MCP server, which meant two things: 49 lines of domain logic sat in
-the transport layer, and creating a node programmatically required the `mcp` SDK — an
+the transport layer, and creating a node programmatically required that server's SDK — an
 optional dependency for a transport you may not be using. `attach` and `update` never had
 that problem; they live in their own modules and lock themselves.
 """
@@ -80,14 +80,3 @@ def test_an_id_that_escapes_the_graph_is_refused(graph, tmp_path):
     assert res["status"] == "REJECTED"
     assert not (tmp_path.parent / "pwned.md").exists()
 
-def test_committing_needs_no_mcp_sdk(graph):
-    """The point of the extraction: knoten.mcp_server raises ImportError without mcp>=2,
-    so while commit lived there, writing a node from Python required an optional
-    dependency for a transport you were not using."""
-    import sys
-
-    graph.rules(RULES).node("gate-new", "id: gate-new\ntype: gate\nstatus: open")
-    commit(graph.root, "hyp-x", ALIVE_CITING, "# A claim\n")
-
-    assert "knoten.mcp_server" not in sys.modules or True   # never imported by knoten.commit
-    assert "mcp" not in commit_mod.__dict__

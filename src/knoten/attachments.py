@@ -1,7 +1,7 @@
 """Attaching files to a node — the code that killed it, the plot that shows why.
 
-Print-free on purpose: the MCP server speaks JSON-RPC over STDOUT, so a stray `print`
-here would corrupt every response. This returns data; the CLI does the printing.
+Print-free on purpose. It returns data and the CLI does the printing, so `--json`
+emits exactly what the function produced and nothing writes to stdout behind its back.
 """
 from __future__ import annotations
 

@@ -11,6 +11,7 @@ from datetime import date
 import pytest
 
 from knoten.cli import main
+from knoten.commit import commit
 from knoten.core import load, retrieve, today
 from knoten.update import update
 
@@ -90,33 +91,19 @@ def test_cli_index_since(graph, monkeypatch, capsys):
     assert "hyp-old" not in out
 
 
-# ------------------------------------------------------------------ agent surface
+# ------------------------------------------------------- writing a node from Python
 
-def test_commit_stamps_a_node_the_agent_wrote(graph, monkeypatch):
-    pytest.importorskip("knoten.mcp_server",
-                        reason="the agent server needs mcp>=2; the rest of the suite "
-                               "does not")
-    from knoten import mcp_server as M
-    monkeypatch.chdir(graph.root)
-    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
-
-    res = M.knoten_commit(id="hyp-x", frontmatter="type: hypothesis\nstatus: dead",
-                          body="# A claim\n")
+def test_commit_stamps_a_node_written_programmatically(graph):
+    """The stamp belongs to `commit`, not to whatever called it."""
+    res = commit(graph.root, "hyp-x", "type: hypothesis\nstatus: dead", "# A claim\n")
 
     assert res["status"] == "COMMITTED"
     assert load(graph.root)["hyp-x"].frontmatter["created"] == today()
 
 
-def test_commit_respects_a_date_the_author_supplied(graph, monkeypatch):
-    pytest.importorskip("knoten.mcp_server",
-                        reason="the agent server needs mcp>=2; the rest of the suite "
-                               "does not")
-    from knoten import mcp_server as M
-    monkeypatch.chdir(graph.root)
-    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
-
-    M.knoten_commit(id="hyp-x",
-                    frontmatter="type: hypothesis\nstatus: dead\ncreated: 2019-05-05",
-                    body="# A claim\n")
+def test_commit_respects_a_date_the_author_supplied(graph):
+    """Back-filling a node from an old lab notebook must not be re-dated to today."""
+    commit(graph.root, "hyp-x", "type: hypothesis\nstatus: dead\ncreated: 2019-05-05",
+           "# A claim\n")
 
     assert load(graph.root)["hyp-x"].frontmatter["created"] == "2019-05-05"

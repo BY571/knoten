@@ -13,7 +13,7 @@ tool combines git-native markdown nodes + falsification-aware typed edges +
 agent-native read/write**. The gap is *structural*: every candidate buys one axis by
 foreclosing another.
 
-| system | markdown + git | falsification edges | agent / MCP |
+| system | markdown + git | falsification edges | agent / CLI |
 |---|---|---|---|
 | Basic Memory | markdown ✓ · **git ✗** | **✗** free-form wikilinks | ✓ |
 | Graphiti | **✗** (Neo4j) | partial (bi-temporal) | ✓ |
@@ -348,49 +348,39 @@ is why prose is the CLI's default and `--json` is opt-in, not the other way roun
 
 **So: the CLI is now the primary agent surface.** `ops.py` holds the one implementation
 of every read — index, query, frontier, gates, show, validate, path — as a plain
-function returning a dict; the CLI renders it as prose or dumps it with `--json`, and MCP
-serialises the same dict as a tool result. `commit` and `update` are likewise shared
+function returning a dict; the CLI renders it as prose or dumps it with `--json`.
+`commit` and `update` are likewise shared
 functions, not surface-specific code paths. `SKILL.md`, at the repo root, is how an agent
 now learns the loop: `frontier` → `index`/`query` → `show` → `gates` → `commit`/`update`
 → `attach`.
 
-**MCP is retained, not deleted.** It is the right surface for a client that has no
-shell — a chat UI wired to MCP servers rather than a coding agent with Bash. Those tools
-still exist, still delegate to the same `ops`/`commit`/`update` functions, and still carry
-the loop as the server's `instructions`:
+**MCP has since been deleted.** It was retained for a while as the right surface for a
+client with no shell — a chat UI wired to MCP servers rather than a coding agent with
+Bash — and that argument was not wrong, only outweighed. It cost ~2,340 tokens in every
+session against ~304 for `knoten --help`, and it was a second surface that had to be kept
+in step with `ops.py` forever. Every cross-surface drift bug this project has recorded —
+`update`'s refusal built twice with different keys, `--field` coercing `2` to `2.0` on one
+side and not the other, `ops.index(query=...)` reachable from one surface with no flag on
+the other — came from having two. The shell is the interface.
 
-| tool | purpose |
-|---|---|
-| `knoten_frontier()` | *"what should I work on next?"* → open claims, standing offers, unused gates |
-| `knoten_index(...)` | *"anything LIKE this?"* / *"what is still open?"* → the graph, one line per node |
-| `knoten_query(q)` | *"has this been tried?"* → nodes + verdicts + causes of death, by keyword |
-| `knoten_get(id)` | full node, including the post-mortem |
-| `knoten_gates()` | *"what must this survive?"* → the gates, their rule, and their record |
-| `knoten_commit(node)` | append a node (validates first; **rejects on rule violation**) |
-| `knoten_update(id, …)` | move a node's status and append to it — the lifecycle in §3, walkable |
-| `knoten_attach(id, files)` | the script that ran it and the plot that shows it |
-| `knoten_path(start, end)` | show the research path — how did we get from A to B? |
-| `knoten_validate()` | run the graph's own declared rules |
+What the server taught, which outlived it:
 
-The gate is the point, on either surface: **a `status: alive` node with no
-`kn:survivedGate` edge is refused**, whether it arrives via `knoten commit` or
-`knoten_commit`. The system will not let an agent — or a human — record an unchallenged
-claim as a finding.
+- **Derive the schema, never write one.** Its tools were plain functions: the name was the
+  tool name, the docstring was the description the agent read, and the annotated signature
+  *was* the input schema. A hand-written schema quietly stops matching the code it
+  documents; a derived one cannot.
+- **State the loop once.** It lived in the server's `instructions`, not re-asserted by
+  every tool description — four tools each shouting "CALL THIS FIRST" give an agent the
+  same ordering signal as none. `SKILL.md` inherited that job.
+- **The gate belongs under both doors.** A `status: alive` node with no `kn:survivedGate`
+  edge was refused on either surface, because the check lived in `commit`, not in the
+  transport. That is why removing the transport removed no enforcement.
+- **An id authored by an LLM is not a path.** It becomes a filename, so it is constrained
+  to kebab-case. The CLI did not guard this until the day the other surface's guard was
+  the only one.
 
 The candidate node is parsed and checked **in memory**; nothing reaches the filesystem
 until it is clean.
-
-Each MCP tool is a plain function: its name is the tool name, its docstring is the
-description the agent reads, and its annotated signature IS the input schema. There is no
-second copy of any of that to drift — the failure mode being avoided is a hand-written
-schema that quietly stops matching the code it documents. The loop above lives once, in
-the server's `instructions`, rather than being re-asserted by every tool description.
-
-And because the `id` becomes a filename and is authored by an LLM, it is constrained to
-kebab-case — an id is not a path.
-
-`knoten_path` takes `start` / `end`. It took `from` / `to` until the 2.0 migration, where
-the schema is derived from the function signature and `from` is a Python keyword.
 
 ---
 
@@ -431,8 +421,8 @@ index, which the 1k–5k node case does not.
 |---|---|---|
 | **0** | **Dogfood** — encode a real investigation by hand | ✅ done |
 | **1** | `knoten` CLI (`init/new/validate/query/index/frontier/gates/path/show/attach`) + rule engine | ✅ done |
-| **2** | **MCP server** (the tools above) | ✅ done — later demoted to the shell-less fallback (§8) |
-| **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind CLI/MCP, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
+| **2** | **MCP server** | ✅ done — later demoted to a fallback, then removed (§8) |
+| **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind every read, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
 | 4 | Hosted multi-graph service | probably never needed |
 

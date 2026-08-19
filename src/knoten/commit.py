@@ -5,7 +5,7 @@ reaches the filesystem until it is clean. An agent cannot record a shiny result 
 no test it survived.
 
 This lived inside the MCP server, which put the domain logic in the transport layer and —
-worse — made writing a node from Python require the `mcp` SDK, an optional dependency for
+worse — made writing a node from Python require that server's SDK, an optional dependency for
 a transport you may not be using. `attach` and `update` never had that problem.
 """
 from __future__ import annotations

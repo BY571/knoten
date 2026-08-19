@@ -89,7 +89,7 @@ def test_index_limit_help_states_the_real_default(capsys):
 
 
 def test_index_accepts_a_query_flag_for_relevance_ranking(graph, monkeypatch, capsys):
-    """`ops.index(query=...)` was reachable from MCP but had no CLI flag — the CLI is
+    """`ops.index(query=...)` was reachable from the other surface but had no CLI flag — the CLI is
     primary and should not be missing a parameter of the shared implementation."""
     monkeypatch.chdir(graph.root)
     graph.node("hyp-decoding", "id: hyp-decoding\ntype: hypothesis\nstatus: open",
@@ -264,8 +264,8 @@ def indexed(graph):
 
 
 def test_index_prints_one_line_per_node_with_the_claim(graph, monkeypatch, capsys):
-    """The CLI and the MCP server must not drift: a fix that reaches one surface and not
-    the other is this project's most repeated bug."""
+    """`index` is the answer to "anything LIKE this?", so a row has to carry the CLAIM
+    and not just the id — an id alone cannot be compared against a new idea."""
     monkeypatch.chdir(indexed(graph).root)
 
     main(["index"])
