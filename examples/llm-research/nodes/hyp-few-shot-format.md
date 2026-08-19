@@ -5,7 +5,7 @@ status: alive
 created: 2026-03-14
 tags: [prompting]
 links:
-  - {rel: kn:survivedGate, to: method-compute-matched-baseline, note: "same token budget both arms"}
+  - {rel: kn:survivedGate, to: gate-compute-matched-baseline, note: "same token budget both arms"}
 repro:
   script: experiments/fewshot_format.py
   model: Qwen3-8B-Instruct
@@ -23,7 +23,7 @@ results:
 ## Verdict — ALIVE
 
 **74.1% → 77.1%** (+3.0), at an *identical* token budget (290 tok/question both arms).
-Survives [[method-compute-matched-baseline]]: the gain is not bought with compute.
+Survives [[gate-compute-matched-baseline]]: the gain is not bought with compute.
 
 ```python
 # the whole change:

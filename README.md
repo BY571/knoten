@@ -21,7 +21,7 @@ type: hypothesis
 status: dead
 cause: weak_baseline
 links:
-  - {rel: kn:killedByGate, to: method-compute-matched-baseline}
+  - {rel: kn:killedByGate, to: gate-compute-matched-baseline}
 repro:
   script: experiments/self_consistency.py
   model: Qwen3-8B-Instruct
@@ -62,7 +62,7 @@ Three months later, when someone proposes self-consistency again:
 $ knoten query "self-consistency"
 
   [✗ DEAD] hyp-self-consistency
-      killed by : method-compute-matched-baseline
+      killed by : gate-compute-matched-baseline
       reopen if : A task where the majority-vote aggregation does real work, i.e.
                   where the gain survives a compute-matched baseline…
 ```
@@ -159,7 +159,7 @@ knoten index --where cause=weak_baseline    # we have a stronger baseline now �
 Your graph also declares its own vocabulary, and that is enforced too:
 
 ```yaml
-node_types: [hypothesis, experiment, finding, method, source]
+node_types: [hypothesis, experiment, finding, gate, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```
@@ -252,7 +252,7 @@ $ knoten frontier
       reopen if : A task where the majority-vote aggregation is doing real work…
 
   UNTESTED GATES — no claim has been through them
-    method-holdout-period     Gate: hold out the last 20%
+    gate-holdout-period     Gate: hold out the last 20%
 ```
 
 A dead end with a standing offer is a **cheaper experiment than a new idea**, because the
@@ -272,7 +272,7 @@ used still finds it:
 $ knoten query "has anyone tried self-consistency?"
 
   [✗ DEAD] hyp-self-consistency
-      killed by : method-compute-matched-baseline
+      killed by : gate-compute-matched-baseline
       reopen if : A task where the majority-vote aggregation does real work…
 ```
 
@@ -301,7 +301,7 @@ cannot be filed. `gates` puts the specification in front of the work:
 ```
 $ knoten gates
 
-  method-compute-matched-baseline  (killed 1, survived by 1)
+  gate-compute-matched-baseline  (killed 1, survived by 1)
     Gate: compute-matched baseline
     the rule : Any method that spends more inference compute must be compared against a
                baseline given the same budget — not against greedy decoding at 1x.
@@ -352,7 +352,7 @@ Reach for `--json`; don't default to it.
 `--link rel=to` (repeatable, adds an edge — e.g. the gate a claim just survived):
 
 ```bash
-knoten update hyp-idea --status alive --link kn:survivedGate=method-compute-matched-baseline
+knoten update hyp-idea --status alive --link kn:survivedGate=gate-compute-matched-baseline
 ```
 
 `knoten update` appends, moves the status, and sets the fields a death is supposed to
@@ -476,7 +476,7 @@ is told it was retracted — not just what the claim said:
 
 ```
   [✓ ALIVE] hyp-few-shot-format
-      survived     : method-compute-matched-baseline
+      survived     : gate-compute-matched-baseline
       RETRACTED by : ret-oops
 ```
 

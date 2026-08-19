@@ -62,8 +62,8 @@ id: hyp-x
 type: hypothesis
 status: dead
 links:
-  - {rel: kn:killdByGate, to: method-gate}
-""").node("method-gate", "id: method-gate\ntype: method")
+  - {rel: kn:killdByGate, to: gate-cost}
+""").node("gate-cost", "id: gate-cost\ntype: gate")
 
     violations = check(load(graph.root), graph.root)
 
@@ -79,8 +79,8 @@ id: hyp-x
 type: hypothesis
 status: dead
 links:
-  - {rel: kn:gateKilled, to: method-gate}
-""").node("method-gate", "id: method-gate\ntype: method")
+  - {rel: kn:gateKilled, to: gate-cost}
+""").node("gate-cost", "id: gate-cost\ntype: gate")
 
     violations = check(load(graph.root), graph.root)
 
@@ -117,8 +117,8 @@ id: hyp-x
 type: hypothesis
 status: alive
 links:
-  - {rel: kn:survivedGate, to: method-gate}
-""").node("method-gate", "id: method-gate\ntype: method")
+  - {rel: kn:survivedGate, to: gate-cost}
+""").node("gate-cost", "id: gate-cost\ntype: gate")
 
     assert check(load(graph.root), graph.root) == []
 

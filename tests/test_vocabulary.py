@@ -11,7 +11,7 @@ from knoten.validate import check, load_rules
 
 VOCAB = """\
 name: t
-node_types: [hypothesis, method]
+node_types: [hypothesis, gate]
 statuses: [alive, dead, retracted, active]
 rules: []
 """
@@ -51,7 +51,7 @@ def test_a_node_with_no_type_is_a_violation(graph):
 
 def test_a_declared_vocabulary_passes(graph):
     vocab(graph).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
-    vocab(graph).node("method-g", "id: method-g\ntype: method\nstatus: active")
+    vocab(graph).node("gate-g", "id: gate-g\ntype: gate\nstatus: active")
 
     assert check(load(graph.root), graph.root) == []
 
@@ -60,7 +60,7 @@ def test_omitting_status_is_a_violation_when_statuses_are_declared(graph):
     """The same fail-open as `status: ded`, reached by omission: a node with no status
     escapes every `when_status` rule AND never shows up in a query. If you declared a
     status vocabulary, you said nodes have one."""
-    vocab(graph).node("src-x", "id: src-x\ntype: method")
+    vocab(graph).node("src-x", "id: src-x\ntype: gate")
 
     violations = check(load(graph.root), graph.root)
 
@@ -70,8 +70,8 @@ def test_omitting_status_is_a_violation_when_statuses_are_declared(graph):
 def test_status_is_not_required_when_the_graph_declares_no_statuses(graph):
     """Still no vocabulary invented by the core."""
     (graph.root / "graph.yaml").write_text(
-        "name: t\nnode_types: [method]\nrules: []\n", encoding="utf-8")
-    graph.node("src-x", "id: src-x\ntype: method")
+        "name: t\nnode_types: [gate]\nrules: []\n", encoding="utf-8")
+    graph.node("src-x", "id: src-x\ntype: gate")
 
     assert check(load(graph.root), graph.root) == []
 
@@ -104,7 +104,7 @@ def test_node_types_must_be_a_list(graph):
 
 TAGGED = """\
 name: t
-node_types: [hypothesis, method]
+node_types: [hypothesis, gate]
 statuses: [alive, dead, retracted, active]
 tags: [decoding, prompting, evaluation]
 rules: []

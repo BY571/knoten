@@ -23,13 +23,13 @@ def cwd(graph, monkeypatch):
     monkeypatch.chdir(graph.root)
     monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
     (graph.root / "graph.yaml").write_text(
-        "name: t\nnode_types: [hypothesis, method]\n"
+        "name: t\nnode_types: [hypothesis, gate]\n"
         "statuses: [open, alive, dead, active]\nrules: []\n", encoding="utf-8")
     graph.node("hyp-alpha", "id: hyp-alpha\ntype: hypothesis\nstatus: open\n"
                             "tags: [decoding]", "# Alpha beats greedy\n")
     graph.node("hyp-beta", "id: hyp-beta\ntype: hypothesis\nstatus: dead\n"
                            "tags: [prompting]", "# Beta improves accuracy\n")
-    graph.node("method-gate", "id: method-gate\ntype: method\nstatus: active",
+    graph.node("gate-cost", "id: gate-cost\ntype: gate\nstatus: active",
                "# Gate: compute-matched baseline\n")
     return graph
 
@@ -37,7 +37,7 @@ def cwd(graph, monkeypatch):
 def test_index_lists_every_node(cwd):
     res = index()
 
-    assert {r["id"] for r in res["nodes"]} == {"hyp-alpha", "hyp-beta", "method-gate"}
+    assert {r["id"] for r in res["nodes"]} == {"hyp-alpha", "hyp-beta", "gate-cost"}
 
 
 def test_a_row_carries_the_claim_not_just_the_id(cwd):
@@ -71,9 +71,9 @@ def test_index_filters_by_tag(cwd):
 
 
 def test_index_filters_by_type(cwd):
-    res = index(type=["method"])
+    res = index(type=["gate"])
 
-    assert [r["id"] for r in res["nodes"]] == ["method-gate"]
+    assert [r["id"] for r in res["nodes"]] == ["gate-cost"]
 
 
 def test_index_reports_the_graphs_declared_tags(cwd):

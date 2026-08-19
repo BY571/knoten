@@ -47,7 +47,7 @@ INVERSE = {
 }
 GENERATED = set(INVERSE.values())
 
-# The claim lifecycle. A node with any other status is not a claim (a method, a source).
+# The claim lifecycle. A node with any other status is not a claim (a gate, a source).
 VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 
 # The three conventions `frontier` reads. They are conventions, not core vocabulary — a
@@ -55,7 +55,7 @@ VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 # named here rather than buried so that stays obvious.
 OPEN = "open"
 REOPEN_SECTION = "What would reopen this"
-GATE_TYPE = "method"
+GATE_TYPE = "gate"
 GATE_SECTIONS = ("The rule", "Why it exists")
 
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)

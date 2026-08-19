@@ -6,7 +6,7 @@ created: 2026-03-02
 tags: [decoding, reasoning]
 cause: weak_baseline   # greedy at 1x was the strawman
 links:
-  - {rel: kn:killedByGate, to: method-compute-matched-baseline}
+  - {rel: kn:killedByGate, to: gate-compute-matched-baseline}
 repro:
   script: attachments/hyp-self-consistency/self_consistency.py
   model: Qwen3-8B-Instruct

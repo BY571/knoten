@@ -86,19 +86,19 @@ def test_update_moves_the_status(open_node):
 
 
 def test_update_records_results_and_links(graph, monkeypatch):
-    graph.rules("name: t\nstatuses: [open, dead]\nnode_types: [hypothesis, method]\n"
+    graph.rules("name: t\nstatuses: [open, dead]\nnode_types: [hypothesis, gate]\n"
                 "rules: []\n")
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# c\n")
-    graph.node("method-x", "id: method-x\ntype: method\nstatus: open", "# gate\n")
+    graph.node("gate-x", "id: gate-x\ntype: gate\nstatus: open", "# gate\n")
     monkeypatch.chdir(graph.root)
 
     code = main(["update", "hyp-x", "--result", "acc=0.7", "--result", "note=fine",
-                 "--link", "kn:killedByGate=method-x"])
+                 "--link", "kn:killedByGate=gate-x"])
 
     assert code == 0
     node = load(graph.root)["hyp-x"]
     assert node.results == {"acc": 0.7, "note": "fine"}
-    assert node.links == [{"rel": "kn:killedByGate", "to": "method-x"}]
+    assert node.links == [{"rel": "kn:killedByGate", "to": "gate-x"}]
 
 
 def test_update_appends_from_a_file(open_node, tmp_path):
@@ -124,7 +124,7 @@ def test_a_refused_update_json_payload_is_on_stdout(open_node, capsys):
     assert json.loads(out)["status"] == "REJECTED"
 
 
-@pytest.mark.parametrize("flag,bad", [("--result", "acc"), ("--link", "method-x")])
+@pytest.mark.parametrize("flag,bad", [("--result", "acc"), ("--link", "gate-x")])
 def test_a_malformed_kv_flag_is_a_graph_error_not_a_crash(open_node, flag, bad):
     assert main(["update", "hyp-x", flag, bad]) == 1
 
