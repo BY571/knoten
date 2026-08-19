@@ -156,6 +156,31 @@ a sentence, the question you actually ask six months later is a query:
 knoten index --where cause=weak_baseline    # we have a stronger baseline now — what reopens?
 ```
 
+## Looking at it
+
+```bash
+knoten viz --open          # one HTML file, no server, no build step
+```
+
+Two views of the same graph, because there are two questions. **Columns** is the
+inventory: what exists, in what role, with what verdict, laid out along the loop your
+graph declares — sources at the left, gates at the right under `JUDGED AGAINST`, and a
+finding that challenges a hypothesis drawn as a loop back underneath. **Map** is the
+traversal: click a knoten and walk its neighbours, with a trail of where you have been.
+
+The map is monochrome on purpose — shade and size say how connected a node is, which is a
+property of the map; what happened to a claim is a property of the claim, and lives in the
+record panel beside it. Clusters form around the busiest nodes rather than around a type,
+because how many gates a graph declares is a fact about its rules, not about knoten.
+
+Layout is a pure function of the graph and nothing is persisted. Appending a claim of a
+type already on screen lands it at the end of that column and on the rim of one cluster,
+and moves nothing — that is the case an agent loop hits over and over. Two things do
+reorder the view, both of them real changes in what the graph is: a node introducing a
+type that was not there before, and the hub count stepping up as the graph grows
+(at roughly 7, 13, 21, 31 nodes). A map that reshuffles for no reason is a map you cannot
+learn; one that reshuffles when the graph's shape changes is telling you something.
+
 Your graph also declares its own vocabulary, and that is enforced too:
 
 ```yaml
