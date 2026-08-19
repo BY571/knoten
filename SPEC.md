@@ -81,10 +81,9 @@ rather than thinking.**
 
 A convention only — the core checks `node_types` for membership and nothing else. A graph
 begins with a `question` and everything descends from it; a `source` is where the work came
-from, including the author's own intuition. `gate` stands outside the loop the others form:
-it is the bar a claim must survive, not a stage it passes through. `method` is deliberately unclaimed; the rename that freed it reserved
-it for "the approach derived from findings that survived", and nothing implements that
-yet.
+from, including the author's own intuition; `gate` stands outside the loop the others form,
+the bar a claim must survive rather than a stage it passes through. `method` is
+deliberately unclaimed, reserved for "the approach derived from findings that survived".
 
 ### Status lifecycle
 
@@ -94,11 +93,10 @@ open ──► alive ──────► superseded
    └───► retracted     (WE WERE WRONG — the most valuable node type)
 ```
 
-Every arrow above is walkable from the agent surface via `knoten update`, which appends
-and moves the status but cannot rewrite a claim. Immutability protects **what was
-claimed**, never the status field — the status field *is* the lifecycle, and git already
-holds the before and after (§7). Without this an agent could open a hypothesis and never
-close it, leaving a settled question `open` on every future frontier.
+Every arrow is walkable via `knoten update`, which appends and moves the status but cannot
+rewrite a claim. Immutability protects **what was claimed**, never the status — the status
+*is* the lifecycle, and git holds the before and after (§7). Without it an agent could open
+a hypothesis and never close it, leaving a settled question `open` on every frontier.
 
 `retracted` is first-class. Three claims in the source session were withdrawn. **A
 graph that records only conclusions and never corrections lies to you in six months.**
@@ -131,22 +129,16 @@ Adopt existing predicates. Coin only what the field genuinely lacks.
 | `kn:generalises` | `kn:generalisedBy` | this claim generalises those instances |
 | `kn:followsFrom` | `kn:entails` | this claim follows from that one by argument |
 
-Peirce named three ways a claim gets proposed — abduction, induction, deduction — and
-Popper named the one way it gets tested. knoten had rich vocabulary for the testing
-(the gate pair) and one untyped `prov:wasDerivedFrom` for all three of the others.
+Peirce named three ways a claim gets proposed; Popper named the one way it gets tested.
+knoten had rich vocabulary for the testing and one untyped `prov:wasDerivedFrom` for all
+three of the others.
 
-The distinction earns its place because a rule can act on it. `require_edge_target`
-matches on the relation, so with a single `prov:wasDerivedFrom` there is no way to say
-*"a generalisation must cite at least three findings"* without saying it of every
-derivation:
-
-```yaml
-require_edge_target: {rel: kn:generalises, type: finding, status: alive, min: 3}
-```
-
-A per-edge qualifier — `{rel: prov:wasDerivedFrom, to: x, mode: induction}` — parses
-today and no rule key can see it. `prov:wasDerivedFrom` stays as the untyped form: a
-graph that does not care about the distinction should not be made to draw one.
+The distinction earns its place because a rule can act on it — `require_edge_target`
+matches on the relation, so with one untyped derivation there is no way to say *"a
+generalisation must cite three findings"* without saying it of every derivation. A
+per-edge qualifier (`{rel: prov:wasDerivedFrom, mode: induction}`) parses today and no
+rule key can see it. `prov:wasDerivedFrom` stays as the untyped form for graphs that do
+not care to draw the distinction.
 
 **A kind confers no status.** A generalisation is a conjecture that repeated observation
 happened to suggest; it faces the same gates as any other claim and can still die. A
@@ -173,60 +165,41 @@ claim cannot be marked alive.**
 Adapted from arXiv:2606.21024 (*Negative Knowledge as Failure-aware Shared Memory*,
 Jun 2026), grounded in the seven real deaths of the source session:
 
-| `death.cause` | meaning | real example |
-|---|---|---|
-| `no_signal` | the effect is not there | a signal that wasn't there |
-| `cost_hurdle` | real effect, too small to trade | a real effect too small to pay its costs |
-| `structural_blocker` | a wall you cannot climb | a venue the participant cannot access |
-| `selection_bias` | it was a cherry-pick | an unintentional cherry-pick |
-| `weak_baseline` | it only beat a strawman | a model that only beat a strawman |
-| `underpowered` | too few independent bets | any t-stat on n<30 |
-| `crowding_decay` | it was real; it got arbitraged | a real edge that got arbitraged away |
+| `cause` | what it means |
+|---|---|
+| `no_signal` | the effect is not there |
+| `cost_hurdle` | real effect, too small to pay its costs |
+| `structural_blocker` | a wall you cannot climb — a venue you cannot access |
+| `selection_bias` | a cherry-pick, usually an unintentional one |
+| `weak_baseline` | it only beat a strawman |
+| `underpowered` | too few independent bets — any t-stat on n<30 |
+| `crowding_decay` | it was real; it got arbitraged away |
 
-Every dead/retracted node should carry a `cause`, a `## Why it died` section, and a
-**`## What would reopen this`** section. The last is non-negotiable: it converts a
-dead end into a **standing offer**, and it is what stops the next agent re-running it.
+Every dead or retracted node should carry a `cause`, a `## Why it died`, and a
+**`## What would reopen this`**. The last is non-negotiable: it converts a dead end into a
+**standing offer**, and it is what stops the next agent re-running it.
 
-**The core does not enforce this vocabulary, and must not** — a cause of death is
-domain knowledge, and §2 says the core knows no domain. The list above is a *convention*
-for research graphs. Your graph enforces the parts it cares about, as data:
-
-```yaml
-  - id: dead-claims-must-say-why
-    when_status: dead, retracted
-    require_sections: Why it died, What would reopen this
-    message: The post-mortem IS the asset — a dead end must become a standing offer.
-
-  - id: deaths-must-name-a-cause
-    when_status: dead, retracted
-    require_field_one_of:
-      cause: [no_signal, cost_hurdle, structural_blocker, selection_bias,
-              weak_baseline, underpowered, crowding_decay]
-    message: A cause of death you cannot filter on is a story, not an index.
-```
-
-The second rule is what makes a death **queryable** rather than merely recorded:
+**The core does not enforce this vocabulary and must not** — a cause of death is domain
+knowledge, and §2 says the core knows no domain. The list is a convention; your graph
+enforces the parts it cares about, as data (§6's `require_field_one_of`). What that buys
+is a death you can *query* rather than merely record:
 
 ```bash
 knoten index --where cause=weak_baseline    # we have a stronger baseline now. what reopens?
 ```
 
 That is a query when the cause is a field and a re-read of every post-mortem when it is
-prose — and it is the moment a research graph pays for itself. `require_field_one_of`
-constrains any frontmatter field to a declared set; the *values* live in `graph.yaml`, so
-a biology graph declares different ones and the core still knows no domain.
+prose — the moment a research graph pays for itself.
 
 ---
 
 ## 6. Rules as configuration
 
-The core enforces whatever the graph declares. **Domain knowledge lives in data,
-never in code.**
-
-LinkML was the original plan and was dropped: it validates *shape*, and every rule that
-matters here is a *predicate over a node* ("does this claim cite a gate?"). A LinkML
-schema plus a bespoke predicate layer is strictly more machinery than the predicate
-layer alone. The rule engine is ~50 lines in `validate.py`.
+The core enforces whatever the graph declares. **Domain knowledge lives in data, never in
+code.** LinkML was the original plan and was dropped: it validates *shape*, and every rule
+that matters here is a *predicate over a node* ("does this claim cite a gate?"). A schema
+plus a bespoke predicate layer is strictly more machinery than the predicate layer alone,
+which is ~50 lines in `validate.py`.
 
 ```yaml
 # graph.yaml — each rule is a SCAR. Write one only when you have a corpse.
@@ -237,72 +210,64 @@ rules:
     require_edge: kn:survivedGate
     message: An unchallenged claim is not a finding, it is a hope.
 
-  - id: dead-claims-must-say-why
+  - id: deaths-must-name-a-cause
     when_status: dead, retracted
     require_sections: Why it died, What would reopen this
-    message: The post-mortem IS the asset.
-
-  - id: underpowered
-    when_type: hypothesis
-    require_result_min: {n_independent: 30}
-    message: An effect size without a sample size is not evidence.
+    require_field_one_of:
+      cause: [no_signal, cost_hurdle, structural_blocker, selection_bias,
+              weak_baseline, underpowered, crowding_decay]
+    message: A cause of death you cannot filter on is a story, not an index.
 ```
 
 | key | effect |
 |---|---|
 | `id` | **required.** Names the rule in the violation. |
 | `message` | what the human reads when it fires. |
-| `when_status` / `when_type` | only apply to these statuses / node types (comma-separated). |
+| `when_status` / `when_type` | only apply to these statuses / types (comma-separated). |
 | `require_edge` | node must declare this relation. |
 | `require_sections` | body must contain these `## ` headings. |
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
 | `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
-| `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets |
-| `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse) |
+| `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets. |
+| `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse). |
 
-**An unknown rule key is a hard error.** A rule the engine cannot understand would
-enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is
-worse than no validator, because you believe you are covered. The same goes for an
-unknown edge relation (`kn:killdByGate`, one letter dropped) and for frontmatter that
-does not parse.
+The last two are the only checks that look past the node being checked, and they are what
+make a claim's fate outlive the moment it was written: `require_edge_target` fails
+everything derived from a finding the day that finding dies, and `require_backlink` is the
+only way to police work that was *abandoned* rather than written badly, since a hypothesis
+nobody tested declares nothing wrong.
 
-The graph also declares its own vocabulary, and it is enforced:
+**An unknown rule key is a hard error**, as is an unknown edge relation
+(`kn:killdByGate`, one letter dropped) and frontmatter that does not parse. A rule the
+engine cannot understand would enforce nothing while reporting `✓ all rules pass`, and a
+validator that silently accepts is worse than no validator.
 
-```yaml
-node_types: [hypothesis, experiment, finding, gate, source]
-statuses:   [open, alive, dead, retracted, superseded, active]
-tags:       [decoding, reasoning, prompting, evaluation, gate]
-```
-
-`node_types` also takes a mapping, which is the only place a graph's words can be
-*defined* — the core refuses to define them and must therefore let the graph do it:
+The graph declares its vocabulary too. `node_types` takes a list, or a mapping when you
+want to write down what the words mean — the only place they *can* be defined, since the
+core refuses to:
 
 ```yaml
 node_types:
   hypothesis: a falsifiable claim derived from an idea
   gate:       a standing rule every claim must survive; a bar, not a stage
+statuses:   [open, alive, dead, retracted, superseded, active]
+tags:       [decoding, reasoning, prompting, evaluation]
 ```
 
-The keys are the vocabulary and are enforced identically; the values are for the reader
-and for `knoten viz`, which labels each column with them. `knoten init` writes this form.
+The keys are the vocabulary either way; the values are for the reader and for
+`knoten viz`, which labels each column with them. `knoten init` writes the mapping form.
+Declare none and none is checked (§2) — but a graph that *does* declare has said those are
+the only legal words, so `type: hypthesis` is a typo and `status: ded` is a claim that
+would silently vanish from every query.
 
-The core invents neither list — declare none and none is checked (§2: the core knows no
-domain). But a graph that *does* declare one has said those are the only legal words, so
-`type: hypthesis` is a typo and `status: ded` is a claim that would silently vanish from
-every query.
-
-Always-on structural checks, which no graph has to declare: `dangling-edge`,
+Always-on structural checks, which no graph declares: `dangling-edge`,
 `missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
 `unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`, `mismatched-id`,
-`malformed-results`, `malformed-repro`, and `not-a-gate` (a migration aid for graphs
-written before the gate type was renamed; deletable once they have moved).
+`malformed-results`, `malformed-repro`, and `not-a-gate` (a migration aid, deletable once
+graphs written before the gate rename have moved).
 
 A biology graph declares entirely different rules. The core never changes.
-
-> Rule 1 alone would have rejected `a claim` the moment it was
-> marked `alive` without citing `the gate that would have caught it` — **before** an RL env was built
-> for it.
 
 ---
 
@@ -332,55 +297,42 @@ This section once named a tool-protocol server as the thing that made knoten com
 and meant it. That claim was wrong, and this is the reversal, stated plainly rather than
 slid past.
 
-The previous attempt failed because the graph was a **byproduct of automation**: when
-the orchestrator did not run, nothing was written. Meanwhile a plain chat session
-produced 15 experiments whose knowledge would have evaporated without hand-written
-memory files. The fix was still right — make the graph primary, and make writing to it
-the path of least resistance — but a tool-protocol server turned out to be the expensive
-way to deliver it to an agent that already has a shell.
+The previous attempt failed because the graph was a **byproduct of automation**: when the
+orchestrator did not run, nothing was written, while a plain chat session produced 15
+experiments whose knowledge would have evaporated without hand-written memory files. The
+fix was right — make the graph primary, and make writing to it the path of least
+resistance. The delivery was not.
 
 **The measurement.** That surface loaded ~2,340 tokens into every session whether the
-agent touched the graph or not (1,928 of tool schema + 412 of instructions).
-`knoten --help` costs ~304 tokens, and only when the agent asks for it — most sessions
-never pay even that. And format compounds the gap: the same 55 nodes cost ~2,551 tokens
-as its JSON (46/node) against ~1,185 as the CLI's columnar prose (21/node) — 2.2x. That
-is why prose is the CLI's default and `--json` is opt-in, not the other way round.
+agent touched the graph or not (1,928 of schema + 412 of instructions), against ~304 for
+`knoten --help` and only when asked. Format compounded it: the same 55 nodes cost ~2,551
+tokens as its JSON (46/node) against ~1,185 as columnar prose (21/node) — 2.2x. That is
+why prose is the CLI's default and `--json` is opt-in.
 
-**So: the CLI is now the primary agent surface.** `ops.py` holds the one implementation
-of every read — index, query, frontier, gates, show, validate, path — as a plain
-function returning a dict; the CLI renders it as prose or dumps it with `--json`.
-`commit` and `update` are likewise shared
-functions, not surface-specific code paths. `SKILL.md`, at the repo root, is how an agent
-now learns the loop: `frontier` → `index`/`query` → `show` → `gates` → `commit`/`update`
-→ `attach`.
+**So the CLI is the agent surface, and the server has been deleted.** `ops.py` holds one
+implementation of every read — index, query, frontier, gates, show, validate, path — as a
+function returning a dict, which the CLI renders as prose or dumps with `--json`; `commit`
+and `update` are shared the same way. `SKILL.md` teaches the loop: `frontier` →
+`index`/`query` → `show` → `gates` → `commit`/`update` → `attach`.
 
-**That surface has since been deleted.** It was retained for a while as the right answer
-for a client with no shell — a chat UI rather than a coding agent with Bash — and that
-argument was not wrong, only outweighed. It cost ~2,340 tokens in every
-session against ~304 for `knoten --help`, and it was a second surface that had to be kept
-in step with `ops.py` forever. Every cross-surface drift bug this project has recorded —
-`update`'s refusal built twice with different keys, `--field` coercing `2` to `2.0` on one
-side and not the other, `ops.index(query=...)` reachable from one surface with no flag on
-the other — came from having two. The shell is the interface.
+Keeping the server for shell-less clients was defensible and stayed defensible; it was
+just outweighed. Every cross-surface drift bug this project recorded came from having two
+— `update`'s refusal built twice with different keys, `--field` coercing `2` to `2.0` on
+one side only, `ops.index(query=...)` reachable in Python with no CLI flag. The shell is
+the interface.
 
-What the server taught, which outlived it:
+What it taught, which outlived it:
 
 - **Derive the schema, never write one.** Its tools were plain functions: the name was the
-  tool name, the docstring was the description the agent read, and the annotated signature
-  *was* the input schema. A hand-written schema quietly stops matching the code it
-  documents; a derived one cannot.
-- **State the loop once.** It lived in the server's `instructions`, not re-asserted by
-  every tool description — four tools each shouting "CALL THIS FIRST" give an agent the
+  tool name, the docstring the description, the annotated signature the input schema. A
+  hand-written schema quietly stops matching the code it documents; a derived one cannot.
+- **State the loop once.** Four tools each shouting "CALL THIS FIRST" give an agent the
   same ordering signal as none. `SKILL.md` inherited that job.
-- **The gate belongs under both doors.** A `status: alive` node with no `kn:survivedGate`
-  edge was refused on either surface, because the check lived in `commit`, not in the
-  transport. That is why removing the transport removed no enforcement.
-- **An id authored by an LLM is not a path.** It becomes a filename, so it is constrained
-  to kebab-case. The CLI did not guard this until the day the other surface's guard was
-  the only one.
-
-The candidate node is parsed and checked **in memory**; nothing reaches the filesystem
-until it is clean.
+- **The gate belongs under every door.** The check lives in `commit`, not in a transport,
+  which is why deleting the transport removed no enforcement. The candidate node is parsed
+  and checked **in memory**; nothing reaches the filesystem until it is clean.
+- **An id authored by a model is not a path.** It becomes a filename, so it is constrained
+  to kebab-case — a guard the CLI lacked until it was the only entry point left.
 
 ---
 
@@ -389,31 +341,26 @@ until it is clean.
 *"Has this been tried?"* and *"have we done anything **like** this?"* are different
 questions, and one mechanism cannot answer both.
 
-`knoten query` is keyword retrieval: tokens weighted by idf, ranked, capped. It was
-originally an **AND** over tokens, which made the tool's headline question fail on its own
-README example — `"has anyone tried self-consistency?"` matched nothing, because the node
-contains no "has", "anyone" or "tried", and the agent was told the work was untested. A
-false negative is the only failure mode of this system that causes real work to be redone.
-So: OR with ranking, the full frontmatter in the haystack (`repro.model` was unsearchable),
-and **a miss now says so honestly** — "no keyword match, this is NOT proof it is untested."
+`knoten query` is keyword retrieval: idf-weighted, ranked, capped. It was originally an
+**AND** over tokens, which made the headline question fail on the README's own example —
+`"has anyone tried self-consistency?"` matched nothing, because the node contains no
+"has", "anyone" or "tried", and the agent was told the work was untested. A false negative
+is the only failure of this system that causes real work to be redone. So: OR with
+ranking, the full frontmatter in the haystack (`repro.model` was unsearchable), and a miss
+that says so honestly — "no keyword match, this is NOT proof it is untested."
 
-`knoten index` answers the second question, and it does so by **not being a search engine
-at all**. It emits the whole graph as one line per node — id, verdict, tags, claim — and
-lets the reader judge relatedness. The reader is an LLM; it is a better semantic matcher
-than any similarity metric we could ship, and it costs nothing to ship. On a 500-node
-graph a broad `query` returned ~83k tokens; the same graph's index is ~9k, and one tag
-narrows it to ~2.5k.
+`knoten index` answers the second question by **not being a search engine**. It emits the
+whole graph, one line per node — id, verdict, tags, claim — and lets the reader judge
+relatedness. The reader is an LLM: a better semantic matcher than anything we could ship,
+and free. On a 500-node graph a broad `query` returned ~83k tokens; the index is ~9k, and
+one tag narrows it to ~2.5k. That is what `tags:` is for — not search, but the filter axis
+that keeps the index readable as the graph grows.
 
-That is why `tags:` is now a declared, enforced vocabulary. Tags are not a search
-mechanism — they are the **filter axis** that keeps the index readable as the graph grows,
-which is what makes the whole scheme survive the accumulation it exists to encourage.
-
-**Embeddings are deliberately not here.** The paraphrase gap they solve is real, but the
+**Embeddings are deliberately absent.** The paraphrase gap they close is real, but the
 agent already closes it; `sentence-transformers` would put torch behind a project whose
-pitch is one dependency, and an embedding API would end the offline story. All three
-surfaces go through one function, `core.retrieve()`, so a `knoten[semantic]` extra can
-replace that body without touching a tool schema — the day a graph outgrows a tag-filtered
-index, which the 1k–5k node case does not.
+pitch is one dependency, and an embedding API would end the offline story. Both readers go
+through one function, `core.retrieve()`, so a `knoten[semantic]` extra could replace that
+body the day a graph outgrows a tag-filtered index — which the 1k–5k node case does not.
 
 ## 9. Phasing
 
@@ -451,6 +398,5 @@ Micropublications, nanopublications, PROV-O and LinkML are all open and safe to 
    Revisit only when a tag-filtered index stops fitting in a context window.
 3. **Multi-graph federation** — one agent querying trading *and* biology graphs.
    Defer until a second graph exists.
-4. **A closed `cause` vocabulary (§5) as a rule primitive?** Would need a
-   `require_field_one_of` key. Wait until a second graph wants it — a primitive with one
-   caller is a guess.
+4. ~~**A closed `cause` vocabulary (§5) as a rule primitive?**~~ **Answered: yes.**
+   `require_field_one_of` shipped, and a second graph did want it.
