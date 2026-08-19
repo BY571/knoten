@@ -156,7 +156,7 @@ def test_attaching_a_directory_is_refused_before_anything_is_copied(graph, tmp_p
 
 @pytest.mark.parametrize("nid", ["../../outside", "sub/dir", "UPPER"])
 def test_attach_and_detach_refuse_an_id_that_escapes_the_graph(graph, tmp_path, nid):
-    """The MCP surface guarded the id because it comes from an LLM; the CLI did not,
+    """One surface guarded the id because it comes from an LLM; the CLI did not,
     because a human types it. So `knoten attach ../../x f` wrote OUTSIDE the graph, and
     `knoten detach ../../x f` DELETED a file outside it. Every id -> path conversion now
     goes through core.node_path."""

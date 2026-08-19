@@ -1,7 +1,7 @@
 """SKILL.md is how an agent learns knoten, and now the only surface that teaches the loop.
 
-It used to be checked against the MCP server's own instructions, step for step, so the two
-could not drift. With that server gone there is nothing to compare against — so what is
+It used to be checked against a second surface's instructions, step for step, so the two
+could not drift. With that surface gone there is nothing to compare against — so what is
 left has to be pinned on its own: the steps are a contiguous sequence, each one names a
 real command, and every command an agent needs appears somewhere in the file.
 """
@@ -14,7 +14,7 @@ import pytest
 SKILL = Path(__file__).resolve().parents[1] / "SKILL.md"
 
 # CLI verbs the loop is allowed to talk about, and how a tool-name/verb collapses onto
-# `get` was the tool name on the retired MCP surface; the CLI verb for the
+# `get` was the verb on a since-removed surface; the CLI verb for the
 # same step is `show`, so they alias onto one subject.
 COMMANDS = {"frontier", "index", "query", "get", "show", "gates", "commit", "update", "attach"}
 ALIAS = {"get": "show"}
@@ -83,6 +83,6 @@ def test_the_skill_names_every_cli_command_an_agent_needs():
                 "knoten gates", "knoten commit", "knoten update", "knoten attach"]:
         assert cmd in text
 
-    # `get` was a tool name on the retired surface, never a CLI command — it must not appear as a shell
+    # `get` was a verb on the removed surface, never a CLI command — it must not appear as a shell
     # instruction here, because `knoten get` does not exist.
     assert "knoten get" not in text

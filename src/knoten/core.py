@@ -70,7 +70,7 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
 # An id becomes a filename, so anything else is a path traversal. Go through node_path()
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
-# the graph: only one surface guarded the id, and it was not the one people used.
+# the graph: the id was guarded on one path and not on the one people actually used.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
@@ -272,8 +272,8 @@ def backlink(nodes: dict[str, Node]) -> dict[str, Node]:
 
 
 # ---------------------------------------------------------------------------------
-# Shared. These lived twice — once in cli.py, once in the MCP server that has since been
-# removed — and drifted: one path printed relation labels and the other did not, and a
+# Shared. These lived twice — once in cli.py, once in a second surface since removed —
+# and drifted: one path printed relation labels and the other did not, and a
 # search fix landed in one copy and not the other.
 
 def find_root(start: Path | None = None) -> Path:

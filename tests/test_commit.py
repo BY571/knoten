@@ -1,7 +1,7 @@
 """Filing a claim.
 
-This lived inside the MCP server, which meant two things: 49 lines of domain logic sat in
-the transport layer, and creating a node programmatically required that server's SDK — an
+This lived inside a transport layer, which meant two things: 49 lines of domain logic sat
+in the wrong place, and creating a node programmatically required that transport's SDK — an
 optional dependency for a transport you may not be using. `attach` and `update` never had
 that problem; they live in their own modules and lock themselves.
 """

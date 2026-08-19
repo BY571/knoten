@@ -328,22 +328,22 @@ directions, **PRs-as-peer-review**, and hosting. We write none of it.
 
 ## 8. The agent surface — CLI first
 
-This section used to be titled "The agent surface (MCP) — this is what makes it
-compound," and meant it. That claim is now wrong, and this is the reversal, stated
-plainly rather than slid past.
+This section once named a tool-protocol server as the thing that made knoten compound,
+and meant it. That claim was wrong, and this is the reversal, stated plainly rather than
+slid past.
 
 The previous attempt failed because the graph was a **byproduct of automation**: when
 the orchestrator did not run, nothing was written. Meanwhile a plain chat session
 produced 15 experiments whose knowledge would have evaporated without hand-written
 memory files. The fix was still right — make the graph primary, and make writing to it
-the path of least resistance — but MCP turned out to be the expensive way to deliver it
-to an agent that already has a shell.
+the path of least resistance — but a tool-protocol server turned out to be the expensive
+way to deliver it to an agent that already has a shell.
 
-**The measurement.** knoten's MCP surface loads ~2,340 tokens into every session whether
-the agent touches the graph or not (1,928 of tool schema + 412 of instructions).
+**The measurement.** That surface loaded ~2,340 tokens into every session whether the
+agent touched the graph or not (1,928 of tool schema + 412 of instructions).
 `knoten --help` costs ~304 tokens, and only when the agent asks for it — most sessions
 never pay even that. And format compounds the gap: the same 55 nodes cost ~2,551 tokens
-as MCP's JSON (46/node) against ~1,185 as the CLI's columnar prose (21/node) — 2.2x. That
+as its JSON (46/node) against ~1,185 as the CLI's columnar prose (21/node) — 2.2x. That
 is why prose is the CLI's default and `--json` is opt-in, not the other way round.
 
 **So: the CLI is now the primary agent surface.** `ops.py` holds the one implementation
@@ -354,9 +354,9 @@ functions, not surface-specific code paths. `SKILL.md`, at the repo root, is how
 now learns the loop: `frontier` → `index`/`query` → `show` → `gates` → `commit`/`update`
 → `attach`.
 
-**MCP has since been deleted.** It was retained for a while as the right surface for a
-client with no shell — a chat UI wired to MCP servers rather than a coding agent with
-Bash — and that argument was not wrong, only outweighed. It cost ~2,340 tokens in every
+**That surface has since been deleted.** It was retained for a while as the right answer
+for a client with no shell — a chat UI rather than a coding agent with Bash — and that
+argument was not wrong, only outweighed. It cost ~2,340 tokens in every
 session against ~304 for `knoten --help`, and it was a second surface that had to be kept
 in step with `ops.py` forever. Every cross-surface drift bug this project has recorded —
 `update`'s refusal built twice with different keys, `--field` coercing `2` to `2.0` on one
@@ -421,7 +421,7 @@ index, which the 1k–5k node case does not.
 |---|---|---|
 | **0** | **Dogfood** — encode a real investigation by hand | ✅ done |
 | **1** | `knoten` CLI (`init/new/validate/query/index/frontier/gates/path/show/attach`) + rule engine | ✅ done |
-| **2** | **MCP server** | ✅ done — later demoted to a fallback, then removed (§8) |
+| **2** | **Tool-protocol server** | ✅ done — later demoted to a fallback, then removed (§8) |
 | **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind every read, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
 | 4 | Hosted multi-graph service | probably never needed |
@@ -433,7 +433,7 @@ blockers, and prose that no JSON schema could hold.
 
 ## 10. Licensing note
 
-**Basic Memory is AGPL-3.0** (strong copyleft). Its MCP tool design is excellent and
+**Basic Memory is AGPL-3.0** (strong copyleft). Its tool design is excellent and
 worth studying, but vendoring its code would make this AGPL too. **Reimplement, do
 not fork**, if this may ever be distributed or hosted.
 
