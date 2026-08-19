@@ -15,11 +15,16 @@ A research graph that remembers what did NOT work. Run `knoten` in the graph dir
 **Read it first** — knoten defines none of these words, so `hypothesis` means whatever
 that graph says it means. A common shape:
 
-    source ──▶ idea ──▶ hypothesis ──▶ experiment ──▶ finding
-                 ▲                                       │
-                 └────── findings open new ideas ────────┘
+    question ─▶ source ─▶ idea ─▶ hypothesis ─▶ experiment ─▶ finding
+                           ▲                                     │
+                           └────── findings open new ideas ──────┘
 
     gate    stands outside the loop: the bar every claim must survive
+
+A graph starts from ONE question, statement or task — `knoten init` scaffolds it, and
+everything else descends from it. Investigate sources first (papers, posts, datasets,
+searches); if the work starts from your own head instead, record that as a source too, so
+an idea always names where it came from.
 
 Those names are the order `knoten viz` lays columns out in; a type it does not know lands
 after the ones it does. Links are a list, so one hypothesis can carry several experiments

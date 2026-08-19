@@ -39,7 +39,7 @@ GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
 
 # Only an ordering hint. A type this does not name is not dropped — it lands after the
 # ones that are, in the order the graph first used it. knoten declares no vocabulary.
-FLOW = ["source", "idea", "question", "hypothesis", "experiment", "finding",
+FLOW = ["question", "source", "idea", "hypothesis", "experiment", "finding",
         "blocker", "retraction"]
 
 

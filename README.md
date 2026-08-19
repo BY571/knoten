@@ -188,12 +188,21 @@ your `graph.yaml` says they mean — the core checks `node_types` for membership
 nothing else. A shape that recurs:
 
 ```
-source ──▶ idea ──▶ hypothesis ──▶ experiment ──▶ finding
-             ▲                                       │
-             └────── findings open new ideas ────────┘
+question ─▶ source ─▶ idea ─▶ hypothesis ─▶ experiment ─▶ finding
+                       ▲                                     │
+                       └────── findings open new ideas ──────┘
 
 gate    stands outside the loop: the bar every claim must survive
 ```
+
+A graph begins with **one question, statement or task**, and `knoten init` scaffolds it as
+a node rather than leaving it as prose — so a finding can be traced back to the question it
+serves, and a second sub-question has somewhere to live. From there the usual move is to
+investigate **sources**: papers, blogposts, datasets, searches. Work that starts from your
+own head instead is not an exception — write `source-own-intuition` and cite it the same
+way. One rule, every time: an idea names where it came from. It also makes an
+uncomfortable question answerable — how much of this graph rests on hunches rather than on
+having read anything?
 
 The names above are a convention, not a rule — `knoten viz` lays columns out in that
 order and puts anything it does not recognise after the ones it does. (`method` is

@@ -59,9 +59,12 @@ knoten is a research graph that remembers what did NOT work. Each node is a clai
 claim carries why it died and what would bring it back.
 
 The graph's own `graph.yaml` declares the node kinds and, where the author wrote them,
-what each word means — read it first, because knoten defines none of them. A common shape
-is source -> idea -> hypothesis -> experiment -> finding, with findings opening new ideas;
-a gate stands outside that loop as the bar every claim must survive. Nothing is
+what each word means — read it first, because knoten defines none of them. A graph starts
+from ONE question, statement or task and everything descends from it: question -> source
+-> idea -> hypothesis -> experiment -> finding, with findings opening new ideas. A gate
+stands outside that loop as the bar every claim must survive. Sources are papers, posts,
+datasets and searches — and your own intuition, which is worth recording as a source too
+so that an idea always names where it came from. Nothing is
 one-to-one: one hypothesis may have several experiments and several findings.
 
 An edge always points from the NEW node to the one it depends on — claim -> the gate it
