@@ -269,7 +269,7 @@ def _fields(pairs) -> dict:
 
 
 def _links(pairs) -> list[dict]:
-    """`--link kn:killedByGate=method-x`, repeatable."""
+    """`--link kn:killedByGate=gate-x`, repeatable."""
     out = []
     for rel, to in _pairs(pairs, "--link takes rel=to, got '{}'"):
         out.append({"rel": rel, "to": to.strip()})
@@ -336,7 +336,7 @@ description: TODO — what question is this graph about?
 
 # Enforced. A node whose type or status is not on these lists is a typo — and a claim
 # with a typo'd status silently drops out of every query. Edit them for YOUR topic.
-node_types: [hypothesis, experiment, finding, method, source, retraction]
+node_types: [hypothesis, experiment, finding, gate, source, retraction]
 statuses:   [open, alive, dead, retracted, superseded, active]
 
 # The axis `knoten index --tag` filters on. Declare them and a typo is a violation;
@@ -363,10 +363,10 @@ rules:
     message: The post-mortem IS the asset — a dead end must become a standing offer.
 """
 
-TEMPLATE_METHOD = """\
+TEMPLATE_GATE = """\
 ---
-id: method-example-gate
-type: method
+id: gate-example
+type: gate
 status: active
 ---
 # Gate: <the test every claim in this graph must survive>
@@ -440,7 +440,7 @@ def init(name) -> int:
     (root / "graph.yaml").write_text(TEMPLATE_GRAPH.format(name=name), encoding="utf-8")
     # knoten's own write lock. Nobody should have to see it in `git status`.
     (root / ".gitignore").write_text(f"{LOCK}\n", encoding="utf-8")
-    (root / "nodes" / "method-example-gate.md").write_text(TEMPLATE_METHOD, encoding="utf-8")
+    (root / "nodes" / "gate-example.md").write_text(TEMPLATE_GATE, encoding="utf-8")
     print(f"created graph '{name}'\n")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
     print(f"  {name}/nodes/       <- one markdown file per hypothesis / method / source\n")
@@ -525,7 +525,7 @@ def _parser() -> argparse.ArgumentParser:
                         "recorded (repeatable). The graph's rules decide what is "
                         "accepted.")
     s.add_argument("--link", action="append", metavar="REL=TO",
-                   help="edge to add, e.g. kn:killedByGate=method-x (repeatable)")
+                   help="edge to add, e.g. kn:killedByGate=gate-x (repeatable)")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("attach", help="attach a script / plot / notebook to a node")

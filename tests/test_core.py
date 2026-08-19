@@ -10,7 +10,7 @@ type: hypothesis
 status: dead
 tags: [decoding, reasoning]
 links:
-  - {rel: kn:killedByGate, to: method-gate}
+  - {rel: kn:killedByGate, to: gate-cost}
 repro:
   script: experiments/x.py
   model: Qwen3-8B
@@ -34,10 +34,10 @@ def test_results_contains_only_the_results_block(graph):
 
 
 def test_backlink_is_generated_on_the_target(graph):
-    graph.node("hyp-x", FM).node("method-gate", "id: method-gate\ntype: method")
+    graph.node("hyp-x", FM).node("gate-cost", "id: gate-cost\ntype: gate")
     nodes = load(graph.root)
 
-    assert nodes["method-gate"].backlinks == [{"rel": "kn:gateKilled", "to": "hyp-x"}]
+    assert nodes["gate-cost"].backlinks == [{"rel": "kn:gateKilled", "to": "hyp-x"}]
 
 
 def test_status_stays_a_string_despite_yaml_1_1_coercion(graph):

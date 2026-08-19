@@ -116,7 +116,7 @@ def test_frontier_prose_carries_the_judgement_note(graph, monkeypatch, capsys):
 
 def test_gates_prose_carries_the_never_applied_note(graph, monkeypatch, capsys):
     monkeypatch.chdir(graph.root)
-    graph.node("method-x", "id: method-x\ntype: method\nstatus: active", "# gate\n")
+    graph.node("gate-x", "id: gate-x\ntype: gate\nstatus: active", "# gate\n")
 
     main(["gates"])
     out = capsys.readouterr().out

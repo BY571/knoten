@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import GENERATED, INVERSE, GraphError, Node, _yaml
+from .core import GATE_TYPE, GENERATED, INVERSE, GraphError, Node, _yaml
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -27,6 +27,8 @@ RULE_KEYS = {
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
+GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
+
 GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules"}
 
 
@@ -211,6 +213,18 @@ def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation
             if not (root / "attachments" / nid / a).exists():
                 out.append(Violation(nid, "missing-attachment",
                                      f"'{a}' is listed but not in attachments/{nid}/"))
+
+    # `gates()` finds nodes by type, so a mistyped gate is not an error anywhere — it is
+    # an ABSENCE: `knoten gates` returns one fewer row and says nothing. Reported once per
+    # node, however many claims cite it.
+    miscast = {l["to"] for n in nodes.values() for l in n.links
+               if l["rel"] in GATE_RELS and l["to"] in nodes
+               and nodes[l["to"]].type != GATE_TYPE}
+    for nid in sorted(miscast):
+        out.append(Violation(nid, "not-a-gate",
+                             f"cited as a gate but typed '{nodes[nid].type}' — `knoten "
+                             f"gates` only finds `type: {GATE_TYPE}`, so this node is "
+                             f"invisible to it"))
     return out
 
 
