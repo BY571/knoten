@@ -87,3 +87,13 @@ def test_real_numbers_still_parse_as_numbers(graph):
     r = load(graph.root)["hyp-x"].results
 
     assert r == {"acc": 0.741, "n": 1319, "neg": -3, "exp": 1.2e-3, "big": 0}
+
+
+def test_section_collapses_by_default_and_can_keep_its_newlines(graph):
+    """Two callers, two needs: the CLI prints a section inline on one row, the viz panel
+    renders it as the table the author wrote."""
+    from knoten.core import section
+    body = "# t\n\n## Result\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+
+    assert "\n" not in section(body, "Result")
+    assert section(body, "Result", collapse=False).count("\n") == 2

@@ -8,12 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import webbrowser
 from pathlib import Path
 
 from . import attachments, ops, viz
 from .commit import commit
-from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
+from .core import GraphError, ID_RE, LOCK, find_root, load, node_path, today
 from .hook import install as install_hook
 from .validate import _csv, applies, load_config
 
@@ -199,12 +200,42 @@ def path(root, a, b, as_json=False) -> int:
     return 0
 
 
-def viz_cmd(root, out, show) -> int:
-    """One HTML file. Read-only, self-contained, no server."""
-    dest = viz.write(root, Path(out))
+def viz_cmd(root, out, show, watch) -> int:
+    """One HTML file. Read-only, self-contained, no server.
+
+    `--watch` rewrites it whenever the graph changes and tells the open page to reload,
+    so you can leave it up beside an agent loop. Still no server: the page reloads
+    itself from disk, and it remembers which view you were in, what you had selected and
+    where you had panned to.
+    """
+    reload_ms = int(watch * 1000) if watch else 0
+    dest = viz.write(root, Path(out), reload_ms)
     print(f"wrote {dest}  ({dest.stat().st_size // 1024} KB)")
     if show:
         webbrowser.open(dest.resolve().as_uri())
+    if not watch:
+        return 0
+
+    # Flushed: a watch loop whose output only appears when it exits is a watch loop
+    # you cannot tell is running.
+    print(f"watching {root}/ — the page reloads itself every {watch:g}s. ctrl-c to stop.",
+          flush=True)
+    seen = viz.fingerprint(root)
+    try:
+        while True:
+            time.sleep(watch)
+            if (now := viz.fingerprint(root)) == seen:
+                continue
+            seen = now
+            try:
+                viz.write(root, Path(out), reload_ms)
+                print(f"  {today()}  redrew {len(load(root))} nodes", flush=True)
+            except GraphError as e:
+                # A half-written node is normal while an agent is mid-commit: say so and
+                # keep the last good page up rather than tearing the window down.
+                print(f"  skipped: {e}", flush=True)
+    except KeyboardInterrupt:
+        print("\nstopped.")
     return 0
 
 
@@ -409,6 +440,22 @@ rules:
       what this does NOT test, it is testing more than one thing. Open a second
       hypothesis instead of widening this one.
 
+  - id: hypotheses-are-claims-not-runs
+    when_type: hypothesis
+    forbid_fields: results, repro
+    message: >
+      A hypothesis is a claim. The run that tested it is an experiment and the number it
+      produced is a finding — put `results` and `repro` on those. One node holding all
+      three is how a loop stops having stages.
+
+  - id: alive-hypotheses-must-have-been-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {{rel: kn:testedBy, type: experiment, min: 1}}
+    message: >
+      A hypothesis is alive because something tested it. Record the run as an experiment
+      that `kn:tests` this node.
+
   - id: experiments-must-be-rerunnable
     when_type: experiment
     require_sections: Setup, How to reproduce, Result
@@ -577,6 +624,9 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("viz", help="write the graph as one self-contained HTML file")
     s.add_argument("-o", "--out", default="knoten.html", help="where to write it")
     s.add_argument("--open", dest="show", action="store_true", help="open it when done")
+    s.add_argument("--watch", nargs="?", type=float, const=2.0, default=None,
+                   metavar="SECONDS",
+                   help="redraw when the graph changes and reload the page (default 2s)")
 
     s = sub.add_parser("hook", help="install the git pre-commit gate")
     s.add_argument("--force", action="store_true",
@@ -646,7 +696,7 @@ def main(argv=None) -> int:
                                          append=args.append, results=args.result,
                                          links=args.link, fields=args.field,
                                          as_json=args.json),
-            "viz":    lambda: viz_cmd(root, args.out, args.show),
+            "viz":    lambda: viz_cmd(root, args.out, args.show, args.watch),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),

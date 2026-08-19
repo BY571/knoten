@@ -286,10 +286,17 @@ def find_root(start: Path | None = None) -> Path:
     raise GraphError("no graph.yaml found (run `knoten init` or cd into a graph)")
 
 
-def section(body: str, title: str) -> str | None:
-    """The prose under a `## <title>` heading, whitespace-collapsed."""
+def section(body: str, title: str, collapse: bool = True) -> str | None:
+    """The prose under a `## <title>` heading.
+
+    Collapsed to one line by default, because the CLI prints it inline. `collapse=False`
+    keeps the newlines, which is the difference between a result table and a row of
+    pipes: a reader looking at a whole section needs its shape.
+    """
     m = re.search(rf"^##+ {re.escape(title)}\s*\n+(.+?)(?=\n##|\Z)", body, re.S | re.M)
-    return " ".join(m.group(1).split()) if m else None
+    if not m:
+        return None
+    return " ".join(m.group(1).split()) if collapse else m.group(1).strip()
 
 
 def _tokens(s: str) -> list[str]:

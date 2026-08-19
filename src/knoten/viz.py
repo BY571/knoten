@@ -12,6 +12,7 @@ not wherever its vocabulary says they should be.
 Layout is a pure function of the graph. Nothing is persisted: positions are derived state,
 and a `layout.json` in git would be a merge conflict generator with ten agents appending.
 """
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -24,6 +25,10 @@ HERE = Path(__file__).parent
 # Columns: no vertical centring. Centring would make every column shift when any one of
 # them grows, which is the reflow this whole design exists to avoid.
 COLW, CARDH, GAP, TOP = 300, 74, 12, 58
+# A gate card carries the tally rail — what it killed, what it passed — which makes it
+# taller than every other card. Stepping every column by one fixed row height overlapped
+# them by about the height of that rail.
+RAIL = 28
 
 # Map: golden-angle sunflower. Uniform density, and index k always lands in the same
 # place, so appending a node never disturbs 1..k-1.
@@ -106,13 +111,14 @@ def roles(nodes: dict) -> tuple:
 
 
 def _columns(nodes: dict) -> dict:
-    cols, _, _ = roles(nodes)
-    at = {c: 0 for c in cols}
+    """Stack each column top-down, accumulating heights rather than counting rows, so a
+    type whose card is taller does not overlap the one beneath it."""
+    cols, gates, _ = roles(nodes)
+    at = {c: 0.0 for c in cols}
     pos = {}
     for n in _order(nodes):
-        i = cols.index(n.type)
-        pos[n.id] = [i * COLW, TOP + at[n.type] * (CARDH + GAP)]
-        at[n.type] += 1
+        pos[n.id] = [cols.index(n.type) * COLW, TOP + at[n.type]]
+        at[n.type] += CARDH + GAP + (RAIL if n.type in gates else 0)
     return pos
 
 
@@ -189,7 +195,7 @@ def layout(nodes: dict) -> dict:
     return {"columns": _columns(nodes), "map": pos}
 
 
-SECTION_LIMIT = 1500
+SECTION_LIMIT = 4000
 
 
 def _clip(text: str) -> str:
@@ -235,7 +241,7 @@ def payload(root: Path) -> dict:
             "created": str(n.frontmatter.get("created") or ""),
             "links": [{"rel": l["rel"], "to": l["to"]} for l in n.links],
             "backlinks": [{"rel": b["rel"], "to": b["to"]} for b in n.backlinks],
-            "sections": [{"title": t, "text": _clip(section(n.body, t) or "")}
+            "sections": [{"title": t, "text": _clip(section(n.body, t, collapse=False) or "")}
                          for t in n.sections],
             "results": n.results, "repro": n.repro, "attachments": n.attachments,
             "columns": columns[n.id], "map": pos[n.id],
@@ -243,7 +249,24 @@ def payload(root: Path) -> dict:
     }
 
 
-def render(root: Path) -> str:
+def fingerprint(root: Path) -> str:
+    """What `--watch` polls: a hash of every node plus graph.yaml.
+
+    mtimes were the obvious choice and are wrong here. Filesystem timestamp granularity
+    is coarser than an agent writing three nodes in a burst, and every file in a freshly
+    written graph can report the SAME `st_mtime_ns` — so the poll would sit there
+    reporting no change. Reading the content costs 0.56 ms on a 67-node graph, measured,
+    which is nothing against a two-second poll.
+    """
+    h = hashlib.blake2b(digest_size=16)
+    for f in sorted((root / "nodes").glob("*.md")) + [root / "graph.yaml"]:
+        if f.exists():
+            h.update(f.name.encode())
+            h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def render(root: Path, reload_ms: int = 0) -> str:
     """The template with the payload inlined.
 
     `<` is escaped rather than the `</script>` sequence alone: a node body containing that
@@ -251,11 +274,19 @@ def render(root: Path) -> str:
     graph lost to one string in one post-mortem.
     """
     blob = json.dumps(payload(root), default=str).replace("<", "\\u003c")
-    return (HERE / "viz.html").read_text(encoding="utf-8").replace("__KNOTEN_DATA__", blob)
+    html = (HERE / "viz.html").read_text(encoding="utf-8")
+    if reload_ms:
+        html = html.replace("__RELOAD_MS__", str(int(reload_ms)))
+    else:
+        # Cut the block out rather than leave it behind a falsy guard. A file you emailed
+        # someone should contain no code that reloads it, not merely code that declines to.
+        a, b = html.index("/*__WATCH__*/"), html.rindex("/*__WATCH__*/")
+        html = html[:a] + html[b + len("/*__WATCH__*/"):]
+    return html.replace("__KNOTEN_DATA__", blob)
 
 
-def write(root: Path, dest: Path) -> Path:
+def write(root: Path, dest: Path, reload_ms: int = 0) -> Path:
     if not (root / "nodes").is_dir():
         raise GraphError(f"{root} is not a knoten graph (no nodes/ directory)")
-    dest.write_text(render(root), encoding="utf-8")
+    dest.write_text(render(root, reload_ms), encoding="utf-8")
     return dest

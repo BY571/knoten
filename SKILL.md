@@ -49,6 +49,13 @@ Those names are the order `knoten viz` lays columns out in; a type it does not k
 after the ones it does. Links are a list, so one hypothesis can carry several experiments
 and several findings.
 
+**One node is one stage.** The commonest way to get this wrong is to write the claim, the
+run and the number into a single hypothesis: `results:` and a `## The result` section on a
+node whose type says it is a claim. Split them — the hypothesis states what you believe
+and how it could be wrong, the experiment states the setup and how to rerun it, the
+finding states what came out. A graph with four hypotheses and one experiment is a graph
+where three claims have no recorded test, whatever their bodies say.
+
 ## Which way an edge points
 
 An edge always points from the NEW node to the one it depends on. Getting this backwards

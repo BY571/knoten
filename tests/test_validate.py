@@ -496,3 +496,48 @@ def test_a_malformed_require_field_is_a_graph_error(graph):
 
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
+
+
+# ------------------------------------------- saying what a type must NOT carry
+
+NO_RESULTS = """\
+name: t
+rules:
+  - id: hypotheses-carry-no-results
+    when_type: hypothesis
+    forbid_fields: results, repro
+    message: A hypothesis is a claim, not a run.
+"""
+
+
+def test_a_forbidden_field_is_a_violation(graph):
+    """Every rule key was `require_*`, so a graph could say what a type must carry and
+    never what it must not. That let one node be a hypothesis, an experiment and a
+    finding at once — which is how a research loop stops having stages."""
+    graph.rules(NO_RESULTS).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\n"
+                                          "results:\n  auc: 0.9")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-carry-no-results"]
+
+
+def test_a_node_without_the_forbidden_field_passes(graph):
+    graph.rules(NO_RESULTS).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open")
+
+    assert check(load(graph.root), graph.root) == []
+
+
+def test_the_violation_names_the_field_that_is_in_the_way(graph):
+    """"A hypothesis is a claim, not a run" does not tell you which key to move."""
+    graph.rules(NO_RESULTS).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\n"
+                                          "repro:\n  cmd: python x.py")
+
+    msg = next(v.message for v in check(load(graph.root), graph.root))
+
+    assert "repro" in msg
+
+
+def test_an_empty_forbidden_field_is_still_a_violation(graph):
+    """`results:` with nothing under it is still the author reaching for the wrong node."""
+    graph.rules(NO_RESULTS).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\nresults:")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-carry-no-results"]

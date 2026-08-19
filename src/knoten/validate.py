@@ -25,6 +25,7 @@ RULE_KEYS = {
     "require_result",      # results must carry this key
     "require_result_min",  # {key: minimum} — numeric floor
     "require_field_one_of",  # {field: [allowed]} — closed vocabulary
+    "forbid_fields",       # this type must NOT carry these frontmatter keys
     "require_edge_target",   # {rel, type, status, min} — what the edge must POINT AT
     "require_backlink",      # same shape, read from the other side: what must point AT
                              # this node. `rel` is the GENERATED inverse, e.g. kn:testedBy
@@ -338,6 +339,12 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
 
             # `require_field_one_of` needs a closed set; a url or a doi has none. This
             # says only that the answer got written down.
+            # The only key that says what a type must NOT be. Without it a graph could
+            # demand a hypothesis carry a claim and never stop it carrying the run and
+            # the result too, which is how a loop loses its stages.
+            if wrong := [f for f in _csv(r.get("forbid_fields")) if f in n.frontmatter]:
+                out.append(Violation(n.id, rid, f"{msg} (remove: {', '.join(wrong)})"))
+
             if fld := r.get("require_field"):
                 got = n.frontmatter.get(fld)
                 if got is None or not str(got).strip():
