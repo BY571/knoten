@@ -159,3 +159,25 @@ def test_a_node_whose_tags_are_not_a_list_is_a_violation(graph):
     violations = check(load(graph.root), graph.root)
 
     assert [v.rule for v in violations] == ["malformed-tags"]
+
+
+# ------------------------------------------------- how a claim was reached, not just that
+
+@pytest.mark.parametrize("rel,inverse", [
+    ("kn:explains", "kn:explainedBy"),
+    ("kn:generalises", "kn:generalisedBy"),
+    ("kn:followsFrom", "kn:entails"),
+])
+def test_the_kind_of_a_derivation_is_a_relation_with_a_back_link(graph, rel, inverse):
+    """knoten had one `prov:wasDerivedFrom`, which records THAT a claim came from
+    something and never HOW. Rules match on the relation, so with one untyped derivation
+    there is no way to demand three instances of a generalisation without demanding them
+    of every derivation. A per-edge qualifier would not help: no rule key can see one."""
+    graph.node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", f"id: hyp-x\ntype: hypothesis\nstatus: open\nlinks:\n"
+                        f"  - {{rel: {rel}, to: find-a}}")
+
+    nodes = load(graph.root)
+
+    assert [b["rel"] for b in nodes["find-a"].backlinks] == [inverse]
+    assert check(nodes, graph.root) == []

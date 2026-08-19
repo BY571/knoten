@@ -44,12 +44,13 @@ INVERSE = {
     "npx:supersedes":      "npx:supersededBy",
     "prov:wasDerivedFrom": "prov:hadDerivation",
     # How a claim was reached, not merely that it was. `prov:wasDerivedFrom` records the
-    # fact of derivation; these name the mode. Falsification — the fourth mode of the
-    # hypothetico-deductive cycle — is the gate pair above. Naming follows PROV-O's own
-    # wasDerivedFrom/hadDerivation shape rather than inventing one.
-    "kn:abducedFrom":      "kn:hadAbduction",
-    "kn:inducedFrom":      "kn:hadInduction",
-    "kn:deducedFrom":      "kn:hadDeduction",
+    # fact of a derivation and never its kind; these three name the kind, so a rule can
+    # demand something of one without demanding it of all (SPEC §4). Plain verbs, and
+    # inverses read from the object, matching the gate pair above — Peirce's own words
+    # would be worse here: "abduced" reads as "abducted".
+    "kn:explains":         "kn:explainedBy",
+    "kn:generalises":      "kn:generalisedBy",
+    "kn:followsFrom":      "kn:entails",
     "prov:used":           "prov:wasUsedBy",
 }
 GENERATED = set(INVERSE.values())

@@ -114,22 +114,37 @@ Adopt existing predicates. Coin only what the field genuinely lacks.
 | `prov:wasDerivedFrom` | PROV-O | this question arose from that one |
 | `prov:used` | PROV-O | used this dataset / method |
 
-| `kn:abducedFrom` | knoten | this claim is the best explanation of that observation |
-| `kn:inducedFrom` | knoten | this claim generalises those instances |
-| `kn:deducedFrom` | knoten | this claim follows from that one by argument |
-
-The last three name the *mode* of a derivation. `prov:wasDerivedFrom` records that a
-claim came from something and never how; the hypothetico-deductive cycle distinguishes
-abduction, induction, deduction and falsification, and knoten could express only the
-fourth. `prov:wasDerivedFrom` remains as the untyped form — a graph that does not care
-about the distinction should not be forced to make one.
-
-**A mode confers no status.** An inductive generalisation is a conjecture that repeated
-observation happened to suggest; it faces the same gates as any other claim and can still
-die. A vocabulary in which "established by induction" exempted a claim from falsification
-would contradict this tool's thesis.
-
 ### Novel — this is the actual contribution
+
+#### How a claim was reached
+
+| predicate | inverse | meaning |
+|---|---|---|
+| `kn:explains` | `kn:explainedBy` | this claim is the best explanation of that observation |
+| `kn:generalises` | `kn:generalisedBy` | this claim generalises those instances |
+| `kn:followsFrom` | `kn:entails` | this claim follows from that one by argument |
+
+Peirce named three ways a claim gets proposed — abduction, induction, deduction — and
+Popper named the one way it gets tested. knoten had rich vocabulary for the testing
+(the gate pair) and one untyped `prov:wasDerivedFrom` for all three of the others.
+
+The distinction earns its place because a rule can act on it. `require_edge_target`
+matches on the relation, so with a single `prov:wasDerivedFrom` there is no way to say
+*"a generalisation must cite at least three findings"* without saying it of every
+derivation:
+
+```yaml
+require_edge_target: {rel: kn:generalises, type: finding, status: alive, min: 3}
+```
+
+A per-edge qualifier — `{rel: prov:wasDerivedFrom, to: x, mode: induction}` — parses
+today and no rule key can see it. `prov:wasDerivedFrom` stays as the untyped form: a
+graph that does not care about the distinction should not be made to draw one.
+
+**A kind confers no status.** A generalisation is a conjecture that repeated observation
+happened to suggest; it faces the same gates as any other claim and can still die. A
+vocabulary in which "established by induction" exempted a claim from falsification would
+contradict the thesis of this tool.
 
 The field has no way to say *"this claim survived / was killed by a named
 methodological gate."* DISK's `LineOfInquiry` is the closest blueprint and it
