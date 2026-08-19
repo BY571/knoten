@@ -1,6 +1,6 @@
 ---
-id: method-compute-matched-baseline
-type: method
+id: gate-compute-matched-baseline
+type: gate
 status: active
 tags: [gate, evaluation]
 ---

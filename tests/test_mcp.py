@@ -51,11 +51,11 @@ def test_commit_does_not_touch_disk_when_the_node_is_invalid(cwd):
 
 
 def test_commit_writes_a_valid_node(cwd):
-    cwd.node("method-gate", "id: method-gate\ntype: method")
+    cwd.node("gate-cost", "id: gate-cost\ntype: gate")
 
     res = commit(
         "hyp-ok",
-        "id: hyp-ok\ntype: hypothesis\nstatus: alive\nlinks:\n  - {rel: kn:survivedGate, to: method-gate}",
+        "id: hyp-ok\ntype: hypothesis\nstatus: alive\nlinks:\n  - {rel: kn:survivedGate, to: gate-cost}",
     )
 
     assert res["status"] == "COMMITTED"
@@ -79,10 +79,10 @@ def test_commit_refuses_to_overwrite(cwd):
 
 
 def test_query_reports_the_cause_of_death(cwd):
-    cwd.node("method-gate", "id: method-gate\ntype: method")
+    cwd.node("gate-cost", "id: gate-cost\ntype: gate")
     cwd.node(
         "hyp-x",
-        "id: hyp-x\ntype: hypothesis\nstatus: dead\nlinks:\n  - {rel: kn:killedByGate, to: method-gate}",
+        "id: hyp-x\ntype: hypothesis\nstatus: dead\nlinks:\n  - {rel: kn:killedByGate, to: gate-cost}",
         body="# x\n## Why it died\nThe gain was compute, not method.\n",
     )
 
@@ -90,18 +90,18 @@ def test_query_reports_the_cause_of_death(cwd):
 
     (claim,) = res["claims"]
     assert claim["verdict"] == "DEAD"
-    assert claim["killed_by"] == ["method-gate"]
+    assert claim["killed_by"] == ["gate-cost"]
     assert "compute, not method" in claim["why_it_died"]
 
 
 def test_get_surfaces_that_a_claim_was_retracted(cwd):
     """We reported what a node RETRACTS and never that it WAS retracted, so an agent asking
     "has this been tried?" about a withdrawn claim was told the claim, not the withdrawal."""
-    cwd.node("method-gate", "id: method-gate\ntype: method")
+    cwd.node("gate-cost", "id: gate-cost\ntype: gate")
     cwd.node("hyp-wrong", "id: hyp-wrong\ntype: hypothesis\nstatus: retracted")
     cwd.node("ret-oops", "id: ret-oops\ntype: hypothesis\nstatus: alive\nlinks:\n"
                          "  - {rel: npx:retracts, to: hyp-wrong}\n"
-                         "  - {rel: kn:survivedGate, to: method-gate}")
+                         "  - {rel: kn:survivedGate, to: gate-cost}")
 
     res = M.knoten_get(id="hyp-wrong")
 
