@@ -237,7 +237,7 @@ def knoten_update(
         description="result keys to add. An existing key cannot be changed to a different "
                     "value.")] = None,
     links: Annotated[list[dict] | None, Field(
-        description="edges to add, e.g. [{rel: kn:killedByGate, to: method-x}]")] = None,
+        description="edges to add, e.g. [{rel: kn:killedByGate, to: gate-x}]")] = None,
     fields: Annotated[dict | None, Field(
         description="top-level frontmatter fields to set, e.g. {\"cause\": "
                     "\"weak_baseline\"}. Sets any key, including one already "

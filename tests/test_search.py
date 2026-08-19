@@ -32,8 +32,8 @@ repro:
 """
 
 GATE = """\
-id: method-compute-matched-baseline
-type: method
+id: gate-compute-matched-baseline
+type: gate
 status: active
 tags: [evaluation]
 """
@@ -49,7 +49,7 @@ def research(graph):
             .node("hyp-few-shot-format", FEW_SHOT,
                   "# Delimiting few-shot examples with XML tags improves accuracy\n\n"
                   "The gain survives at the same token budget as the plain baseline.\n")
-            .node("method-compute-matched-baseline", GATE,
+            .node("gate-compute-matched-baseline", GATE,
                   "# Gate: compute-matched baseline\n\n"
                   "A method that spends more compute is compared against the same budget.\n"))
 
@@ -130,9 +130,9 @@ def test_no_query_and_no_filter_returns_the_whole_graph(research):
 
 
 def test_type_filter(research):
-    hits = retrieve(load(research.root), None, type=["method"])
+    hits = retrieve(load(research.root), None, type=["gate"])
 
-    assert ids(hits) == ["method-compute-matched-baseline"]
+    assert ids(hits) == ["gate-compute-matched-baseline"]
 
 
 def test_a_malformed_tag_string_does_not_match_single_letters(graph):

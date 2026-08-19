@@ -13,7 +13,7 @@ from knoten.core import load
 RULES = """\
 name: t
 statuses: [open, alive, dead]
-node_types: [hypothesis, method]
+node_types: [hypothesis, gate]
 rules:
   - id: live-claims-must-cite-their-gates
     when_status: alive
@@ -22,10 +22,10 @@ rules:
 """
 
 ALIVE_CITING = ("type: hypothesis\nstatus: alive\n"
-                "links:\n  - {rel: kn:survivedGate, to: method-new}")
+                "links:\n  - {rel: kn:survivedGate, to: gate-new}")
 
 def test_a_valid_node_is_written(graph):
-    graph.rules(RULES).node("method-new", "id: method-new\ntype: method\nstatus: open")
+    graph.rules(RULES).node("gate-new", "id: gate-new\ntype: gate\nstatus: open")
 
     res = commit(graph.root, "hyp-x", ALIVE_CITING, "# A claim\n")
 
@@ -45,8 +45,8 @@ def test_commit_validates_the_graph_as_it_is_when_the_lock_is_held(graph, monkey
     snapshot — the same read-modify-write bug that `attach` was fixed for one commit
     earlier, reintroduced one function over.
 
-    Reproduced with threads: agent B commits `method-new`, agent A commits a claim citing
-    it, and A is rejected with "method-new does not exist" while method-new.md is on disk.
+    Reproduced with threads: agent B commits `gate-new`, agent A commits a claim citing
+    it, and A is rejected with "gate-new does not exist" while gate-new.md is on disk.
     Here that race is made deterministic — a peer lands its node in the window between
     entering commit and acquiring the lock.
     """
@@ -54,7 +54,7 @@ def test_commit_validates_the_graph_as_it_is_when_the_lock_is_held(graph, monkey
     real_lock = commit_mod.graph_lock
 
     def peer_commits_first(root):
-        graph.node("method-new", "id: method-new\ntype: method\nstatus: open")
+        graph.node("gate-new", "id: gate-new\ntype: gate\nstatus: open")
         monkeypatch.setattr(commit_mod, "graph_lock", real_lock)   # once, not every call
         return real_lock(root)
 
@@ -86,7 +86,7 @@ def test_committing_needs_no_mcp_sdk(graph):
     dependency for a transport you were not using."""
     import sys
 
-    graph.rules(RULES).node("method-new", "id: method-new\ntype: method\nstatus: open")
+    graph.rules(RULES).node("gate-new", "id: gate-new\ntype: gate\nstatus: open")
     commit(graph.root, "hyp-x", ALIVE_CITING, "# A claim\n")
 
     assert "knoten.mcp_server" not in sys.modules or True   # never imported by knoten.commit

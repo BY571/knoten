@@ -21,7 +21,7 @@ def repo(graph):
     git("init", "-q", cwd=graph.root)
     git("config", "user.email", "t@t.t", cwd=graph.root)
     git("config", "user.name", "t", cwd=graph.root)
-    graph.node("method-gate", "id: method-gate\ntype: method")
+    graph.node("gate-cost", "id: gate-cost\ntype: gate")
     return graph
 
 
@@ -92,7 +92,7 @@ def test_install_works_in_a_git_worktree(tmp_path, graph):
     git("init", "-q", cwd=graph.root)
     git("config", "user.email", "t@t.t", cwd=graph.root)
     git("config", "user.name", "t", cwd=graph.root)
-    graph.node("method-gate", "id: method-gate\ntype: method")
+    graph.node("gate-cost", "id: gate-cost\ntype: gate")
     git("add", "-A", cwd=graph.root)
     git("commit", "-qm", "init", cwd=graph.root)
 

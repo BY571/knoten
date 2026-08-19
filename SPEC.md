@@ -152,8 +152,8 @@ methodological gate."* DISK's `LineOfInquiry` is the closest blueprint and it
 
 | predicate | domain → range | meaning |
 |---|---|---|
-| `kn:survivedGate` | claim → method | **claim passed this gate.** A `status: alive` claim MUST have ≥1. |
-| `kn:killedByGate` | claim → method | **the gate that killed it.** The predicate the entire field is missing. |
+| `kn:survivedGate` | claim → gate | **claim passed this gate.** A `status: alive` claim MUST have ≥1. |
+| `kn:killedByGate` | claim → gate | **the gate that killed it.** The predicate the entire field is missing. |
 | `kn:blockedBy` | claim → finding | a *structural* blocker (a fee schedule, a venue, a data licence) — not a result, a wall. |
 
 `kn:survivedGate` + the rule engine is the whole safety mechanism: **an unchallenged
@@ -219,7 +219,7 @@ never in code.**
 LinkML was the original plan and was dropped: it validates *shape*, and every rule that
 matters here is a *predicate over a node* ("does this claim cite a gate?"). A LinkML
 schema plus a bespoke predicate layer is strictly more machinery than the predicate
-layer alone. The rule engine is ~40 lines in `validate.py`.
+layer alone. The rule engine is ~50 lines in `validate.py`.
 
 ```yaml
 # graph.yaml — each rule is a SCAR. Write one only when you have a corpse.
@@ -251,6 +251,8 @@ rules:
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
 | `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
+| `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets |
+| `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse) |
 
 **An unknown rule key is a hard error.** A rule the engine cannot understand would
 enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is
@@ -261,7 +263,7 @@ does not parse.
 The graph also declares its own vocabulary, and it is enforced:
 
 ```yaml
-node_types: [hypothesis, experiment, finding, method, source]
+node_types: [hypothesis, experiment, finding, gate, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```
