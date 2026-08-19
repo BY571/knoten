@@ -89,6 +89,33 @@ or retracts the old one, never an edit to it.
 6. `knoten attach <id> <files...>` — the script that ran it and the plot that shows it.
    A claim nobody can re-run is a claim nobody trusts in six months.
 
+## When you run out of ideas
+
+`knoten frontier` is also how you learn the well is dry: nothing `open` you can act on, no
+reopen condition that now holds, no untested gate left. That is not a signal to invent a
+hypothesis out of your own context and file it. It is a signal to go and read.
+
+Start a new source round, and put what you find in the graph before you reason from it:
+
+- search the web, arXiv, the venue's or vendor's own docs, blog posts, forum and Reddit
+  threads, and the issue trackers of anything you depend on
+- file each thing you actually read as a `source` node, with `origin` set to the url, doi
+  or path so somebody can go back to it
+- derive `idea` nodes from those sources, then hypotheses from the ideas
+
+Two things to check on the way back through, because a source round is exactly the event
+that changes them:
+
+- the reopen conditions on dead nodes (`knoten frontier`). A dead end whose stated
+  condition the new reading satisfies is a cheaper experiment than a new idea, because the
+  design is already written down.
+- the untested gates. A gate nothing has been through is a check nobody is running.
+
+If the work really did start in your own head rather than in something you read, that is
+allowed: write `source-own-intuition` and cite it like any paper. What is not allowed is
+an idea that came from nowhere, because six months from now nobody can tell whether it
+came from evidence or from a mood.
+
 ## Writing details
 
 `--frontmatter`, `--body` and `--append` take a file path or `-` for stdin. `--result
