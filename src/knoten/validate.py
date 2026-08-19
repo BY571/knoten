@@ -25,6 +25,7 @@ RULE_KEYS = {
     "require_result_min",  # {key: minimum} — numeric floor
     "require_field_one_of",  # {field: [allowed]} — closed vocabulary
     "require_edge_target",   # {rel, type, status, min} — what the edge must POINT AT
+    "require_backlink",      # {rel, type, status, min} — what must point AT THIS NODE
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
@@ -100,18 +101,19 @@ def _check_values(r: dict) -> None:
                     f"graph.yaml: rule '{rid}': `require_field_one_of` for '{k}' must be "
                     f"a non-empty list of allowed values, got {v!r}")
 
-    if "require_edge_target" in r:
-        spec = r["require_edge_target"]
+    for key in ("require_edge_target", "require_backlink"):
+        if key not in r:
+            continue
+        spec = r[key]
         if not isinstance(spec, dict) or not isinstance(spec.get("rel"), str):
             raise GraphError(
-                f"graph.yaml: rule '{rid}': `require_edge_target` must be a mapping with "
-                f"a `rel` string, e.g. {{rel: prov:wasDerivedFrom, status: alive}}, "
-                f"got {spec!r}")
+                f"graph.yaml: rule '{rid}': `{key}` must be a mapping with a `rel` "
+                f"string, e.g. {{rel: prov:wasDerivedFrom, status: alive}}, got {spec!r}")
         least = spec.get("min", 1)
         if isinstance(least, bool) or not isinstance(least, int) or least < 1:
             raise GraphError(
-                f"graph.yaml: rule '{rid}': `require_edge_target` `min` must be a "
-                f"positive whole number, got {least!r}")
+                f"graph.yaml: rule '{rid}': `{key}` `min` must be a positive whole "
+                f"number, got {least!r}")
 
     if "require_result_min" in r:
         floors = r["require_result_min"]
@@ -124,6 +126,28 @@ def _check_values(r: dict) -> None:
                 raise GraphError(
                     f"graph.yaml: rule '{rid}': `require_result_min` floor for '{k}' must "
                     f"be a number, got {v!r}")
+
+
+def _matching(spec: dict, edges: list, nodes: dict) -> int:
+    """How many of these edges point at a node that matches `spec`.
+
+    A target that does not exist is not counted: it is already reported as
+    `dangling-edge`, and a typo must not stand in for evidence.
+    """
+    types, statuses = _csv(spec.get("type")), _csv(spec.get("status"))
+    hits = 0
+    for e in edges:
+        t = nodes.get(e["to"]) if e["rel"] == spec["rel"] else None
+        if t and (not types or t.type in types) and (not statuses or t.status in statuses):
+            hits += 1
+    return hits
+
+
+def _wanted(spec: dict) -> str:
+    return " ".join(filter(None, [
+        spec["rel"],
+        f"type={'/'.join(_csv(spec.get('type')))}" if spec.get("type") else "",
+        f"status={'/'.join(_csv(spec.get('status')))}" if spec.get("status") else ""]))
 
 
 def _tags(n: Node, cfg: dict) -> list[Violation]:
@@ -266,25 +290,18 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
             if (fld := r.get("require_result")) and fld not in n.results:
                 out.append(Violation(n.id, rid, msg))
 
-            # The only check that looks past the node it is checking. `require_edge`
-            # asks whether an edge exists; this asks what is on the other end — which is
-            # what makes a claim's dependants fail the day the claim it rests on dies.
-            if spec := r.get("require_edge_target"):
-                types, statuses = _csv(spec.get("type")), _csv(spec.get("status"))
-                hits = 0
-                for l in n.links:
-                    # A dangling target is already `dangling-edge`; it must not also
-                    # stand in for evidence.
-                    t = nodes.get(l["to"]) if l["rel"] == spec["rel"] else None
-                    if t and (not types or t.type in types) \
-                         and (not statuses or t.status in statuses):
-                        hits += 1
-                if hits < (least := spec.get("min", 1)):
-                    want = " ".join(filter(None, [spec["rel"],
-                                                  f"type={'/'.join(types)}" if types else "",
-                                                  f"status={'/'.join(statuses)}" if statuses else ""]))
-                    out.append(Violation(n.id, rid,
-                                         f"{msg} ({want} -> {hits} matching, need >= {least})"))
+            # The two checks that look past the node being checked. Outgoing asks what a
+            # claim rests on — which is what fails the day that claim dies. Incoming asks
+            # what the graph did NEXT, the only way to police work that was abandoned
+            # rather than written badly.
+            for key, edges in (("require_edge_target", n.links),
+                               ("require_backlink", n.backlinks)):
+                if not (spec := r.get(key)):
+                    continue
+                hits, least = _matching(spec, edges, nodes), r[key].get("min", 1)
+                if hits < least:
+                    out.append(Violation(n.id, rid, f"{msg} ({_wanted(spec)} -> {hits} "
+                                                    f"matching, need >= {least})"))
 
             for fld, allowed in (r.get("require_field_one_of") or {}).items():
                 got = n.frontmatter.get(fld)

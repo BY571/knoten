@@ -133,6 +133,22 @@ finding dies, everything derived from it fails — killing one result indicts wh
 on top of it, instead of leaving it standing unchallenged. Add `min: 3` and the same key
 states an inductive standard: one observation is an anecdote, not a pattern.
 
+The mirror of that key asks what points **at** a node, which is the only way to police
+work that was *abandoned* rather than written badly:
+
+```yaml
+  - id: hypotheses-must-be-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {rel: kn:testedBy, type: experiment}
+    message: An untested hypothesis is not alive, it is unexamined.
+```
+
+Every other rule key sees only what a node declares about itself, so they all police the
+author of a claim. A hypothesis nobody ever tested declares nothing wrong — there is no
+node to attach the complaint to. `require_backlink` reads the generated back-links, so the
+complaint lands on the hypothesis that was left hanging.
+
 That cause-of-death rule is what makes a dead end *reusable*. Once the cause is a field rather than
 a sentence, the question you actually ask six months later is a query:
 

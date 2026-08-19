@@ -365,3 +365,43 @@ def test_a_malformed_requirement_is_a_graph_error_not_a_crash(graph, bad):
 
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
+
+
+# ------------------------------------------- rules can also look at what points AT a node
+
+TESTED = """\
+name: t
+rules:
+  - id: hypotheses-must-be-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {rel: kn:testedBy, type: experiment}
+    message: An untested hypothesis is not alive, it is unexamined.
+"""
+
+
+def test_a_hypothesis_nobody_tested_is_reported(graph):
+    """The gap `require_edge` structurally cannot cover: rules see only what a node
+    DECLARES, so they police the author of a claim and never what the graph failed to do
+    next. That is the failure an autonomous loop actually has — not writing bad nodes,
+    but abandoning good ones."""
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
+
+
+def test_a_hypothesis_with_an_experiment_passes(graph):
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+    graph.node("exp-a", "id: exp-a\ntype: experiment\nstatus: alive\nlinks:\n"
+                        "  - {rel: kn:tests, to: hyp-x}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == []
+
+
+def test_the_wrong_kind_of_neighbour_does_not_satisfy_it(graph):
+    """A hypothesis someone merely commented on is still untested."""
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+    graph.node("find-a", "id: find-a\ntype: finding\nstatus: alive\nlinks:\n"
+                         "  - {rel: kn:tests, to: hyp-x}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
