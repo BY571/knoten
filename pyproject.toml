@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Sebastian Dittert", email = "sebastian.dittert3692@gmail.com" }]
-keywords = ["research", "knowledge-graph", "falsification", "markdown", "mcp", "agents"]
+keywords = ["research", "knowledge-graph", "falsification", "markdown", "agents", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",

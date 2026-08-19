@@ -71,14 +71,13 @@ $ knoten query "self-consistency"
 
 ```bash
 pip install -e .                  # the CLI is the agent surface; add ".[mcp]" only for shell-less clients
-
 knoten init my-topic              # a new graph (it's a folder)
+```
 
-# deciding what to do
-knoten frontier                   # what should I work on next?
-knoten index                      # the whole graph, one line per node
-knoten index --tag decoding       # ...narrowed to one corner of it
-knoten index --since 2026-08-01   # ...or to what moved this month
+```bash
+# what should I do next?
+knoten frontier                   # open work, dead ends worth reopening, gates nothing has been through
+knoten index [--tag t] [--since d]   # the whole graph, one line per node
 knoten query <term>               # has this been tried, by keyword?
 knoten show <node>                # edges, results, attachments
 knoten gates                      # what must a claim survive here?
@@ -86,23 +85,72 @@ knoten gates                      # what must a claim survive here?
 # recording what happened
 knoten new hypothesis hyp-idea    # scaffold a node with whatever the rules demand
 knoten commit <node> --frontmatter <f> --body <f>   # file a claim, gate-checked before it touches disk
-knoten update <node> --status dead --append <f>     # move a node through its lifecycle, append to it
-knoten attach <node> <file>...    # attach a script, plot or notebook
-knoten detach <node> <file>
+knoten update <node> --status dead --append <f>     # move it through its lifecycle
+knoten attach <node> <file>...    # the script that ran it, the plot that shows it
 
 # keeping it honest
 knoten validate                   # enforce this graph's own rules
 knoten hook                       # make `git commit` refuse a broken graph
+knoten viz --open                 # the whole graph as one HTML file
 knoten path A B                   # how did we get from A to B?
 ```
 
-Every read command above also takes `--json`; prose is the default because it's cheaper
-to read (see "For coding agents" below), `--json` is there for scripts and nested data.
+Every read command takes `--json`. Prose is the default because it is cheaper to read —
+the same 55-node graph is ~1,185 tokens as columnar prose against ~2,551 as JSON. Exit
+code is the signal: `0` succeeded, `1` refused. **A refusal is the feature.**
 
-Each graph declares its own rules in `graph.yaml`. `knoten` knows nothing about your
-field. It enforces whatever *you* said matters. The example graph requires every claim to
-report `tokens_per_question` and to rest on at least 30 independent questions; a different
-topic would require something else entirely.
+## How a graph is shaped
+
+knoten defines no research vocabulary. `hypothesis`, `finding` and the rest mean whatever
+your `graph.yaml` says they mean. A shape that recurs:
+
+```
+question ─▶ source ─▶ idea ─▶ hypothesis ─▶ experiment ─▶ finding
+                       ▲                                     │
+                       └────── findings open new ideas ──────┘
+
+gate    stands outside the loop: the bar every claim must survive
+```
+
+A graph begins with **one question**, and `knoten init` scaffolds it as a node rather than
+prose, so a finding can be traced back to the question it serves. From there the usual move
+is to investigate **sources** — papers, datasets, searches. Work that starts from your own
+head is not an exception: write `source-own-intuition` and cite it the same way. One rule
+every time, an idea names where it came from — which also answers how much of a graph rests
+on hunches rather than on having read anything.
+
+Nothing is one-to-one: one hypothesis carries several experiments and several findings.
+
+**Every edge points from the new node to the one it depends on** — a claim at the gate it
+faced, an experiment at the hypothesis it tests. Back-links are generated and never
+authored: writing the generated name (`kn:testedBy` where you meant `kn:tests`) is refused.
+Writing the *right* relation on the *wrong* node is **not detectable at all** — the
+back-link lands, the graph reports itself healthy, and the claim now says the opposite of
+what you meant. A correction is a new node that supersedes or retracts the old one, never
+an edit.
+
+Your graph declares its vocabulary, and `node_types` takes a mapping when you want to write
+down what the words mean — the only place they *can* be defined, since the core refuses to:
+
+```yaml
+node_types:
+  question:   what this graph exists to answer — a question, a statement or a task
+  source:     where the work came from — a paper, dataset, search, or your own intuition
+  hypothesis: a falsifiable claim derived from an idea
+  gate:       a standing rule every claim must survive; a bar, not a stage
+statuses:   [open, alive, dead, retracted, superseded, active]
+tags:       [decoding, reasoning, prompting, evaluation]
+```
+
+`type: hypthesis` is a typo, not a new type; `status: ded` would silently drop the claim
+out of every query. Both are violations. Declare no `tags:` and tagging stays free — the
+core enforces only the vocabulary you declared, and a config or rule key it does not
+recognise is a **hard error**, because config that enforces nothing is decoration.
+
+## Rules are data
+
+Each graph declares its own in `graph.yaml`. knoten knows nothing about your field; it
+enforces whatever *you* said matters.
 
 ```yaml
 rules:
@@ -118,167 +166,65 @@ rules:
     message: A cause of death you cannot filter on is a story, not an index.
 ```
 
-A rule can also demand something of what an edge *points at*, not just that the edge
-exists. This is the first check that outlives the moment it is written:
+That second rule is what makes a dead end *reusable*: once the cause is a field rather than
+a sentence, the question you ask six months later is a query —
+`knoten index --where cause=weak_baseline`.
+
+Two keys look past the node being checked. `require_edge_target` asks what an edge points
+**at**, so the day a finding dies everything derived from it fails validation — killing one
+result indicts what was built on it. `require_backlink` asks what points **at** a node,
+the only way to police work that was *abandoned* rather than written badly, since a
+hypothesis nobody tested declares nothing wrong:
 
 ```yaml
+rules:
   - id: methods-rest-on-live-claims
     when_type: method
-    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, status: alive}
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, status: alive, min: 1}
     message: A method built on a dead finding is a method built on sand.
 ```
 
-`validate` re-runs over the whole graph, so this is not a create-time check. The day a
-finding dies, everything derived from it fails — killing one result indicts what was built
-on top of it, instead of leaving it standing unchallenged. Add `min: 3` and the same key
-states an inductive standard: one observation is an anecdote, not a pattern.
+`knoten new` reads these rules and pre-fills exactly what they demand — the values are
+`TODO` on purpose, so `new` + `validate` is a checklist rather than a guessing game.
 
-The mirror of that key asks what points **at** a node, which is the only way to police
-work that was *abandoned* rather than written badly:
+## What it answers
 
-```yaml
-  - id: hypotheses-must-be-tested
-    when_type: hypothesis
-    when_status: alive
-    require_backlink: {rel: kn:testedBy, type: experiment}
-    message: An untested hypothesis is not alive, it is unexamined.
-```
+**What next?** `frontier` is the one screen for it — open work, plus dead ends that stated
+what would bring them back. A dead end with a standing offer is a cheaper experiment than a
+new idea, because the design is already written down. knoten does not decide whether a
+condition is *met*; that judgement is the research.
 
-Every other rule key starts from what the node itself declares, so they all police the
-author of a claim. A hypothesis nobody ever tested declares nothing wrong — there is no
-node to attach the complaint to. `require_backlink` reads the generated back-links, so the
-complaint lands on the hypothesis that was left hanging.
+**Has this been tried?** `query` answers by keyword. But keyword search cannot answer
+*"anything like it?"* — an idea worded differently from the node that already killed it
+will not match, and a confident "no prior work" is the one failure that costs real work. So
+`index` prints the whole graph, one line per node, and lets the reader judge. On a 500-node
+graph a broad query returned ~83k tokens; the index is ~9k, and one tag narrows it to ~2.5k.
 
-That cause-of-death rule is what makes a dead end *reusable*. Once the cause is a field rather than
-a sentence, the question you actually ask six months later is a query:
+**What must it survive?** `gates` puts the specification in front of the work — a claim can
+only be marked `alive` if it cites a gate it survived, and meeting that at commit time means
+the compute is already spent. Each gate also reports what it killed and what it passed: one
+that has done neither has never been applied, which is either a useless check or a check
+nobody runs.
 
-```bash
-knoten index --where cause=weak_baseline    # we have a stronger baseline now — what reopens?
-```
+**And a claim someone later withdrew says so** — `query` surfaces the retraction from both
+sides, so asking about a retracted claim tells you it was retracted, not just what it said.
 
 ## Looking at it
 
 ```bash
-knoten viz --open          # one HTML file, no server, no build step
+knoten viz --open
 ```
 
-Two views of the same graph, because there are two questions. **Columns** is the
-inventory: what exists, in what role, with what verdict, laid out along the loop your
-graph declares — sources at the left, gates at the right under `JUDGED AGAINST`, and a
-finding that challenges a hypothesis drawn as a loop back underneath. **Map** is the
-traversal: click a knoten and walk its neighbours, with a trail of where you have been.
+One self-contained HTML file, no server and no build step. **Columns** is the inventory —
+what exists, in what role, with what verdict, along the loop your graph declares.
+**Map** is the traversal — click a node and walk its neighbours, with a trail of where you
+have been. The map is monochrome on purpose: shade and size say how connected a node is,
+which is a property of the map, while what happened to a claim lives in the record panel
+beside it.
 
-The map is monochrome on purpose — shade and size say how connected a node is, which is a
-property of the map; what happened to a claim is a property of the claim, and lives in the
-record panel beside it. Clusters form around the busiest nodes rather than around a type,
-because how many gates a graph declares is a fact about its rules, not about knoten.
-
-Layout is a pure function of the graph and nothing is persisted. Appending a claim of a
-type already on screen lands it at the end of that column and on the rim of one cluster,
-and moves nothing — that is the case an agent loop hits over and over. Two things do
-reorder the view, both of them real changes in what the graph is: a node introducing a
-type that was not there before, and the hub count stepping up as the graph grows
-(at roughly 7, 13, 21, 31 nodes). A map that reshuffles for no reason is a map you cannot
-learn; one that reshuffles when the graph's shape changes is telling you something.
-
-## How a graph is shaped
-
-knoten defines no research vocabulary. `hypothesis`, `finding` and the rest mean whatever
-your `graph.yaml` says they mean — the core checks `node_types` for membership and
-nothing else. A shape that recurs:
-
-```
-question ─▶ source ─▶ idea ─▶ hypothesis ─▶ experiment ─▶ finding
-                       ▲                                     │
-                       └────── findings open new ideas ──────┘
-
-gate    stands outside the loop: the bar every claim must survive
-```
-
-A graph begins with **one question, statement or task**, and `knoten init` scaffolds it as
-a node rather than leaving it as prose — so a finding can be traced back to the question it
-serves, and a second sub-question has somewhere to live. From there the usual move is to
-investigate **sources**: papers, blogposts, datasets, searches. Work that starts from your
-own head instead is not an exception — write `source-own-intuition` and cite it the same
-way. One rule, every time: an idea names where it came from. It also makes an
-uncomfortable question answerable — how much of this graph rests on hunches rather than on
-having read anything?
-
-The names above are a convention, not a rule — `knoten viz` lays columns out in that
-order and puts anything it does not recognise after the ones it does. (`method` is
-deliberately unused: the rename in #15 freed the word for "the approach derived from
-findings that survived", and nothing claims it yet.)
-
-Nothing is one-to-one. One idea yields several hypotheses, one hypothesis several
-experiments, one experiment several findings, and a finding may rest on several
-experiments. That already works — links are a list and back-links accumulate.
-
-**Every edge points from the new node to the one it depends on.** A claim points at the
-gate it faced; an experiment at the hypothesis it tests; a claim at what it was derived
-from. Back-links are generated from the forward edge and are never authored: writing the
-generated name — `kn:testedBy` where you meant `kn:tests` — is refused as
-`authored-backlink`. Writing the *right* relation on the *wrong* node is not detectable at
-all: the back-link lands, the graph reports itself healthy, and the claim now says the
-opposite of what you meant. Get the subject right. A correction is a *new* node that
-supersedes or retracts the old one, never an edit to it.
-
-Where a derivation's kind matters, say which it is, so a rule can ask something of one
-kind without asking it of all: `kn:explains` for the best account of an observation,
-`kn:generalises` for a claim over instances, `kn:followsFrom` for one that argues from a
-premise. Plain `prov:wasDerivedFrom` stays available when the distinction is not worth
-drawing.
-
-Your graph also declares its own vocabulary, and that is enforced too:
-
-```yaml
-node_types: [hypothesis, experiment, finding, gate, source]
-statuses:   [open, alive, dead, retracted, superseded, active]
-tags:       [decoding, reasoning, prompting, evaluation, gate]
-```
-
-`type: hypthesis` is a typo, not a new type. `status: ded` is worse than wrong — it would
-silently drop the claim out of every query, which is exactly the sort of quiet rot this
-tool exists to prevent. Both are now violations. So is `tags: [decodng]`: tags are the
-axis you filter a big graph on, so a typo'd tag leaves the node in the graph but outside
-every view of it. Declare no `tags:` and tagging stays free — the core invents no
-vocabulary, it only enforces the one you declared.
-
-Because it invents none, the only place your words can be *defined* is your own graph.
-`node_types` takes a mapping when you want to write those definitions down:
-
-```yaml
-node_types:
-  question:   what this graph exists to answer — a question, a statement or a task
-  source:     where the work came from — a paper, dataset, search, or your own intuition
-  idea:       what you took from a source; a direction, not yet a testable claim
-  hypothesis: a falsifiable claim derived from an idea
-  experiment: the test built to verify or falsify a hypothesis
-  finding:    what the experiment showed, expected or not — new ideas come from these
-  gate:       a standing rule every claim must survive; a bar, not a stage
-```
-
-The keys are the vocabulary and are enforced exactly as the list form is. The values are
-for whoever arrives at your graph next — including the agent working in it, and
-`knoten viz`, which shows each column's meaning in your words rather than inventing one.
-
-A rule key — or a config key — `knoten` doesn't recognise is a **hard error**, not a
-shrug. Config that enforces nothing is decoration, and a rule that enforces nothing is
-worse than no rule, because you think you're covered.
-
-`knoten new` reads those rules and pre-fills exactly what they demand — nothing in the
-scaffold is knoten's opinion, it's your graph's. The values are `TODO` on purpose, so
-`new` + `validate` is a checklist rather than a guessing game:
-
-```
-$ knoten new hypothesis hyp-my-idea --status dead
-
-  + nodes/hyp-my-idea.md  (hypothesis, dead)
-    pre-filled what THIS graph's rules require:
-      ## Why it died, ## What would reopen this, tokens_per_question, n_independent
-```
-
-The failure this tool exists to prevent was caused by **friction**, so the write path is
-where friction hurts most. Write prose, not boilerplate you had to be rejected to discover.
+Appending a claim of a type already on screen moves nothing. Two things do reorder the
+view, both real changes in what the graph is: a node introducing a new type, and the hub
+count stepping up as the graph grows.
 
 ## The gate is a git hook
 
@@ -286,11 +232,9 @@ where friction hurts most. Write prose, not boilerplate you had to be rejected t
 knoten hook     # after `git init`
 ```
 
-`git commit` now runs `knoten validate` and **refuses a graph that breaks its own rules**:
+`git commit` now runs `knoten validate` and refuses a graph that breaks its own rules:
 
 ```
-$ git commit -m "self-consistency is a win"
-
   ✗ hyp-self-consistency
       [live-claims-must-cite-their-gates] An unchallenged claim is not a finding, it is a hope.
 
@@ -298,281 +242,59 @@ $ git commit -m "self-consistency is a win"
 ```
 
 A rule that only fires when you remember to ask is the rule that let the last attempt rot.
-Put it somewhere you can't walk past. (`git commit --no-verify` bypasses it — you should
-have a reason.)
-
-## Attach the code and the plots
-
-A node isn't just a claim. It carries what you need to re-run it.
-
-```bash
-knoten attach hyp-self-consistency experiments/self_consistency.py accuracy_vs_budget.png
-```
-
-The files are copied into `attachments/<node-id>/`, listed in the frontmatter, and
-images are **embedded in the node body** so they render on GitHub:
-
-```
-attachments/hyp-self-consistency/
-  self_consistency.py        the script that KILLED it
-  accuracy_vs_budget.png     the plot that shows why
-```
-
-`knoten validate` then fails if a node lists an attachment that isn't there. A broken
-repro is a broken node.
-
-```bash
-knoten show hyp-self-consistency     # edges, results, attachments
-knoten detach hyp-self-consistency accuracy_vs_budget.png
-```
-
-## What now?
-
-A graph that only answers *"has this been tried?"* is a filing cabinet. `frontier` is the
-one screen that answers *"what next?"*:
-
-```
-$ knoten frontier
-
-  OPEN — started, never settled
-    hyp-batch-schedule        Does the LR schedule interact with batch size?
-
-  REOPENABLE — died, but said what would bring them back
-    hyp-self-consistency      Self-consistency (sample 5, majority vote) beats greedy
-      reopen if : A task where the majority-vote aggregation is doing real work…
-
-  UNTESTED GATES — no claim has been through them
-    gate-holdout-period     Gate: hold out the last 20%
-```
-
-A dead end with a standing offer is a **cheaper experiment than a new idea**, because the
-design is already written down. That is what `## What would reopen this` is for: without
-somewhere to surface it, acting on one means re-reading every post-mortem in the graph.
-
-knoten does not decide whether a condition is *met*. That is a judgement, and it is the
-research. It puts the offers where you cannot walk past them.
-
-## "Has this been tried?" — and "anything like it?"
-
-Two different questions. `query` answers the first by keyword, ranked by how well each
-node matches — partial matches surface, so a question phrased in words the node never
-used still finds it:
-
-```
-$ knoten query "has anyone tried self-consistency?"
-
-  [✗ DEAD] hyp-self-consistency
-      killed by : gate-compute-matched-baseline
-      reopen if : A task where the majority-vote aggregation does real work…
-```
-
-But keyword search **cannot** answer the second. An idea worded differently from the node
-that already killed it will not match, and a confident "no prior work found" is the one
-failure of this tool that costs real work. So `index` prints the whole graph, one line per
-node, and lets the reader judge:
-
-```
-$ knoten index --tag decoding
-
-  hyp-self-consistency  ✗ DEAD  [decoding,reasoning]  Self-consistency (sample 5, majority vote) beats greedy decoding
-```
-
-That is cheap enough to read in full — the entire graph, not a guess about which part of
-it is relevant. For an agent it is cheaper still than a broad `query`, because a row is a
-claim rather than a whole node: on a 500-node graph a broad query returned ~83k tokens,
-the same graph's index is ~9k, and one tag narrows it to ~2.5k.
-
-## What a claim has to survive
-
-A claim can only be marked `alive` if it cites a gate it survived. An agent that meets
-the gate at commit time has already spent the compute on an experiment whose result
-cannot be filed. `gates` puts the specification in front of the work:
-
-```
-$ knoten gates
-
-  gate-compute-matched-baseline  (killed 1, survived by 1)
-    Gate: compute-matched baseline
-    the rule : Any method that spends more inference compute must be compared against a
-               baseline given the same budget — not against greedy decoding at 1x.
-```
-
-The record on the right is free — the back-links already exist — and it is the more
-interesting half. A gate that has killed nothing and validated nothing has never been
-applied, which is either a useless check or a check nobody is running.
+(`git commit --no-verify` bypasses it — you should have a reason.)
 
 ## Two readers, one file
 
-**Humans** skim the prose and get the story: what was tried, what killed it, what's
-still open. No database, no UI, just markdown you can read in any editor or on GitHub.
+**Humans** skim the prose: what was tried, what killed it, what is still open. No database,
+no UI, just markdown you can read on GitHub.
 
-**Agents** traverse the frontmatter: typed edges (`kn:killedByGate`, `kn:survivedGate`),
-structured `results`, a `repro` block with the exact script/model/data/command, and the
-paths of any attached scripts and plots, which they can read and re-run directly. An agent
-answers *"has this been tried?"* and *"how do I reproduce it?"* without reading a word of
-prose.
-
-The same file serves both. That's the whole design.
+**Agents** traverse the frontmatter: typed edges, structured `results`, a `repro` block with
+the exact script/model/data/command, and the paths of attached scripts and plots they can
+re-run. The same file serves both. That is the whole design.
 
 ## For coding agents
 
-`SKILL.md`, at the repo root, is how an agent learns knoten — point Claude Code, or
-anything else with a shell, at it. The loop is the CLI itself, and it **accumulates
-knowledge about a topic across sessions** instead of starting cold every time:
+[`SKILL.md`](SKILL.md) is how an agent learns knoten — point Claude Code, or anything with a
+shell, at it. The loop is the CLI itself, and it accumulates knowledge about a topic across
+sessions instead of starting cold.
 
-```bash
-knoten frontier                                                 # 1. what should I work on next?
-knoten index --tag decoding                                     # 2. anything LIKE this been tried?
-knoten query "self-consistency"                                 #    ...or by keyword, if it has a name
-knoten show hyp-self-consistency                                # 3. the full node, post-mortem included
-knoten gates                                                    # 4. what must the result survive?
-knoten commit hyp-idea --frontmatter fm.yaml --body body.md     # 5. file it, pass or fail
-knoten update hyp-idea --status dead --append postmortem.md     #    ...or close one opened earlier
-knoten attach hyp-idea script.py plot.png                       # 6. and the code that proves it
-knoten path A B                                                 # how did we get from A to B?
-```
+It also tells the agent when it is about to file the same question twice: a loop running for
+weeks *will* re-propose an idea it already settled under a new id, so `commit` reports
+settled claims the new node resembles, and refuses one recording a shiny result that cites
+no test it survived.
 
-Output is prose by default — read it. `--json` exists on every read command above, for
-scripts and nested data, but it costs more to read than it saves: the same 55-node graph
-is ~1,185 tokens as columnar prose against ~2,551 as JSON (21 vs 46 tokens/node — 2.2x).
-Reach for `--json`; don't default to it.
-
-`--frontmatter`, `--body` and `--append` each take a file path or `-` for stdin.
-`knoten update` also takes `--result key=value` (repeatable, records a result) and
-`--link rel=to` (repeatable, adds an edge — e.g. the gate a claim just survived):
-
-```bash
-knoten update hyp-idea --status alive --link kn:survivedGate=gate-compute-matched-baseline
-```
-
-`knoten update` appends, moves the status, and sets the fields a death is supposed to
-name:
-
-```bash
-knoten update hyp-self-consistency --status dead \
-  --append post-mortem.md --field cause=weak_baseline
-```
-
-`--field` sets any top-level key, including one already recorded. `--result` still refuses
-to change a number the node already carries — appending to a claim is the lifecycle, and
-rewriting a published result is what retraction is for.
-
-What bounds an edit is the graph's own rules, not a list of field names: the amended node
-is parsed and checked in memory, and never reaches disk if it fails. `validate` also
-refuses a frontmatter `id:` that disagrees with the filename — the filename is the id, so
-a node claiming otherwise lies about itself while every query still resolves it.
-
-Exit code is the signal: `0` succeeded, `1` means refused or violated a rule. A refusal
-is the feature — read the message, fix the node, run it again.
-
-An experiment that takes a week does not finish in the session that started it. So the
-agent can open a hypothesis as `open` (`knoten index --status open` shows what was
-started and never finished), come back later, and close it. `knoten update` appends and
-moves the status; it cannot rewrite prose or change a result that was already recorded,
-and it runs the same gate `knoten commit` does — so a claim still cannot become `alive`
-without citing something it survived. A correction to a claim is still a new node. Git
-holds the before and after.
-
-The agent reads the graph before running an experiment and writes back when it's done,
-**including when the experiment fails.** A dead hypothesis with a documented cause of death
-is the most valuable node in the graph, and the one that would otherwise be lost. It writes
-back the *evidence* too: `knoten attach` puts the script it ran and the plot it made into
-the node — a claim you can't re-run is a claim nobody trusts in six months.
-
-It also tells the agent when it is about to file the same question twice. A loop running
-for weeks *will* re-propose an idea it already settled, worded differently, under a new
-id — so `knoten commit` reports settled claims the new node resembles, and refuses one
-that records a shiny result citing no test it survived:
-
-```json
-{"status": "COMMITTED",
- "similar": [{"id": "hyp-self-consistency", "verdict": "DEAD",
-              "why_it_died": "The gain was compute, not method…"}],
- "warning": "This resembles 1 settled claim. If it is the same question, supersede or
-             retract that node rather than leaving two answers in the graph."}
-```
-
-```json
-{"status": "REJECTED",
- "violations": [{"rule": "live-claims-must-cite-their-gates",
-                 "message": "An unchallenged claim is not a finding, it is a hope."}]}
-```
+An experiment that takes a week does not finish in the session that started it, so a
+hypothesis can be opened now and closed later. `update` appends and moves status; it cannot
+rewrite a result already recorded — that is what retraction is for.
 
 `ops.py` holds the one implementation behind every read — index, query, frontier, gates,
-show, validate, path — as a plain function returning a dict. The CLI renders that dict as
-prose or dumps it with `--json`; `commit` and `update` are shared functions too. There is
-one behavior to keep correct, not two that can drift apart.
+show, validate, path — as a function returning a dict. The CLI renders it as prose or dumps
+it with `--json`; the MCP server serialises the same dict. One behaviour to keep correct,
+not two that can drift.
 
-### Clients without a shell (MCP)
-
-Not every agent has Bash. For a chat UI wired to MCP servers rather than a coding agent,
-the graph is still reachable — just at a price the CLI doesn't pay: MCP loads ~2,340
-tokens of tool schema and instructions into every session whether the agent touches the
-graph or not (1,928 of schema + 412 of instructions), where `knoten --help` costs ~304,
-and only when asked. Use the CLI and `SKILL.md` above if the client can run one.
-
-```bash
-pip install -e ".[mcp]"      # needs mcp 2.x
-```
-
-```jsonc
-{"mcpServers": {"knoten": {
-  "command": "knoten-mcp",
-  "env": {"KNOTEN_GRAPH": "/path/to/llm-research"}
-}}}
-```
-
-```
-knoten_frontier()                                    ← 1. what should I work on next?
-knoten_index(tags=["decoding"])                      ← 2. has anything LIKE this been tried?
-knoten_query("self-consistency")                     ←    ...or by keyword, if it has a name
-knoten_get("hyp-self-consistency")                   ← 3. the full node, post-mortem included
-knoten_gates()                                       ← 4. what must the result survive?
-knoten_commit(node)                                  ← 5. file it, pass or fail
-knoten_update(node, status="dead", append=…)         ←    ...or close one opened earlier
-knoten_attach(node, [script, plot])                  ← 6. and the code that proves it
-knoten_path(a, b)                                    ← how did we get from A to B?
-knoten_validate()                                    ← run the graph's own rules
-```
-
-The server hands that order to the client at connect time as its `instructions`, so the
-agent is told how the loop fits together once, rather than guessing it from ten tool
-descriptions. Every tool here is a thin wrapper over the same `ops` / `commit` / `update`
-functions the CLI calls — same gates, same refusals, same JSON shown above, just
-serialised as a tool result instead of printed as prose.
+**Clients without a shell (MCP).** For a chat UI wired to MCP rather than a coding agent,
+`pip install -e ".[mcp]"` (needs mcp 2.x). It costs ~2,340 tokens of schema and instructions
+in every session whether the graph is touched or not, against ~304 for `knoten --help` and
+only when asked. Use the CLI if the client can run one.
 
 ## Why bother
 
-**You stop redoing experiments you already ran and forgot.** Dead ends come back with
-their cause of death and a command to re-run them.
+**You stop redoing experiments you already ran and forgot.** Dead ends come back with their
+cause of death and a command to re-run them.
 
-**And work that outlives the session still gets closed.** An agent opens a hypothesis,
-runs an experiment for a week, and records the verdict on the same node when it returns —
-so *what is still open?* stays a real answer instead of filling up with questions that
-were settled and never filed.
+**Work that outlives the session still gets closed**, so *what is still open?* stays a real
+answer instead of filling with questions that were settled and never filed.
 
-**And you can't fool yourself as easily:** a claim can only be marked *alive* if it cites
-a test it survived, so a good-looking result that was never checked can't quietly become
-a finding.
+**You cannot fool yourself as easily:** a claim is only `alive` if it cites a test it
+survived, so a good-looking result that was never checked cannot quietly become a finding.
 
-**And a broken node is a loud failure, not a quiet one.** Unreadable frontmatter, an
-unknown edge relation (`kn:killdByGate` — one letter dropped), a rule key that doesn't
-exist: all are errors. A graph that silently drops what it can't parse reports itself
-healthy while it rots.
-
-**And a claim someone later withdrew says so.** `query` surfaces the retraction from both
-sides, so an agent asking *"has this been tried?"* about a claim that was later retracted
-is told it was retracted — not just what the claim said:
-
-```
-  [✓ ALIVE] hyp-few-shot-format
-      survived     : gate-compute-matched-baseline
-      RETRACTED by : ret-oops
-```
+**A broken node is a loud failure, not a quiet one.** Unreadable frontmatter, an unknown
+relation (`kn:killdByGate` — one letter dropped), a rule key that does not exist: all
+errors. A graph that silently drops what it cannot parse reports itself healthy while it
+rots.
 
 See `examples/llm-research/` for a worked graph and [SPEC.md](SPEC.md) for the design.
 
-MIT. One runtime dependency: PyYAML. The MCP fallback additionally needs the `mcp` SDK
-(2.x — `pip install -U 'knoten[mcp]'` if you are coming from an older knoten). No
-framework, no database, no build step: a handful of small modules you can read in one
-sitting.
+MIT. One runtime dependency: PyYAML. No framework, no database, no build step — a handful
+of small modules you can read in one sitting.
