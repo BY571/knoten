@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import webbrowser
 from pathlib import Path
 
 from . import attachments, ops
@@ -195,6 +196,16 @@ def render_path(payload: dict) -> None:
 def path(root, a, b, as_json=False) -> int:
     payload = ops.path(root, a, b)
     _emit(payload, as_json, render_path)
+    return 0
+
+
+def viz_cmd(root, out, show) -> int:
+    """One HTML file. Read-only, self-contained, no server."""
+    from . import viz as _viz
+    dest = _viz.write(root, Path(out))
+    print(f"wrote {dest}  ({dest.stat().st_size // 1024} KB)")
+    if show:
+        webbrowser.open(dest.resolve().as_uri())
     return 0
 
 
@@ -497,6 +508,10 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("b")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
 
+    s = sub.add_parser("viz", help="write the graph as one self-contained HTML file")
+    s.add_argument("-o", "--out", default="knoten.html", help="where to write it")
+    s.add_argument("--open", dest="show", action="store_true", help="open it when done")
+
     s = sub.add_parser("hook", help="install the git pre-commit gate")
     s.add_argument("--force", action="store_true",
                    help="overwrite a pre-commit hook knoten did not write")
@@ -565,6 +580,7 @@ def main(argv=None) -> int:
                                          append=args.append, results=args.result,
                                          links=args.link, fields=args.field,
                                          as_json=args.json),
+            "viz":    lambda: viz_cmd(root, args.out, args.show),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),

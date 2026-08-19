@@ -1,0 +1,568 @@
+<!doctype html><meta charset="utf-8"><title>knoten · __ROOT__</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+:root{
+  --paper:#F8F6F1; --surface:#FFF; --line:#E7E3D9; --line-2:#D5D0C2;
+  --ink:#141A33; --ink-2:#5A6285; --ink-3:#9AA0BC;
+  --dead:#A63A2E; --alive:#2F6F5E; --active:#3D5AA8; --open:#9A6B1F; --held:#6E5A9E;
+  --rel:#C3C7DE; --r:7px;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--paper);color:var(--ink);
+  font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+#app{display:flex;flex-direction:column;height:100%}
+header{display:flex;align-items:center;gap:14px;padding:11px 20px;
+  border-bottom:1px solid var(--line);background:var(--surface)}
+header svg.mark{width:34px;height:34px;flex:none}
+header h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.025em;line-height:1}
+header .sub{display:block;margin-top:4px;font:600 9px/1 var(--mono);letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-3)}
+.viewsw{display:flex;gap:2px;background:#EFEBE2;border-radius:9px;padding:3px;flex:none;
+  margin-left:18px}
+.viewsw button{border:0;background:none;font:600 11.5px var(--sans);color:var(--ink-2);
+  padding:5px 12px;border-radius:6px;cursor:pointer}
+.viewsw button[aria-pressed=true]{background:var(--surface);color:var(--ink);
+  box-shadow:0 1px 2px #141a331f}
+.viewsw button:focus-visible{outline:2px solid var(--active);outline-offset:1px}
+.stats{margin-left:auto;display:flex;align-items:baseline;gap:18px;min-width:0}
+.tot{flex:none;display:flex;align-items:baseline;gap:6px}
+.tot b{font-size:23px;font-weight:640;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.tot span{font:600 9.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+.meterwrap{flex:none;width:min(32vw,300px);position:relative;top:2px}
+.meter{display:flex;height:7px;border-radius:99px;overflow:hidden;background:var(--line)}
+.meter i{display:block;height:100%}
+.key{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:7px;font-size:11.5px;color:var(--ink-2)}
+.key b{font-variant-numeric:tabular-nums;font-weight:640;color:var(--ink)}
+.key i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:5px;vertical-align:1px}
+
+main{flex:1;display:flex;min-height:0}
+#viewport{flex:1;position:relative;overflow:hidden;cursor:grab}
+#viewport.drag{cursor:grabbing}
+#stage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
+#edges{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
+#edges path{fill:none;stroke:var(--rel);stroke-width:1.25;opacity:.55;
+  transition:stroke .12s,opacity .12s,stroke-width .12s}
+#edges path.on{stroke:var(--ink-2);stroke-width:2;opacity:1}
+#edges path.off{opacity:.12}
+#edges path.back{stroke:var(--ink-3)}
+#walls circle{fill:var(--ink);fill-opacity:.028;stroke:var(--ink);stroke-opacity:.09}
+#walls,#dots{display:none}
+body.map #walls{display:block}
+body.map #dots{display:block;pointer-events:auto}
+body.map .card,body.map .colhead{display:none}
+#dots text{font:10.5px var(--mono);fill:var(--ink-3);text-anchor:middle;pointer-events:none;
+  paint-order:stroke;stroke:var(--paper);stroke-width:3px}
+#dots text.big{font:600 11px var(--sans);fill:var(--ink)}
+#dots .halo{fill:var(--ink);opacity:.13}
+#dots g.faded{opacity:.22}
+#elabels text{font:600 9px var(--mono);text-anchor:middle;pointer-events:none;
+  fill:var(--ink-2);paint-order:stroke;stroke:var(--paper);stroke-width:3px}
+
+.colhead{position:absolute;width:250px;padding-bottom:6px;border-bottom:1px solid var(--line-2)}
+.colhead .n{font:600 11px/1 var(--mono);color:var(--ink-3);letter-spacing:.04em}
+.colhead .t{display:block;margin-top:5px;font-size:13px;font-weight:620;letter-spacing:-.01em}
+.colhead .role{display:block;margin-top:2px;font:600 9px var(--mono);letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink-3)}
+
+.card{position:absolute;width:250px;text-align:left;background:var(--surface);
+  border:1px solid var(--line);border-left:3px solid var(--edge,var(--line-2));
+  border-radius:var(--r);padding:9px 11px 9px 10px;font:inherit;color:inherit;cursor:pointer;
+  box-shadow:0 1px 1px #15161a08;transition:box-shadow .13s,border-color .13s,transform .13s}
+.card:hover{box-shadow:0 3px 10px #15161a12;transform:translateY(-1px)}
+.card:focus-visible{outline:2px solid var(--active);outline-offset:2px}
+.card.on{border-color:var(--ink);box-shadow:0 4px 14px #15161a1f}
+.card.faded{opacity:.34}
+.card .ttl{display:-webkit-box;font-size:12.5px;line-height:1.35;font-weight:520;
+  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card.closed .ttl{text-decoration:line-through;text-decoration-color:var(--dead);color:var(--ink-2)}
+.card .id{display:block;margin-top:5px;font:10.5px/1 var(--mono);color:var(--ink-3)}
+.card .verdict{float:right;margin-left:8px;font:600 9.5px/1 var(--sans);letter-spacing:.07em;
+  text-transform:uppercase;color:var(--edge)}
+.rail{display:flex;gap:2px;align-items:center;margin-top:8px;padding-top:7px;
+  border-top:1px solid var(--line)}
+.rail i{width:3px;height:11px;border-radius:1px;background:var(--alive)}
+.rail i.x{background:var(--dead);height:7px;align-self:flex-end}
+.rail .none{font:11px/1 var(--sans);color:var(--ink-3)}
+.rail .cnt{margin-left:auto;font:600 10px/1 var(--mono);color:var(--ink-3);
+  font-variant-numeric:tabular-nums}
+
+#panel{width:390px;border-left:1px solid var(--line);background:var(--surface);
+  overflow:auto;padding:20px 22px 60px}
+#panel .eyebrow{font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3)}
+#panel h2{margin:9px 0 0;font-size:19px;line-height:1.28;font-weight:620;letter-spacing:-.02em}
+.state{margin-top:13px;border-left:4px solid var(--sc,var(--line-2));background:#FBFAF6;
+  border-radius:0 8px 8px 0;padding:10px 13px}
+.state .s{display:flex;align-items:baseline;gap:8px}
+.state .s b{font-size:16px;font-weight:640;letter-spacing:-.015em;color:var(--sc)}
+.state .s em{font-style:normal;font:600 9.5px var(--mono);letter-spacing:.13em;
+  text-transform:uppercase;color:var(--ink-3)}
+.state p{margin:4px 0 0;font-size:12.5px;line-height:1.45;color:var(--ink-2)}
+.meta{margin-top:12px;display:flex;flex-wrap:wrap;gap:6px}
+.tag{font:600 10.5px/1 var(--sans);padding:4px 8px;border-radius:99px;background:#F0F0EC;
+  color:var(--ink-2)}
+h3{margin:20px 0 6px;font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3)}
+#panel p{margin:0 0 9px;font-size:13px;line-height:1.6;color:#2E3138;white-space:pre-wrap}
+.callout{margin-top:14px;border:1px solid var(--line);border-radius:9px;padding:11px 13px;
+  background:#FCFBF8}
+.callout h3{margin:0 0 5px}
+.callout p{margin:0;font-size:12.5px}
+.callout.offer{border-color:#CFC4A6;background:#FDFBF2}
+details{margin:0 0 9px}
+details>summary{cursor:pointer;list-style:none;font-size:12px;color:var(--ink-2)}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"show more ▸";font:600 10px var(--mono);letter-spacing:.06em;
+  color:var(--ink-3)}
+details[open]>summary::before{content:"show less ▾"}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:3px 14px;font-size:12.5px}
+dt{color:var(--ink-3);font-family:var(--mono);font-size:11.5px}
+dd{margin:0;font-variant-numeric:tabular-nums}
+.relgroup{margin-top:12px}
+.relgroup .rh{display:flex;align-items:baseline;gap:7px;margin-bottom:2px}
+.relgroup .rh b{font:600 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--rc,var(--ink-3))}
+.relgroup .rh span{font:10px var(--mono);color:var(--ink-3)}
+.link{display:block;width:100%;text-align:left;background:none;border:0;border-radius:5px;
+  padding:5px 6px;margin-left:-6px;cursor:pointer;font:12.5px var(--sans);color:var(--ink)}
+.link:hover{background:#F2F2EE}
+.link:focus-visible{outline:2px solid var(--active);outline-offset:-2px}
+.link small{display:block;color:var(--ink-3);font-size:11px}
+.blank{margin-top:64px;text-align:center;color:var(--ink-3);font-size:13px}
+
+#clegend,#klegend{position:absolute;right:16px;bottom:16px;max-width:390px;
+  background:#F8F6F1F2;border:1px solid var(--line);border-radius:9px;padding:11px 13px}
+#klegend{display:none} body.map #klegend{display:block} body.map #clegend{display:none}
+#clegend summary,#klegend summary{cursor:pointer;list-style:none;font:600 9.5px var(--mono);
+  letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+#clegend summary::-webkit-details-marker,#klegend summary::-webkit-details-marker{display:none}
+#clegend summary::after,#klegend summary::after{content:" ▾";color:var(--line-2)}
+#clegend:not([open]) summary::after,#klegend:not([open]) summary::after{content:" ▸"}
+#clegend[open] summary,#klegend[open] summary{margin-bottom:7px}
+.flow{font:600 11.5px var(--mono);color:var(--ink);letter-spacing:-.01em}
+.flownote{font-size:10.5px;color:var(--ink-3);margin-bottom:7px}
+.lrow{display:flex;gap:8px;font-size:11.5px;line-height:1.45;color:var(--ink-2);margin-top:3px}
+.lrow b{flex:none;width:100px;color:var(--ink);font-weight:640}
+#trail{position:absolute;top:12px;left:16px;display:none;align-items:center;gap:6px;
+  background:#F8F6F1E8;border:1px solid var(--line);border-radius:8px;padding:5px 9px;
+  font:11.5px var(--mono);max-width:calc(100% - 32px);overflow:hidden}
+body.map #trail{display:flex}
+#trail button{border:0;background:none;font:inherit;color:var(--ink-2);cursor:pointer;
+  padding:2px 4px;border-radius:4px;white-space:nowrap}
+#trail button:hover{background:#EFEBE2;color:var(--ink)}
+#trail button:last-of-type{color:var(--ink);font-weight:600}
+#trail .sep,#trail .hint{color:var(--ink-3)}
+footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-3)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div id=app>
+  <header>
+    <svg class=mark viewBox="0 0 48 48" aria-hidden=true>
+      <g stroke="#141A33" stroke-width="2.1" fill="none" stroke-linecap="round">
+        <path d="M24 24 L10 13 M24 24 L38 12 M24 24 L40 27 M24 24 L13 37 M24 24 L27 41"/>
+      </g>
+      <g fill="#8A93C4">
+        <circle cx="10" cy="13" r="3.4"/><circle cx="40" cy="27" r="3.1"/>
+        <circle cx="27" cy="41" r="2.6"/>
+      </g>
+      <g fill="#141A33">
+        <circle cx="24" cy="24" r="6"/><circle cx="38" cy="12" r="3.4"/>
+        <circle cx="13" cy="37" r="3"/>
+      </g>
+    </svg>
+    <div><h1>knoten</h1><span class=sub>__ROOT__</span></div>
+    <div class=viewsw role=group aria-label="View">
+      <button id=v-columns aria-pressed=true>columns</button>
+      <button id=v-map aria-pressed=false>map</button>
+    </div>
+    <div class=stats>
+      <div class=tot><b id=ntot></b><span>nodes</span></div>
+      <div class=meterwrap><div class=meter id=meter></div><div class=key id=key></div></div>
+    </div>
+  </header>
+  <main>
+    <div id=viewport>
+      <div id=stage><svg id=edges><g id=walls></g><g id=links></g><g id=elabels></g>
+        <g id=dots></g></svg></div>
+      <div id=trail></div>
+      <details id=clegend open></details>
+      <details id=klegend open>
+        <summary>legend</summary>
+        <div class=lrow><svg width=30 height=8><line x1=1 y1=4 x2=29 y2=4
+          stroke="#5A6285" stroke-width=1.5></line></svg>
+          <span><b style="width:auto">judged</b> — a gate ruled on it</span></div>
+        <div class=lrow><svg width=30 height=8><line x1=1 y1=4 x2=29 y2=4
+          stroke="#9AA0BC" stroke-width=1.5 stroke-dasharray="2 4"></line></svg>
+          <span><b style="width:auto">related</b> — everything else</span></div>
+      </details>
+      <footer>drag to pan · wheel to zoom · <b>f</b> fit · <b>v</b> switch · <b>esc</b> clear</footer>
+    </div>
+    <aside id=panel><div class=blank>Select a node to read its record.</div></aside>
+  </main>
+</div>
+
+<script>
+const DATA = __KNOTEN_DATA__;
+
+const VC = {alive:"var(--alive)", dead:"var(--dead)", active:"var(--active)",
+            open:"var(--open)", retracted:"var(--held)", superseded:"var(--held)",
+            blocked:"var(--open)"};
+const RC = {"kn:survivedGate":"var(--alive)","kn:killedByGate":"var(--dead)",
+            "mp:supports":"var(--active)","mp:challenges":"var(--open)",
+            "kn:tests":"var(--held)","npx:supersedes":"#B4508A","npx:retracts":"#B4508A",
+            "kn:blockedBy":"var(--open)"};
+// A claim nothing can reopen. Everything else still has somewhere to go.
+const CLOSED = ["dead", "retracted", "superseded"];
+const GATE_RELS = ["kn:survivedGate", "kn:killedByGate"];
+const LOOP = ["source","idea","question","hypothesis","experiment","finding"];
+const CARDH = 74, CARDW = 250;
+
+const byId = {}; DATA.nodes.forEach(n => byId[n.id] = n);
+const vc = n => VC[n.status] || "var(--line-2)";
+const el = (t, c, txt) => { const e = document.createElement(t);
+  if (c) e.className = c; if (txt !== undefined) e.textContent = txt; return e; };
+const NS = "http://www.w3.org/2000/svg";
+const mk = (t, a) => { const e = document.createElementNS(NS, t);
+  for (const k in a) e.setAttribute(k, a[k]); return e; };
+
+const stage = document.getElementById("stage"), svg = document.getElementById("edges");
+const vp = document.getElementById("viewport"), panel = document.getElementById("panel");
+const dots = document.getElementById("dots"), elabels = document.getElementById("elabels");
+
+const degree = {}; DATA.nodes.forEach(n => degree[n.id] = n.links.length + n.backlinks.length);
+const degs = DATA.nodes.map(n => degree[n.id]);
+const DMIN = Math.min(...degs), DMAX = Math.max(...degs);
+// The map is monochrome: shade says how connected a knoten is, which is a property of the
+// map. What happened to a claim is a property of the claim, and belongs in the record.
+function shade(id){
+  const t = DMAX > DMIN ? (degree[id] - DMIN) / (DMAX - DMIN) : .5;
+  const a = [206,210,223], b = [24,30,58], e = Math.pow(t, .7);
+  return `rgb(${a.map((v,i) => Math.round(v + (b[i]-v)*e)).join(",")})`;
+}
+const short = id => { const t = (byId[id].type || "") + "-";
+  return id.startsWith(t) ? id.slice(t.length) : id; };
+
+// ---------------- columns ----------------
+const counts = {}; DATA.nodes.forEach(n => counts[n.type] = (counts[n.type]||0) + 1);
+DATA.columns.forEach((c, i) => {
+  const h = el("div", "colhead");
+  h.style.left = i * 300 + "px"; h.style.top = "8px";
+  h.append(el("span", "n", String(counts[c]||0).padStart(2, "0")), el("span", "t", c));
+  const role = DATA.gate_types.includes(c) ? "judged against"
+             : DATA.shelf_types.includes(c) ? "cited" : "";
+  if (role) h.append(el("span", "role", role));
+  stage.append(h);
+});
+
+const cardOf = {}, dotOf = {};
+for (const n of DATA.nodes){
+  const b = el("button", "card" + (CLOSED.includes(n.status) ? " closed" : ""));
+  b.style.left = n.columns[0] + "px"; b.style.top = n.columns[1] + "px";
+  b.style.setProperty("--edge", vc(n));
+  b.append(el("span","verdict", n.status || "?"), el("span","ttl", n.title || n.id),
+           el("span","id", n.id));
+  const killed = n.backlinks.filter(x => x.rel === "kn:gateKilled").length;
+  const kept = n.backlinks.filter(x => x.rel === "kn:gateSurvivedBy").length;
+  if (DATA.gate_types.includes(n.type)){
+    const rail = el("div", "rail");
+    if (!killed && !kept) rail.append(el("span", "none", "no judgements yet"));
+    for (let i = 0; i < Math.min(kept, 14); i++) rail.append(el("i"));
+    for (let i = 0; i < Math.min(killed, 14); i++) rail.append(el("i", "x"));
+    rail.append(el("span", "cnt", `${kept}✓ ${killed}✗`));
+    b.append(rail);
+  }
+  b.onclick = () => select(n.id);
+  b.onmouseenter = () => focus(n.id); b.onmouseleave = () => focus(sel);
+  stage.append(b); cardOf[n.id] = b;
+
+  const g = mk("g", {}); g.style.cursor = "pointer";
+  g.append(mk("circle", {class:"halo", r:0}), mk("circle", {class:"cell", r:6}));
+  const t = mk("text", {y:19}); g.append(t);
+  g.onclick = () => select(n.id);
+  g.onmouseenter = () => focus(n.id); g.onmouseleave = () => focus(sel);
+  dots.append(g); dotOf[n.id] = {g, t, halo:g.children[0], cell:g.children[1]};
+}
+for (const c in DATA.walls){
+  const [x, y, r] = DATA.walls[c];
+  document.getElementById("walls").append(mk("circle", {cx:x, cy:y, r}));
+}
+
+// ---------------- edges ----------------
+const paths = [];
+for (const n of DATA.nodes) for (const l of n.links){
+  if (!byId[l.to]) continue;
+  const p = mk("path", {});
+  p.dataset.a = n.id; p.dataset.b = l.to; p.dataset.rel = l.rel;
+  // Solid means a gate ruled on this claim; dashed means every other kind of relation.
+  if (!GATE_RELS.includes(l.rel)) p.setAttribute("stroke-dasharray", "2 4");
+  document.getElementById("links").append(p); paths.push(p);
+}
+const near = id => { const s = new Set(id ? [id] : []);
+  if (id) for (const p of paths){ if (p.dataset.a === id) s.add(p.dataset.b);
+                                  if (p.dataset.b === id) s.add(p.dataset.a); }
+  return s; };
+
+// ---------------- drawing ----------------
+let VIEW = "columns", sel = null;
+
+function place(){
+  const map = VIEW === "map";
+  for (const n of DATA.nodes){
+    const [x, y] = map ? n.map : n.columns;
+    dotOf[n.id].g.setAttribute("transform", `translate(${x},${y})`);
+  }
+  for (const p of paths){
+    const A = byId[p.dataset.a], B = byId[p.dataset.b];
+    if (map){
+      const a = A.map, b = B.map;
+      const mx = (a[0]+b[0])/2, my = (a[1]+b[1])/2;
+      const dx = b[0]-a[0], dy = b[1]-a[1], L = Math.hypot(dx,dy) || 1;
+      const bow = Math.min(38, L*.13);
+      p.setAttribute("d", `M${a[0]},${a[1]}Q${mx - dy/L*bow},${my + dx/L*bow} ${b[0]},${b[1]}`);
+      p.classList.remove("back");
+    } else {
+      const a = A.columns, b = B.columns;
+      const back = b[0] < a[0];                      // points left: it feeds work back
+      const ax = a[0] + (back ? 0 : CARDW), bx = b[0] + (back ? CARDW : 0);
+      const ay = a[1] + CARDH/2, by = b[1] + CARDH/2;
+      const d = Math.max(46, Math.abs(bx-ax)*.42), dir = back ? -1 : 1, drop = back ? 74 : 0;
+      p.setAttribute("d",
+        `M${ax},${ay}C${ax+dir*d},${ay+drop} ${bx-dir*d},${by+drop} ${bx},${by}`);
+      p.classList.toggle("back", back);
+    }
+  }
+  const xs = DATA.nodes.map(n => (map ? n.map : n.columns)[0]);
+  const ys = DATA.nodes.map(n => (map ? n.map : n.columns)[1]);
+  const pad = map ? 120 : 60;
+  const x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - (map ? pad : TOPPAD);
+  const w = Math.max(...xs) - Math.min(...xs) + (map ? 2*pad : CARDW + 2*pad);
+  const h = Math.max(...ys) - Math.min(...ys) + (map ? 2*pad : CARDH + 2*pad);
+  svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+  svg.setAttribute("width", w); svg.setAttribute("height", h);
+  stage.style.width = w + "px"; stage.style.height = h + "px";
+  stage.style.setProperty("--ox", -x0 + "px"); stage.style.setProperty("--oy", -y0 + "px");
+  for (const n of DATA.nodes){
+    const c = cardOf[n.id];
+    c.style.left = (n.columns[0] - x0) + "px"; c.style.top = (n.columns[1] - y0) + "px";
+  }
+  document.querySelectorAll(".colhead").forEach((h, i) => {
+    h.style.left = (DATA.columns.indexOf(DATA.columns[i]) * 300 - x0) + "px";
+    h.style.top = (8 - y0) + "px";
+  });
+  paint();
+}
+const TOPPAD = 70;
+
+function paint(){
+  const lit = sel, hot = near(lit);
+  elabels.textContent = "";
+  for (const n of DATA.nodes){
+    const d = dotOf[n.id], hub = n.id === lit;
+    const r = hub ? 15 : 5 + Math.min(8, degree[n.id] * .55);
+    d.cell.setAttribute("r", r);
+    d.cell.setAttribute("fill", shade(n.id));
+    d.cell.setAttribute("stroke", hub ? "var(--ink)" : "var(--surface)");
+    d.cell.setAttribute("stroke-width", hub ? 3.5 : 1.5);
+    d.halo.setAttribute("r", hub ? 42 : 0);
+    d.g.classList.toggle("faded", !!lit && !hot.has(n.id));
+    const show = hub || hot.has(n.id) || degree[n.id] >= 7;
+    d.t.setAttribute("y", r + 13);
+    d.t.textContent = show ? short(n.id) : "";
+    d.t.setAttribute("class", hub ? "big" : "");
+    cardOf[n.id].classList.toggle("faded", !!lit && !hot.has(n.id));
+    cardOf[n.id].classList.toggle("on", n.id === lit);
+  }
+  for (const p of paths){
+    const on = lit && (p.dataset.a === lit || p.dataset.b === lit);
+    p.classList.toggle("on", !!on); p.classList.toggle("off", !!lit && !on);
+    if (on && VIEW === "map"){
+      const d = p.getAttribute("d").split("Q")[1];
+      if (d){ const [cx, cy] = d.split(" ")[0].split(",");
+        const t = mk("text", {x:cx, y:cy}); t.textContent = p.dataset.rel.split(":")[1];
+        elabels.append(t); }
+    }
+  }
+}
+
+// ---------------- the record ----------------
+function relations(title, list){
+  if (!list.length) return;
+  panel.append(el("h3", null, title));
+  const groups = {};
+  for (const l of list) (groups[l.rel] ||= []).push(l.to);
+  for (const rel of Object.keys(groups).sort()){
+    const g = el("div", "relgroup"); g.style.setProperty("--rc", RC[rel] || "var(--ink-3)");
+    const h = el("div", "rh");
+    h.append(el("b", null, rel.split(":")[1]), el("span", null, String(groups[rel].length)));
+    g.append(h);
+    for (const to of groups[rel]){
+      const b = el("button", "link", to);
+      if (byId[to]) b.append(el("small", null, byId[to].title.slice(0, 60)));
+      b.onclick = () => select(to); g.append(b);
+    }
+    panel.append(g);
+  }
+}
+function facts(title, obj){
+  if (!obj || !Object.keys(obj).length) return;
+  panel.append(el("h3", null, title));
+  const dl = el("dl");
+  for (const [k, v] of Object.entries(obj)) dl.append(el("dt", null, k), el("dd", null, String(v)));
+  panel.append(dl);
+}
+function lifecycle(n){
+  const st = el("div", "state"); st.style.setProperty("--sc", vc(n));
+  const head = el("div", "s");
+  head.append(el("b", null, n.status || "unknown"),
+              el("em", null, CLOSED.includes(n.status) ? "closed" : "open"));
+  st.append(head);
+  // Every clause below is read off the graph's own edges. Nothing here is a judgement.
+  const said = [], by = r => n.links.filter(l => l.rel === r).map(l => l.to);
+  const at = r => n.backlinks.filter(b => b.rel === r).map(b => b.to);
+  if (by("kn:killedByGate").length) said.push("killed by " + by("kn:killedByGate").join(", "));
+  if (by("kn:survivedGate").length)
+    said.push(`survived ${by("kn:survivedGate").length} gate(s)`);
+  if (at("npx:supersededBy").length) said.push("superseded by " + at("npx:supersededBy").join(", "));
+  if (at("npx:retractedBy").length) said.push("retracted by " + at("npx:retractedBy").join(", "));
+  if (DATA.gate_types.includes(n.type)){
+    const k = at("kn:gateKilled").length, s = at("kn:gateSurvivedBy").length;
+    said.push(k + s ? `judged ${k+s} claim(s) — killed ${k}, passed ${s}`
+                    : "has not judged anything yet");
+  } else if (!said.length) said.push("no gate has ruled on this yet");
+  st.append(el("p", null, said.join(" · ")));
+  return st;
+}
+const CALLOUT = ["Why it died", "What would reopen this"];
+function select(id){
+  sel = id; const n = byId[id];
+  panel.textContent = ""; panel.scrollTop = 0;
+  panel.append(el("div", "eyebrow", n.type), el("h2", null, n.title || n.id), lifecycle(n));
+  const meta = el("div", "meta");
+  (n.tags || []).forEach(t => meta.append(el("span", "tag", t)));
+  if (n.created) meta.append(el("span", "tag", n.created));
+  meta.append(el("span", "tag", n.id));
+  panel.append(meta);
+  for (const title of CALLOUT){
+    const s = n.sections.find(x => x.title === title && x.text);
+    if (!s) continue;
+    const c = el("div", "callout" + (title === CALLOUT[1] ? " offer" : ""));
+    c.append(el("h3", null, title), el("p", null, s.text));
+    panel.append(c);
+  }
+  for (const s of n.sections){
+    if (!s.text || CALLOUT.includes(s.title)) continue;
+    panel.append(el("h3", null, s.title));
+    if (s.text.length < 320){ panel.append(el("p", null, s.text)); continue; }
+    panel.append(el("p", null, s.text.slice(0, 300).trimEnd() + "…"));
+    const d = el("details"); d.append(el("summary"), el("p", null, s.text)); panel.append(d);
+  }
+  facts("results", n.results); facts("repro", n.repro);
+  if (n.attachments.length) facts("attachments", Object.fromEntries(n.attachments.map(a => [a, ""])));
+  relations("cites", n.links); relations("cited by", n.backlinks);
+  if (VIEW === "map"){
+    const i = trail.indexOf(id);
+    trail = i >= 0 ? trail.slice(0, i + 1) : [...trail, id];
+    drawTrail();
+  }
+  paint();
+}
+function focus(id){ const keep = sel; sel = id || keep; paint(); sel = keep; }
+
+// ---------------- trail ----------------
+let trail = [];
+function drawTrail(){
+  const t = document.getElementById("trail"); t.textContent = "";
+  trail.forEach((id, i) => {
+    if (i) t.append(el("span", "sep", "›"));
+    const b = el("button", null, id);
+    b.onclick = () => { trail = trail.slice(0, i); select(id); };
+    t.append(b);
+  });
+  t.append(el("span", "hint", trail.length ? "— click a neighbour to walk"
+                                           : "click a knoten to start walking"));
+}
+
+// ---------------- legend, from the graph's own words ----------------
+{
+  const leg = document.getElementById("clegend");
+  leg.append(el("summary", null, "the loop"));
+  const present = LOOP.filter(t => DATA.columns.includes(t));
+  if (present.length > 1){
+    leg.append(el("div", "flow", present.join("  →  ") + "  ⟲"));
+    leg.append(el("div", "flownote", "findings feed the next idea"));
+  }
+  const vocab = DATA.graph.vocab || {};
+  const rules = DATA.graph.rules || [];
+  const csv = v => String(v || "").split(",").map(x => x.trim()).filter(Boolean);
+  for (const c of DATA.columns){
+    let says = vocab[c];
+    if (!says && DATA.gate_types.includes(c)) says = "the bar others are judged against";
+    if (!says){
+      const demands = rules.filter(r => csv(r.when_type).includes(c)).map(r =>
+        (r.when_status ? `when ${csv(r.when_status).join("/")}, ` : "") +
+        (r.require_edge ? `cites ${r.require_edge}` :
+         r.require_sections ? `states ${csv(r.require_sections).join(" + ")}` : ""))
+        .filter(x => x && !x.endsWith(", "));
+      says = demands[0] || "no meaning declared in node_types";
+    }
+    const row = el("div", "lrow");
+    row.append(el("b", null, `${c} · ${counts[c]||0}`), el("span", null, says));
+    leg.append(row);
+  }
+}
+{
+  const count = s => DATA.nodes.filter(n => n.status === s).length;
+  const stats = [...new Set(DATA.nodes.map(n => n.status))].sort((a,b) => count(b)-count(a));
+  document.getElementById("ntot").textContent = DATA.count;
+  const meter = document.getElementById("meter"), key = document.getElementById("key");
+  for (const s of stats){
+    const seg = el("i"); seg.style.background = VC[s] || "var(--line-2)";
+    seg.style.flex = count(s); seg.title = `${count(s)} ${s}`; meter.append(seg);
+    const k = el("span"); const dot = el("i"); dot.style.background = VC[s] || "var(--line-2)";
+    k.append(dot, el("b", null, String(count(s))), document.createTextNode(" " + s));
+    key.append(k);
+  }
+}
+
+// ---------------- pan, zoom, view ----------------
+let view = {x:0, y:0, k:1}, drag = null;
+const apply = () => stage.style.transform =
+  `translate(${view.x}px,${view.y}px) scale(${view.k})`;
+function fit(){
+  const r = vp.getBoundingClientRect(), pad = 44;
+  const w = parseFloat(stage.style.width), h = parseFloat(stage.style.height);
+  view.k = Math.min((r.width - 2*pad)/w, (r.height - 2*pad)/h, 1);
+  view.x = (r.width - w*view.k)/2; view.y = (r.height - h*view.k)/2;
+  apply();
+}
+vp.onmousedown = e => { if (e.target.closest(".card")) return;
+  drag = {x:e.clientX, y:e.clientY, vx:view.x, vy:view.y}; vp.classList.add("drag"); };
+addEventListener("mousemove", e => { if (!drag) return;
+  view.x = drag.vx + e.clientX - drag.x; view.y = drag.vy + e.clientY - drag.y; apply(); });
+addEventListener("mouseup", () => { drag = null; vp.classList.remove("drag"); });
+vp.addEventListener("wheel", e => { e.preventDefault();
+  const r = vp.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const k = Math.min(2.4, Math.max(.12, view.k * Math.exp(-e.deltaY * .0015)));
+  view.x = mx - (mx-view.x)*(k/view.k); view.y = my - (my-view.y)*(k/view.k);
+  view.k = k; apply(); }, {passive:false});
+function setView(v){
+  VIEW = v; document.body.classList.toggle("map", v === "map");
+  document.getElementById("v-columns").setAttribute("aria-pressed", v === "columns");
+  document.getElementById("v-map").setAttribute("aria-pressed", v === "map");
+  place(); fit();
+}
+document.getElementById("v-columns").onclick = () => setView("columns");
+document.getElementById("v-map").onclick = () => setView("map");
+addEventListener("keydown", e => {
+  if (e.key === "f") fit();
+  if (e.key === "v") setView(VIEW === "columns" ? "map" : "columns");
+  if (e.key === "Escape"){ sel = null; paint();
+    panel.textContent = ""; panel.append(el("div", "blank", "Select a node to read its record.")); }
+});
+addEventListener("resize", fit);
+
+drawTrail(); place(); fit();
+</script>
