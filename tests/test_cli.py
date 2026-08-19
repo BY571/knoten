@@ -361,9 +361,14 @@ def test_the_question_comes_before_everything_else(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     main(["init", "demo"])
     root = tmp_path / "demo"
-    for nid, ntype in [("source-a-paper", "source"), ("idea-a", "idea")]:
-        (root / "nodes" / f"{nid}.md").write_text(
-            f"---\nid: {nid}\ntype: {ntype}\nstatus: open\n---\n\n# x\n", encoding="utf-8")
+    # Edges matter: `source` is cited by the idea and cites nothing, which made it a
+    # SHELF — and shelves used to be sorted ahead of everything, so `source` overtook
+    # `question`. With no edges at all there are no shelves and this passed vacuously.
+    (root / "nodes" / "source-a-paper.md").write_text(
+        "---\nid: source-a-paper\ntype: source\nstatus: open\n---\n\n# x\n", encoding="utf-8")
+    (root / "nodes" / "idea-a.md").write_text(
+        "---\nid: idea-a\ntype: idea\nstatus: open\nlinks:\n"
+        "  - {rel: prov:wasDerivedFrom, to: source-a-paper}\n---\n\n# x\n", encoding="utf-8")
 
     cols, _, _ = viz.roles(load(root))
 

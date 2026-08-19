@@ -63,9 +63,9 @@ what each word means — read it first, because knoten defines none of them. A g
 from ONE question, statement or task and everything descends from it: question -> source
 -> idea -> hypothesis -> experiment -> finding, with findings opening new ideas. A gate
 stands outside that loop as the bar every claim must survive. Sources are papers, posts,
-datasets and searches — and your own intuition, which is worth recording as a source too
-so that an idea always names where it came from. Nothing is
-one-to-one: one hypothesis may have several experiments and several findings.
+datasets and searches — and your own intuition, which is worth recording as a source too,
+so that an idea always names where it came from. Nothing is one-to-one: one hypothesis may
+have several experiments and several findings.
 
 An edge always points from the NEW node to the one it depends on — claim -> the gate it
 faced, experiment -> the hypothesis it tests, claim -> what it was derived from. Writing

@@ -351,8 +351,7 @@ description: TODO — what question is this graph about?
 # place they ARE defined, and `knoten viz` shows them beside each column.
 node_types:
   question:   what this graph exists to answer — a question, a statement or a task
-  source:     where the work came from — a paper, blogpost, dataset, search, or your
-              own intuition (write that one down too; a hunch you cite is auditable)
+  source:     where the work came from — a paper, dataset, search, or your own intuition
   idea:       what you took from a source; a direction, not yet a testable claim
   hypothesis: a falsifiable claim derived from an idea
   experiment: the test built to verify or falsify a hypothesis
@@ -399,9 +398,7 @@ status: open
 ## What would count as an answer
 <the shape of a result that would settle it, so you can tell when to stop>
 
-Everything else in this graph descends from this node. Investigate sources first
-(papers, posts, datasets, searches) — or start from your own intuition and record
-that as a source too, so the origin is citable either way.
+Replace this with the real question. Everything else in this graph descends from it.
 """
 
 TEMPLATE_GATE = """\
@@ -485,6 +482,7 @@ def init(name) -> int:
         TEMPLATE_QUESTION.format(name=name), encoding="utf-8")
     (root / "nodes" / "gate-example.md").write_text(TEMPLATE_GATE, encoding="utf-8")
     print(f"created graph '{name}'\n")
+    print(f"  {name}/nodes/question-{name}.md  <- start here: what this graph answers")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
     print(f"  {name}/nodes/       <- one markdown file per question / source / idea / claim\n")
     print(f"  next:  cd {name} && git init && knoten hook")

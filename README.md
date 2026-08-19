@@ -248,7 +248,8 @@ Because it invents none, the only place your words can be *defined* is your own 
 
 ```yaml
 node_types:
-  source:     external material the work starts from — a paper, dataset or search
+  question:   what this graph exists to answer — a question, a statement or a task
+  source:     where the work came from — a paper, dataset, search, or your own intuition
   idea:       what you took from a source; a direction, not yet a testable claim
   hypothesis: a falsifiable claim derived from an idea
   experiment: the test built to verify or falsify a hypothesis
