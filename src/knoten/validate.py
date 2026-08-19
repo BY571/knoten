@@ -21,6 +21,7 @@ RULE_KEYS = {
     "when_type",           # only apply to these node types
     "require_edge",        # node must declare this relation
     "require_sections",    # body must contain these `## ` headings
+    "require_field",       # frontmatter must carry this key, any non-empty value
     "require_result",      # results must carry this key
     "require_result_min",  # {key: minimum} — numeric floor
     "require_field_one_of",  # {field: [allowed]} — closed vocabulary
@@ -112,7 +113,7 @@ def _check_values(r: dict) -> None:
     """Key names are not enough: a wrong-SHAPED value must also be a hard error, not a
     TypeError. `require_edge: [x]` is the natural mistake, since `when_status` takes a list."""
     rid = r["id"]
-    for key in ("require_edge", "require_result"):
+    for key in ("require_edge", "require_field", "require_result"):
         if key in r and not isinstance(r[key], str):
             raise GraphError(
                 f"graph.yaml: rule '{rid}': `{key}` must be a single string, "
@@ -334,6 +335,13 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
             for sec in _csv(r.get("require_sections")):
                 if not any(sec.lower() in s.lower() for s in n.sections):
                     out.append(Violation(n.id, rid, f"{msg} (missing '## {sec}')"))
+
+            # `require_field_one_of` needs a closed set; a url or a doi has none. This
+            # says only that the answer got written down.
+            if fld := r.get("require_field"):
+                got = n.frontmatter.get(fld)
+                if got is None or not str(got).strip():
+                    out.append(Violation(n.id, rid, f"{msg} ({fld} is {got!r})"))
 
             if (fld := r.get("require_result")) and fld not in n.results:
                 out.append(Violation(n.id, rid, msg))

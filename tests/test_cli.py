@@ -378,14 +378,16 @@ def test_the_question_comes_before_everything_else(tmp_path, monkeypatch):
 
 def test_a_hunch_is_a_source_like_any_other(tmp_path, monkeypatch):
     """Own intuition is where a lot of research actually starts. Recording it as a source
-    keeps one rule — every idea names where it came from — and makes the question
-    answerable: how much of this graph rests on hunches rather than on reading?"""
+    keeps one rule, every idea names where it came from, and makes the question answerable:
+    how much of this graph rests on hunches rather than on reading? The graph's own
+    `sources-must-be-findable-again` rule accepts "own intuition" as an origin precisely so
+    that a hunch is recorded rather than left implicit."""
     monkeypatch.chdir(tmp_path)
     main(["init", "demo"])
     root = tmp_path / "demo"
     (root / "nodes" / "source-own-intuition.md").write_text(
-        "---\nid: source-own-intuition\ntype: source\nstatus: open\n---\n\n# A hunch\n",
-        encoding="utf-8")
+        "---\nid: source-own-intuition\ntype: source\nstatus: open\n"
+        "origin: own intuition\n---\n\n# A hunch\n", encoding="utf-8")
     monkeypatch.chdir(root)
 
     assert main(["validate"]) == 0

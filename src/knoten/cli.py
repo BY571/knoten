@@ -372,6 +372,7 @@ statuses:   [open, alive, dead, retracted, superseded, active]
 #               kn:blockedBy     (claim -> a structural wall, not a result)
 
 rules:
+  # --- the two that make a graph worth keeping -----------------------------------
   - id: live-claims-must-cite-their-gates
     when_status: alive
     when_type: hypothesis, finding
@@ -381,7 +382,37 @@ rules:
   - id: dead-claims-must-say-why
     when_status: dead, retracted
     require_sections: Why it died, What would reopen this
-    message: The post-mortem IS the asset — a dead end must become a standing offer.
+    message: The post-mortem IS the asset. A dead end must become a standing offer.
+
+  # --- the loop: every step records where it came from ---------------------------
+  # Delete any of these that your topic does not want. They are this graph's opinion,
+  # not knoten's: the core checks only what is declared here.
+  - id: sources-must-be-findable-again
+    when_type: source
+    require_field: origin
+    message: >
+      A source you cannot go back to is a rumour. Record a url, a doi, a file path
+      or "own intuition" if the work started in your head.
+
+  - id: ideas-must-cite-what-prompted-them
+    when_type: idea
+    require_edge_target: {{rel: prov:wasDerivedFrom, type: question, min: 1}}
+    message: >
+      An idea that cites nothing cannot be traced back to the question it serves.
+      Cite the question, or the source you read.
+
+  - id: hypotheses-must-say-what-they-do-not-test
+    when_type: hypothesis
+    require_sections: The claim, What this does not test
+    message: >
+      A hypothesis is a pull request: one change, one thing tested. If you cannot say
+      what this does NOT test, it is testing more than one thing. Open a second
+      hypothesis instead of widening this one.
+
+  - id: experiments-must-be-rerunnable
+    when_type: experiment
+    require_sections: Setup, How to reproduce, Result
+    message: An experiment I cannot rerun is an anecdote.
 """
 
 TEMPLATE_QUESTION = """\
@@ -440,7 +471,7 @@ def new(root, ntype, nid, status) -> int:
             raise GraphError(f"{field} '{value}' is not declared in graph.yaml "
                              f"({field}s: {', '.join(map(str, declared))})")
 
-    sections, results, fields = [], [], {}
+    sections, results, fields, blanks = [], [], {}, []
     for r in cfg.get("rules", []):
         if not applies(status, ntype, r):
             continue
@@ -448,11 +479,16 @@ def new(root, ntype, nid, status) -> int:
         results += [k for k in [r.get("require_result")] if k]
         results += list(r.get("require_result_min") or {})
         fields.update(r.get("require_field_one_of") or {})
+        blanks += [k for k in [r.get("require_field")] if k]
 
     fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}", f"created: {today()}"]
     # The allowed values go in the scaffold as a comment: a closed vocabulary the author
     # has to go and look up is a closed vocabulary they will guess at.
     fm += [f"{k}: TODO   # one of: {', '.join(map(str, v))}" for k, v in fields.items()]
+    # Left EMPTY, not TODO. `require_field` takes any non-empty value, so a placeholder
+    # would satisfy it and `new` + `validate` would stop being a checklist. Blank is both
+    # the prompt and the violation.
+    fm += [f"{k}:" for k in dict.fromkeys(blanks) if k not in fields]
     if results:
         fm.append("results:")
         fm += [f"  {k}: TODO" for k in dict.fromkeys(results)]

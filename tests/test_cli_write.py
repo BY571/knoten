@@ -222,3 +222,18 @@ def test_a_malformed_field_names_the_flag_the_user_typed(graph, monkeypatch, cap
 
     assert main(["update", "hyp-x", "--field", "cause"]) == 1
     assert "--field" in capsys.readouterr().err
+
+
+def test_new_scaffolds_a_required_field_blank_so_validate_still_names_it(tmp_path, monkeypatch):
+    """`new` + `validate` is meant to be a checklist. `require_field` takes any non-empty
+    value, so scaffolding `origin: TODO` would SATISFY the rule and the checklist would
+    report a clean graph with a placeholder in it. Blank is both prompt and violation."""
+    monkeypatch.chdir(tmp_path)
+    main(["init", "demo"])
+    root = tmp_path / "demo"
+    monkeypatch.chdir(root)
+
+    main(["new", "source", "src-a"])
+
+    assert "origin:\n" in (root / "nodes" / "src-a.md").read_text()
+    assert main(["validate"]) == 1

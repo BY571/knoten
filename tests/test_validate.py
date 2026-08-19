@@ -453,3 +453,46 @@ def test_naming_the_forward_relation_on_a_backlink_rule_is_an_error(graph):
 
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
+
+
+# ------------------------------------------- a field that must be there, any value
+
+ORIGIN = """\
+name: t
+rules:
+  - id: sources-say-where-they-came-from
+    when_type: source
+    require_field: origin
+    message: A source you cannot go back to is a rumour.
+"""
+
+
+def test_a_required_field_must_be_present(graph):
+    """`require_field_one_of` needs a closed set, which a url or a doi does not have.
+    There was no way to say "this must be recorded" without also saying what it may say."""
+    graph.rules(ORIGIN).node("src-x", "id: src-x\ntype: source\nstatus: open")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["sources-say-where-they-came-from"]
+
+
+def test_a_required_field_with_a_value_passes(graph):
+    graph.rules(ORIGIN).node("src-x", "id: src-x\ntype: source\nstatus: open\n"
+                                      "origin: https://arxiv.org/abs/2606.21024")
+
+    assert check(load(graph.root), graph.root) == []
+
+
+@pytest.mark.parametrize("value", ["", '""', "   "])
+def test_an_empty_value_does_not_satisfy_it(graph, value):
+    """`origin:` with nothing after it is the natural half-finished edit, and it would
+    otherwise satisfy a rule whose whole point is that the answer got written down."""
+    graph.rules(ORIGIN).node("src-x", f"id: src-x\ntype: source\nstatus: open\norigin: {value}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["sources-say-where-they-came-from"]
+
+
+def test_a_malformed_require_field_is_a_graph_error(graph):
+    graph.rules("name: t\nrules:\n  - id: r\n    require_field: [a, b]\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)

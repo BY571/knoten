@@ -226,11 +226,17 @@ rules:
 | `when_status` / `when_type` | only apply to these statuses / types (comma-separated). |
 | `require_edge` | node must declare this relation. |
 | `require_sections` | body must contain these `## ` headings. |
+| `require_field` | frontmatter must carry this key, with any non-empty value. |
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
 | `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
 | `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets. |
 | `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse). |
+
+`require_field` is the open sibling of `require_field_one_of`: a url or a doi has no
+closed set of legal values, so the only thing worth demanding is that the answer got
+written down. `knoten new` scaffolds such a field EMPTY rather than as `TODO`, because a
+placeholder would satisfy the rule and `new` + `validate` would stop being a checklist.
 
 The last two are the only checks that look past the node being checked, and they are what
 make a claim's fate outlive the moment it was written: `require_edge_target` fails
