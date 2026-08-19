@@ -7,7 +7,7 @@ description: What actually improves LLM accuracy on reasoning tasks?
 
 # These are enforced. A node whose type or status is not on these lists is a typo, and
 # a claim with a typo'd status silently drops out of every query.
-node_types: [hypothesis, experiment, finding, gate, source]
+node_types: [question, hypothesis, experiment, finding, gate, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
 
 # The filter axis. `knoten index --tag decoding` narrows a graph too big to read into a

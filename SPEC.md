@@ -77,11 +77,12 @@ rather than thinking.**
 
 ### Node types (conventions, not hardcoded)
 
-`source` · `idea` · `hypothesis` · `experiment` · `finding` · `retraction` · `gate`
+`question` · `source` · `idea` · `hypothesis` · `experiment` · `finding` · `retraction` · `gate`
 
-A convention only — the core checks `node_types` for membership and nothing else. `gate`
-stands outside the loop the others form: it is the bar a claim must survive, not a stage
-it passes through. `method` is deliberately unclaimed; the rename that freed it reserved
+A convention only — the core checks `node_types` for membership and nothing else. A graph
+begins with a `question` and everything descends from it; a `source` is where the work came
+from, including the author's own intuition. `gate` stands outside the loop the others form:
+it is the bar a claim must survive, not a stage it passes through. `method` is deliberately unclaimed; the rename that freed it reserved
 it for "the approach derived from findings that survived", and nothing implements that
 yet.
 

@@ -39,7 +39,7 @@ GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
 
 # Only an ordering hint. A type this does not name is not dropped — it lands after the
 # ones that are, in the order the graph first used it. knoten declares no vocabulary.
-FLOW = ["source", "idea", "question", "hypothesis", "experiment", "finding",
+FLOW = ["question", "source", "idea", "hypothesis", "experiment", "finding",
         "blocker", "retraction"]
 
 
@@ -92,11 +92,15 @@ def roles(nodes: dict) -> tuple:
     seen = list(dict.fromkeys(n.type for n in _order(nodes)))
     gates = [t for t in seen if t in gate_types]
     shelves = [t for t in seen if t not in gates and t in cited and t not in citing]
-    flow = [t for t in seen if t not in gates and t not in shelves]
-    ordered = ([t for t in FLOW if t in shelves]
-               + [t for t in shelves if t not in FLOW]
-               + [t for t in FLOW if t in flow]
-               + [t for t in flow if t not in FLOW]
+    rest = [t for t in seen if t not in gates and t not in FLOW]
+
+    # A type FLOW names is placed by FLOW, whatever its edges look like. Sorting shelves
+    # ahead of everything meant `source` — cited by an idea, citing nothing — overtook
+    # `question` on any graph where nothing happened to cite the question back, so the
+    # column order contradicted the loop it exists to show.
+    ordered = ([t for t in FLOW if t in seen and t not in gates]
+               + [t for t in rest if t in shelves]
+               + [t for t in rest if t not in shelves]
                + gates)
     return ordered, set(gates), set(shelves)
 

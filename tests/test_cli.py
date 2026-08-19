@@ -338,3 +338,54 @@ def test_init_ignores_the_lock_file(tmp_path, monkeypatch):
     main(["init", "my-topic"])
 
     assert ".knoten.lock" in (tmp_path / "my-topic" / ".gitignore").read_text()
+
+
+def test_init_scaffolds_the_question_the_graph_exists_to_answer(tmp_path, monkeypatch):
+    """A graph starts from a question, a statement or a task — everything else is
+    downstream of it. As prose in `graph.yaml: description` nothing could cite it, so a
+    finding could not be traced back to the question it serves and a second sub-question
+    had nowhere to live."""
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["init", "demo"]) == 0
+    monkeypatch.chdir(tmp_path / "demo")
+
+    assert (tmp_path / "demo" / "nodes" / "question-demo.md").exists()
+    assert main(["validate"]) == 0
+
+
+def test_the_question_comes_before_everything_else(tmp_path, monkeypatch):
+    """Column order is the research order. `question` used to sit third in it, after
+    `source` and `idea` — behind the two things that derive from it."""
+    from knoten import viz
+    monkeypatch.chdir(tmp_path)
+    main(["init", "demo"])
+    root = tmp_path / "demo"
+    # Edges matter: `source` is cited by the idea and cites nothing, which made it a
+    # SHELF — and shelves used to be sorted ahead of everything, so `source` overtook
+    # `question`. With no edges at all there are no shelves and this passed vacuously.
+    (root / "nodes" / "source-a-paper.md").write_text(
+        "---\nid: source-a-paper\ntype: source\nstatus: open\n---\n\n# x\n", encoding="utf-8")
+    (root / "nodes" / "idea-a.md").write_text(
+        "---\nid: idea-a\ntype: idea\nstatus: open\nlinks:\n"
+        "  - {rel: prov:wasDerivedFrom, to: source-a-paper}\n---\n\n# x\n", encoding="utf-8")
+
+    cols, _, _ = viz.roles(load(root))
+
+    assert cols[0] == "question"
+    assert cols.index("source") < cols.index("idea")
+
+
+def test_a_hunch_is_a_source_like_any_other(tmp_path, monkeypatch):
+    """Own intuition is where a lot of research actually starts. Recording it as a source
+    keeps one rule — every idea names where it came from — and makes the question
+    answerable: how much of this graph rests on hunches rather than on reading?"""
+    monkeypatch.chdir(tmp_path)
+    main(["init", "demo"])
+    root = tmp_path / "demo"
+    (root / "nodes" / "source-own-intuition.md").write_text(
+        "---\nid: source-own-intuition\ntype: source\nstatus: open\n---\n\n# A hunch\n",
+        encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    assert main(["validate"]) == 0

@@ -350,7 +350,8 @@ description: TODO — what question is this graph about?
 # The meanings are not decoration: knoten defines none of these words, so this is the only
 # place they ARE defined, and `knoten viz` shows them beside each column.
 node_types:
-  source:     external material the work starts from — a paper, dataset or search
+  question:   what this graph exists to answer — a question, a statement or a task
+  source:     where the work came from — a paper, dataset, search, or your own intuition
   idea:       what you took from a source; a direction, not yet a testable claim
   hypothesis: a falsifiable claim derived from an idea
   experiment: the test built to verify or falsify a hypothesis
@@ -381,6 +382,23 @@ rules:
     when_status: dead, retracted
     require_sections: Why it died, What would reopen this
     message: The post-mortem IS the asset — a dead end must become a standing offer.
+"""
+
+TEMPLATE_QUESTION = """\
+---
+id: question-{name}
+type: question
+status: open
+---
+# TODO — the question, statement or task this graph exists to answer
+
+## Why it matters
+<what changes once this is answered — and for whom>
+
+## What would count as an answer
+<the shape of a result that would settle it, so you can tell when to stop>
+
+Replace this with the real question. Everything else in this graph descends from it.
 """
 
 TEMPLATE_GATE = """\
@@ -460,10 +478,13 @@ def init(name) -> int:
     (root / "graph.yaml").write_text(TEMPLATE_GRAPH.format(name=name), encoding="utf-8")
     # knoten's own write lock. Nobody should have to see it in `git status`.
     (root / ".gitignore").write_text(f"{LOCK}\n", encoding="utf-8")
+    (root / "nodes" / f"question-{name}.md").write_text(
+        TEMPLATE_QUESTION.format(name=name), encoding="utf-8")
     (root / "nodes" / "gate-example.md").write_text(TEMPLATE_GATE, encoding="utf-8")
     print(f"created graph '{name}'\n")
+    print(f"  {name}/nodes/question-{name}.md  <- start here: what this graph answers")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
-    print(f"  {name}/nodes/       <- one markdown file per hypothesis / gate / source\n")
+    print(f"  {name}/nodes/       <- one markdown file per question / source / idea / claim\n")
     print(f"  next:  cd {name} && git init && knoten hook")
     print("         (the hook makes `git commit` refuse a graph that breaks its own rules)")
     return 0
