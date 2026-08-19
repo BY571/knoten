@@ -357,14 +357,50 @@ def test_a_dangling_target_does_not_count_towards_the_requirement(graph):
     assert "methods-rest-on-live-claims" in rules
 
 
-@pytest.mark.parametrize("bad", ["prov:used", "{rel: [a, b]}", "{type: finding}"])
+@pytest.mark.parametrize("bad", ["prov:used", "{rel: [a, b]}", "{type: finding}",
+                                 "{rel: nope:invented}", "{rel: kn:gateKilled}",
+                                 "{rel: prov:used, min: 0}", "{rel: prov:used, min: true}"])
 def test_a_malformed_requirement_is_a_graph_error_not_a_crash(graph, bad):
     """Same bargain as every other rule key: the shape is checked once, loudly, rather
-    than blowing up mid-validation on somebody's node."""
+    than blowing up mid-validation on somebody's node.
+
+    `kn:gateKilled` is the interesting one. It is a real relation — but a GENERATED
+    back-link, which no node ever declares, so the rule would load cleanly and then fail
+    every node forever with no hint that the direction was wrong. An always-firing rule
+    is as corrosive as a never-firing one. `min: true` is here because `bool` is a
+    subclass of `int` and would otherwise sail through as 1."""
     graph.rules(f"name: t\nrules:\n  - id: r\n    require_edge_target: {bad}\n")
 
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
+
+
+def test_citing_the_same_finding_twice_is_not_two_findings(graph):
+    """`min` states an inductive standard — one observation is an anecdote. Counting
+    EDGES rather than distinct targets let copy-paste satisfy it."""
+    graph.rules("""\
+name: t
+rules:
+  - id: needs-instances
+    when_type: hypothesis
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, min: 2}
+    message: One observation is not a pattern.
+""").node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: prov:wasDerivedFrom, to: find-a}\n"
+                        "  - {rel: prov:wasDerivedFrom, to: find-a}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["needs-instances"]
+
+
+def test_the_violation_says_what_was_wanted_and_what_was_found(graph):
+    """The message is the product: an agent reads it and has to know what to do next."""
+    graph.rules(CASCADE).node("method-x", "id: method-x\ntype: method\nstatus: alive")
+
+    msg = next(v.message for v in check(load(graph.root), graph.root)
+               if v.rule == "methods-rest-on-live-claims")
+
+    assert "0 matching, need >= 1" in msg and "status=alive" in msg
 
 
 # ------------------------------------------- rules can also look at what points AT a node
@@ -405,3 +441,15 @@ def test_the_wrong_kind_of_neighbour_does_not_satisfy_it(graph):
                          "  - {rel: kn:tests, to: hyp-x}")
 
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
+
+
+def test_naming_the_forward_relation_on_a_backlink_rule_is_an_error(graph):
+    """The trap the two keys create together. `kn:tests` is what an experiment DECLARES;
+    the back-link it generates is `kn:testedBy`. A rule asking for the forward name on
+    the incoming side would load cleanly and then fail every hypothesis forever, with
+    nothing in the message saying the direction was wrong."""
+    graph.rules("name: t\nrules:\n  - id: r\n    when_type: hypothesis\n"
+                "    require_backlink: {rel: kn:tests}\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)

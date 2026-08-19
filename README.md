@@ -119,7 +119,7 @@ rules:
 ```
 
 A rule can also demand something of what an edge *points at*, not just that the edge
-exists. This is the one check that outlives the moment it is written:
+exists. This is the first check that outlives the moment it is written:
 
 ```yaml
   - id: methods-rest-on-live-claims
@@ -144,7 +144,7 @@ work that was *abandoned* rather than written badly:
     message: An untested hypothesis is not alive, it is unexamined.
 ```
 
-Every other rule key sees only what a node declares about itself, so they all police the
+Every other rule key starts from what the node itself declares, so they all police the
 author of a claim. A hypothesis nobody ever tested declares nothing wrong — there is no
 node to attach the complaint to. `require_backlink` reads the generated back-links, so the
 complaint lands on the hypothesis that was left hanging.
