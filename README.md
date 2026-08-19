@@ -118,7 +118,22 @@ rules:
     message: A cause of death you cannot filter on is a story, not an index.
 ```
 
-That last one is what makes a dead end *reusable*. Once the cause is a field rather than
+A rule can also demand something of what an edge *points at*, not just that the edge
+exists. This is the first check that outlives the moment it is written:
+
+```yaml
+  - id: methods-rest-on-live-claims
+    when_type: method
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, status: alive}
+    message: A method built on a dead finding is a method built on sand.
+```
+
+`validate` re-runs over the whole graph, so this is not a create-time check. The day a
+finding dies, everything derived from it fails — killing one result indicts what was built
+on top of it, instead of leaving it standing unchallenged. Add `min: 3` and the same key
+states an inductive standard: one observation is an anecdote, not a pattern.
+
+That cause-of-death rule is what makes a dead end *reusable*. Once the cause is a field rather than
 a sentence, the question you actually ask six months later is a query:
 
 ```bash
