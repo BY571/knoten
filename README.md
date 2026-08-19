@@ -12,7 +12,8 @@ back, and the script that killed it. Nothing is deleted and nothing is overwritt
 correction is a new node that supersedes the old one, so six months later the graph can
 tell you not just what you believe but what you already ruled out and why.
 
-It exists because research loops — human or agent — forget. They re-propose an idea that
+It exists because research loops forget, whether they are run by a human or an agent.
+They re-propose an idea that
 was settled last month under a different name, and they file the wins while the failures
 evaporate. knoten makes the failure the artifact: a claim cannot be marked alive unless it
 cites a test it survived, and a dead end has to say what would reopen it. Your graph
@@ -87,7 +88,7 @@ knoten hook                   # make `git commit` refuse a broken graph
 knoten viz --open             # the whole graph as one HTML file
 ```
 
-Every read command takes `--json`. Exit `0` succeeded, `1` refused — and a refusal is the
+Every read command takes `--json`. Exit `0` succeeded, `1` refused, and a refusal is the
 feature: read it, fix the node, run it again.
 
 ## Rules are data
@@ -108,7 +109,7 @@ rules:
 ```
 
 The first is the safety mechanism: a good-looking result that was never checked cannot
-quietly become a finding. The second is what makes a dead end *reusable* — once the cause
+quietly become a finding. The second is what makes a dead end *reusable*. Once the cause
 is a field rather than a sentence, the question you ask six months later is a query:
 
 ```bash
@@ -120,8 +121,8 @@ than new types:
 
 ```yaml
 node_types:
-  question:   what this graph exists to answer — a question, a statement or a task
-  source:     where the work came from — a paper, dataset, search, or your own intuition
+  question:   what this graph exists to answer, be it a question, statement or task
+  source:     where the work came from, such as a paper, dataset or your own intuition
   hypothesis: a falsifiable claim derived from an idea
   gate:       a standing rule every claim must survive; a bar, not a stage
 statuses:   [open, alive, dead, retracted, superseded, active]
@@ -130,7 +131,7 @@ tags:       [decoding, reasoning, prompting, evaluation]
 
 ## For agents
 
-[`SKILL.md`](SKILL.md) is how a coding agent learns knoten — point Claude Code, or
+[`SKILL.md`](SKILL.md) is how a coding agent learns knoten. Point Claude Code, or
 anything with a shell, at it. It teaches the loop above, which types of node a graph holds
 and which way an edge points.
 
