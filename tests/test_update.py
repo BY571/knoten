@@ -1,6 +1,6 @@
 """Moving a node through its own lifecycle.
 
-An agent could open a hypothesis and never close it: `knoten_commit` refuses to overwrite,
+An agent could open a hypothesis and never close it: `knoten commit` refuses to overwrite,
 and nothing else could change a status. So the loop — open, run, record the verdict — had
 no third step, and the agent's only outs were a raw file write (bypassing every gate) or a
 second node leaving the first `open` forever.
@@ -45,7 +45,7 @@ def test_status_moves_and_persists(g):
 
 def test_a_transition_that_breaks_a_rule_is_refused(g):
     """The gate is the point and it must survive the new write path: `dead` without the
-    post-mortem is exactly what `knoten_commit` already refuses."""
+    post-mortem is exactly what `knoten commit` already refuses."""
     with pytest.raises(GraphError, match="dead-claims-must-say-why"):
         update(g.root, "hyp-x", status="dead")
 

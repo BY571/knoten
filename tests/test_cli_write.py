@@ -1,5 +1,5 @@
 """The CLI could read the graph but not write to it — commit and update existed only
-on the MCP surface. An agent with a shell had to install an SDK to file a claim."""
+on a second surface. An agent with a shell had to install an SDK to file a claim."""
 import json
 
 import pytest
@@ -204,7 +204,7 @@ def test_a_field_is_stored_as_typed_not_coerced(graph, monkeypatch):
     `--where` both compare with str(), so `--field seed=2` stored 2.0 and matched nothing
     the graph declared — and the refusal quoted `seed=2.0`, a value the user never typed.
 
-    Worse, MCP passed `fields` through untouched, so the same logical call wrote `2` on
+    Worse, the other surface passed `fields` through untouched, so one logical call wrote `2` on
     one surface and `2.0` on the other — divergence on the very argument ops.update
     exists to unify."""
     graph.rules(NUMERIC_VOCAB).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open",

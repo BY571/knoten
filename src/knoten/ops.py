@@ -1,8 +1,8 @@
 """Every question the graph answers, as a dict.
 
-One implementation per operation. The CLI renders these dicts as prose, `--json` dumps
-them, and the MCP tools serialise them — so the three surfaces cannot drift, which they
-did repeatedly when the read paths were written twice.
+One implementation per operation. The CLI renders these dicts as prose and `--json`
+dumps them verbatim, so the two renderings cannot disagree — they did, repeatedly, when
+the read paths were written twice, once per surface.
 """
 from __future__ import annotations
 
@@ -91,9 +91,8 @@ def query(root: Path, term: str) -> dict:
     out = {"query": term, "total": len(claims),
            "truncated": len(claims) > QUERY_LIMIT,
            "claims": [summarise(n) for n in claims[:QUERY_LIMIT]],
-           # MCP contract — do not narrow, an agent tool call is keyed on this shape.
-           # Renamed with the type it names: a key called `related_methods` that selects
-           # gates would be the same word doing two jobs that this rename exists to end.
+           # Do not narrow: agents key on this shape, and dropping a key is invisible
+           # to the caller until something it needed is quietly missing.
            "related_gates": [n.id for n in hits if n.type == GATE_TYPE],
            # Everything else that matched but isn't a claim: sources, open work, whatever
            # types this graph declares. The CLI's "also:" line used to show these before
@@ -178,10 +177,10 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
           links: list | None = None, append: str | None = None,
           fields: dict | None = None) -> dict:
     """Move a node through its lifecycle, or report why it was refused — ONE shape for
-    both outcomes. Update used to be built twice: the CLI's success omitted `status`
-    entirely and its refusal had no `hint`, while MCP's success carried `status:
-    "UPDATED"` and its refusal did. That drift is the exact bug this module exists to
-    prevent, so this mirrors `commit()`'s convention instead of inventing a third shape.
+    both outcomes. Update used to be built twice, once per surface: one success omitted
+    `status` entirely and its refusal had no `hint`, while the other carried both. That
+    drift is the bug this module exists to prevent, so this mirrors `commit()`'s
+    convention rather than inventing a third shape.
     """
     try:
         now = _update_node(root, nid, status=status, results=results,

@@ -1,12 +1,12 @@
 """Moving a node through its own lifecycle: open -> alive / dead / retracted.
 
-`knoten_commit` refuses to overwrite a node, which is right — a correction to a claim is
+`knoten commit` refuses to overwrite a node, which is right — a correction to a claim is
 a new node, not an edit. But that left the lifecycle SPEC §3 draws with no way to walk it:
 an agent could open a hypothesis and never close it. Its only outs were writing the file
 directly, which bypasses every gate, or a second node leaving the first `open` forever.
 
 What bounds an edit is the graph's own declared rules, not a list of things this module
-refuses: the amended candidate goes through the same in-memory validation `knoten_commit`
+refuses: the amended candidate goes through the same in-memory validation `knoten commit`
 uses, and never reaches disk if it fails. `fields` therefore sets any top-level key,
 including one already recorded — `results` is the exception, guarded because a number you
 already published is a different kind of claim from a label. Git holds the before and
@@ -112,7 +112,7 @@ def _update(root: Path, nid: str, status, results, links, append, fields) -> str
     if append:
         out = out.rstrip("\n") + "\n\n" + append.strip("\n") + "\n"
 
-    # Validate the candidate in memory, exactly as knoten_commit does: an invalid node
+    # Validate the candidate in memory, exactly as knoten commit does: an invalid node
     # never reaches the filesystem, and a refused update leaves the file untouched.
     candidate = parse_text(out, nid, nf.name)
     nodes = backlink({**load(root), nid: candidate})

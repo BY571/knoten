@@ -70,7 +70,7 @@ $ knoten query "self-consistency"
 ## Use it
 
 ```bash
-pip install -e .                  # the CLI is the agent surface; add ".[mcp]" only for shell-less clients
+pip install -e .
 knoten init my-topic              # a new graph (it's a folder)
 ```
 
@@ -269,14 +269,10 @@ hypothesis can be opened now and closed later. `update` appends and moves status
 rewrite a result already recorded — that is what retraction is for.
 
 `ops.py` holds the one implementation behind every read — index, query, frontier, gates,
-show, validate, path — as a function returning a dict. The CLI renders it as prose or dumps
-it with `--json`; the MCP server serialises the same dict. One behaviour to keep correct,
-not two that can drift.
-
-**Clients without a shell (MCP).** For a chat UI wired to MCP rather than a coding agent,
-`pip install -e ".[mcp]"` (needs mcp 2.x). It costs ~2,340 tokens of schema and instructions
-in every session whether the graph is touched or not, against ~304 for `knoten --help` and
-only when asked. Use the CLI if the client can run one.
+show, validate, path — as a function returning a dict, which the CLI renders as prose or
+dumps with `--json`. There was a second surface for shell-less clients; it cost ~2,340 tokens of schema in
+every session against ~304 for `knoten --help`, and it was a second thing to keep
+correct. It was removed. The shell is the interface.
 
 ## Why bother
 

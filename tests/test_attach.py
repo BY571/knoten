@@ -154,9 +154,9 @@ def test_attaching_a_directory_is_refused_before_anything_is_copied(graph, tmp_p
     assert not (graph.root / "attachments" / "hyp-x" / "good.py").exists()
 
 
-@pytest.mark.parametrize("nid", ["../../outside", "sub/dir", "UPPER"])
+@pytest.mark.parametrize("nid", ["../../outside", "sub/dir", "UPPER", "", "."])
 def test_attach_and_detach_refuse_an_id_that_escapes_the_graph(graph, tmp_path, nid):
-    """The MCP surface guarded the id because it comes from an LLM; the CLI did not,
+    """One surface guarded the id because it comes from an LLM; the CLI did not,
     because a human types it. So `knoten attach ../../x f` wrote OUTSIDE the graph, and
     `knoten detach ../../x f` DELETED a file outside it. Every id -> path conversion now
     goes through core.node_path."""
@@ -196,3 +196,46 @@ def test_two_attachments_at_once_both_survive(graph, tmp_path):
 
     assert sorted(listed) == sorted(f.name for f in files)
     assert check(load(graph.root), graph.root) == []
+
+
+# ------------------------------------------------- guards that warn rather than refuse
+
+def test_a_symlink_is_attached_by_content_and_flagged(graph, tmp_path):
+    """A symlink committed as a link points at a path that exists on nobody else's
+    machine, so the content is copied — and said out loud, because the author may have
+    meant the target rather than the link."""
+    graph.node("hyp-x", FM)
+    real = tmp_path / "real.py"; real.write_text("secret", encoding="utf-8")
+    link = tmp_path / "link.py"; link.symlink_to(real)
+
+    res = attachments.attach(graph.root, "hyp-x", [str(link)])
+
+    assert res.added == ["link.py"]
+    assert "symlink" in " ".join(res.warnings)
+
+
+def test_a_huge_file_is_flagged(graph, tmp_path):
+    """git is for code and plots, not datasets."""
+    graph.node("hyp-x", FM)
+    big = tmp_path / "train.parquet"; big.write_bytes(b"0" * 1_200_000)
+
+    res = attachments.attach(graph.root, "hyp-x", [str(big)])
+
+    assert res.added == ["train.parquet"]
+    assert "train.parquet" in " ".join(res.warnings)
+
+
+def test_a_missing_source_file_is_refused_and_nothing_is_written(graph, tmp_path):
+    graph.node("hyp-x", FM)
+
+    with pytest.raises(GraphError, match="ghost.py"):
+        attachments.attach(graph.root, "hyp-x", [str(tmp_path / "ghost.py")])
+
+    assert load(graph.root)["hyp-x"].attachments == []
+
+
+def test_attaching_to_an_unknown_node_is_refused(graph, tmp_path):
+    f = tmp_path / "x.py"; f.write_text("x", encoding="utf-8")
+
+    with pytest.raises(GraphError, match="hyp-nope"):
+        attachments.attach(graph.root, "hyp-nope", [str(f)])

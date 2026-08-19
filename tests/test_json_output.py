@@ -1,5 +1,6 @@
-"""--json must emit exactly the dict ops returns. That equality is what stops the CLI
-and the MCP server from drifting, which is this repo's most repeated bug."""
+"""--json must emit exactly the dict ops returns. Anything computed on the way out is a
+second implementation of the answer, and this repo's most repeated bug was exactly that:
+the same question answered twice, differently."""
 import json
 
 import pytest
@@ -68,9 +69,8 @@ def test_show_error_is_stderr_in_prose_and_stdout_in_json(graph, monkeypatch, ca
 
 
 def test_update_rejection_json_equals_the_ops_dict(g, monkeypatch, capsys):
-    """The bug this branch exists to eliminate: `update`'s refusal used to be built
-    twice, and the CLI's copy had no `hint` where MCP's did. Pin both the shape AND
-    that a refusal never touches the file, on either surface."""
+    """`update`'s refusal used to be built twice, and one copy had no `hint` where the
+    other did. Pin both the shape AND that a refusal never touches the file."""
     g.rules("name: t\nstatuses: [open, dead]\nnode_types: [hypothesis]\nrules: []\n")
     monkeypatch.chdir(g.root)
 
@@ -138,7 +138,7 @@ def test_show_prose_reports_attachment_size_and_missing(graph, monkeypatch, caps
 
 
 def test_query_also_line_keeps_non_gate_related_nodes(graph, monkeypatch, capsys):
-    """`related_gates` is the MCP contract (type == GATE_TYPE); the CLI's "also:" line
+    """`related_gates` selects `type == GATE_TYPE`; the CLI's "also:" line
     needs everything else that matched but isn't a claim, or a source node like this one
     silently vanishes from the one place a human sees it."""
     monkeypatch.chdir(graph.root)
@@ -162,3 +162,49 @@ def test_query_reports_the_gates_that_matched(graph, monkeypatch):
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead", "# Costs sink it\n")
 
     assert ops.query(graph.root, "costs")["related_gates"] == ["gate-costs"]
+
+
+def test_query_reports_the_cause_of_death(graph):
+    """`killed_by` and `why_it_died` are jointly the answer knoten exists to give. The
+    only tests asserting they reach a query result lived on a surface that was removed."""
+    graph.node("gate-cost", "id: gate-cost\ntype: gate\nstatus: active")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nlinks:\n"
+                        "  - {rel: kn:killedByGate, to: gate-cost}",
+               "# x\n\n## Why it died\nThe gain was compute, not method.\n")
+
+    (claim,) = ops.query(graph.root, "hyp-x")["claims"]
+
+    assert claim["verdict"] == "DEAD"
+    assert claim["killed_by"] == ["gate-cost"]
+    assert "compute, not method" in claim["why_it_died"]
+
+
+def test_get_says_a_claim_was_retracted_not_just_what_it_claimed(graph):
+    """We reported what a node RETRACTS and never that it WAS retracted, so an agent
+    asking "has this been tried?" about a withdrawn claim was told the claim."""
+    graph.node("gate-cost", "id: gate-cost\ntype: gate\nstatus: active")
+    graph.node("hyp-wrong", "id: hyp-wrong\ntype: hypothesis\nstatus: retracted")
+    graph.node("ret-oops", "id: ret-oops\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                           "  - {rel: npx:retracts, to: hyp-wrong}\n"
+                           "  - {rel: kn:survivedGate, to: gate-cost}")
+
+    res = ops.get(graph.root, "hyp-wrong")
+
+    assert res["retracted_by"] == ["ret-oops"]
+    assert "ret-oops" in res["warning"]
+
+
+def test_query_caps_its_own_response_and_says_so(graph):
+    """A broad query on a 500-node graph returned every match in full — ~83k tokens in
+    one response. The tool got LESS usable the more the graph accumulated, which is
+    backwards for a thing whose whole purpose is to accumulate."""
+    for i in range(60):
+        graph.node(f"hyp-{i:03d}", f"id: hyp-{i:03d}\ntype: hypothesis\nstatus: dead",
+                   f"# decoding experiment {i}\n")
+
+    res = ops.query(graph.root, "decoding")
+
+    assert res["total"] == 60
+    assert len(res["claims"]) < 60
+    assert res["truncated"] is True
+    assert "whole graph" in res["note"]

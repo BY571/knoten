@@ -309,7 +309,7 @@ def render_update(payload: dict) -> None:
 
 def update_cmd(root, nid, status, append, results, links, fields, as_json) -> int:
     # ops.update() is the ONE shape for both outcomes — this used to build its own
-    # dict here, and a different one in mcp_server.py, and the two shapes drifted.
+    # dict here, and a different one on a second surface since removed, and they drifted.
     payload = ops.update(root, nid, status=status, append=_read(append) if append else None,
                          results=_kv(results), links=_links(links), fields=_fields(fields))
     if payload["status"] == "REJECTED":
@@ -432,7 +432,7 @@ def new(root, ntype, nid, status) -> int:
                          f"are nodes, not edits.")
 
     cfg = load_config(root)
-    # `new` used to skip this while knoten_commit enforced it: the same node was accepted
+    # `new` used to skip this while knoten commit enforced it: the same node was accepted
     # by one entry point and rejected by the other.
     for field, declared in [("type", cfg.get("node_types")), ("status", cfg.get("statuses"))]:
         value = ntype if field == "type" else status
@@ -617,7 +617,7 @@ def main(argv=None) -> int:
         }[args.cmd]()
     except (GraphError, OSError) as e:
         # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error,
-        # not a traceback — mcp_server.tool already guards this for the same reason.
+        # not a traceback. Every entry point owes the user one line, not a stack.
         return _fail({"error": str(e)}, e, getattr(args, "json", False))
 
 

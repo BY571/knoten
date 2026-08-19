@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -e ".[mcp,dev]"
+      - run: pip install -e ".[dev]"
       - run: pytest -q
       # the example graph is documentation — it must pass its own rules
       - run: knoten validate

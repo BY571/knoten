@@ -59,7 +59,7 @@ def ids(hits):
 
 
 def test_a_natural_question_finds_the_node_it_is_about(research):
-    """The README's own example call — knoten_query("has anyone tried self-consistency?")
+    """The README's own example call — knoten query("has anyone tried self-consistency?")
     — returned NOTHING, because every token had to appear and the node contains no
     "has", "anyone" or "tried". The agent was told the work was untested."""
     hits = retrieve(load(research.root), "has anyone tried self-consistency?")

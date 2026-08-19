@@ -17,11 +17,7 @@ classifiers = [
 dependencies = ["pyyaml>=6"]
 
 [project.optional-dependencies]
-# The upper bound is load-bearing, and its absence has already broken CI once: mcp 2.0
-# removed the low-level Server decorators this file used to be built on. Assume 3.0
-# renames something too, and find out on our own schedule rather than on release day.
-mcp = ["mcp>=2,<3"]
-dev = ["pytest>=8", "anyio>=4"]
+dev = ["pytest>=8"]
 
 [project.urls]
 Homepage = "https://github.com/BY571/knoten"
@@ -29,7 +25,6 @@ Source = "https://github.com/BY571/knoten"
 
 [project.scripts]
 knoten = "knoten.cli:cli"
-knoten-mcp = "knoten.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=61"]
