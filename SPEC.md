@@ -189,7 +189,7 @@ never in code.**
 LinkML was the original plan and was dropped: it validates *shape*, and every rule that
 matters here is a *predicate over a node* ("does this claim cite a gate?"). A LinkML
 schema plus a bespoke predicate layer is strictly more machinery than the predicate
-layer alone. The rule engine is ~40 lines in `validate.py`.
+layer alone. The rule engine is ~50 lines in `validate.py`.
 
 ```yaml
 # graph.yaml — each rule is a SCAR. Write one only when you have a corpse.
@@ -221,6 +221,7 @@ rules:
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
 | `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
+| `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets |
 
 **An unknown rule key is a hard error.** A rule the engine cannot understand would
 enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is

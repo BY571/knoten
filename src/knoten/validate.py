@@ -107,6 +107,11 @@ def _check_values(r: dict) -> None:
                 f"graph.yaml: rule '{rid}': `require_edge_target` must be a mapping with "
                 f"a `rel` string, e.g. {{rel: prov:wasDerivedFrom, status: alive}}, "
                 f"got {spec!r}")
+        if spec["rel"] not in INVERSE:
+            raise GraphError(
+                f"graph.yaml: rule '{rid}': `require_edge_target` `rel` must be a "
+                f"relation a node declares, one of {', '.join(sorted(INVERSE))} — "
+                f"got {spec['rel']!r}")
         least = spec.get("min", 1)
         if isinstance(least, bool) or not isinstance(least, int) or least < 1:
             raise GraphError(
@@ -271,20 +276,19 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
             # what makes a claim's dependants fail the day the claim it rests on dies.
             if spec := r.get("require_edge_target"):
                 types, statuses = _csv(spec.get("type")), _csv(spec.get("status"))
-                hits = 0
-                for l in n.links:
-                    # A dangling target is already `dangling-edge`; it must not also
-                    # stand in for evidence.
-                    t = nodes.get(l["to"]) if l["rel"] == spec["rel"] else None
-                    if t and (not types or t.type in types) \
-                         and (not statuses or t.status in statuses):
-                        hits += 1
-                if hits < (least := spec.get("min", 1)):
-                    want = " ".join(filter(None, [spec["rel"],
-                                                  f"type={'/'.join(types)}" if types else "",
-                                                  f"status={'/'.join(statuses)}" if statuses else ""]))
-                    out.append(Violation(n.id, rid,
-                                         f"{msg} ({want} -> {hits} matching, need >= {least})"))
+                # DISTINCT targets, not edges: `min: 3` states an inductive standard, and
+                # listing one finding three times is not three observations. A dangling
+                # target is not counted at all — it is already `dangling-edge`, and a typo
+                # must not stand in for evidence.
+                hits = {l["to"] for l in n.links
+                        if l["rel"] == spec["rel"] and (t := nodes.get(l["to"])) is not None
+                        and (not types or t.type in types)
+                        and (not statuses or t.status in statuses)}
+                least = spec.get("min", 1)
+                if len(hits) < least:
+                    want = ", ".join(f"{k}={v}" for k, v in spec.items() if k != "min")
+                    out.append(Violation(n.id, rid, f"{msg} ({want} -> {len(hits)} "
+                                                    f"matching, need >= {least})"))
 
             for fld, allowed in (r.get("require_field_one_of") or {}).items():
                 got = n.frontmatter.get(fld)
