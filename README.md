@@ -13,12 +13,16 @@ correction is a new node that supersedes the old one, so six months later the gr
 tell you not just what you believe but what you already ruled out and why.
 
 It exists because research loops forget, whether they are run by a human or an agent.
-They re-propose an idea that
-was settled last month under a different name, and they file the wins while the failures
-evaporate. knoten makes the failure the artifact: a claim cannot be marked alive unless it
-cites a test it survived, and a dead end has to say what would reopen it. Your graph
-declares its own rules in `graph.yaml`; the tool enforces them and knows nothing else
-about your field.
+They re-propose an idea that was settled last month under a different name, and they file
+the wins while the failures evaporate. knoten makes the failure the artifact: a claim
+cannot be marked alive unless it cites a test it survived, and a dead end has to say what
+would reopen it. Your graph declares its own rules in `graph.yaml`; the tool enforces them
+and knows nothing else about your field.
+
+The point is to run it **before** the work, not after. `knoten frontier` says what is worth
+doing next, `knoten index` says whether it has been tried in different words, and
+`knoten gates` says what the result will have to survive. Used the other way round, as a
+place to file results once they exist, it is a tidy record that changes no decision.
 
 ## A node
 

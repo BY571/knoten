@@ -1,7 +1,7 @@
 [project]
 name = "knoten"
 version = "0.2.0"
-description = "Falsification-first research graphs in git. Records why a hypothesis died — and what would reopen it."
+description = "Falsification-first research graphs in git. Run it before the experiment: what to work on, what already died, what the result must survive."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

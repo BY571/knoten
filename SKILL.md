@@ -1,13 +1,32 @@
 ---
 name: knoten
-description: Use when working in a knoten research graph — before starting an
-  investigation (has this been tried?), when choosing what to work on, and when an
-  experiment concludes, including when it fails.
+description: Use BEFORE designing or running anything in a knoten research graph, to
+  decide what to work on and what the result must survive; and again the moment work
+  concludes, including when it fails. Not a place to file results afterwards.
 ---
 
 # knoten
 
 A research graph that remembers what did NOT work. Run `knoten` in the graph directory.
+
+## knoten is not a filing cabinet
+
+The common way to misuse this is to do the research first and then write nodes describing
+what you did. That produces a tidy record and changes nothing, because every decision the
+graph was supposed to inform has already been made.
+
+**The graph directs the work.** Before you design an experiment, choose what to look at
+next, or write any code, run steps 1-4 below. They take seconds and they answer three
+things your own context cannot: what is already dead, what is already open, and what a
+result has to survive here.
+
+Skipping them has a price you pay in compute. A claim cannot be filed `alive` without
+citing a gate it survived, so an experiment designed without reading `knoten gates`
+produces a result you cannot file. You run it again, against the gate, having already
+spent the budget once.
+
+If you realise you have already done the work without doing this: run 1-4 now, before
+writing anything. The question may already be settled, and the gates still apply.
 
 ## How the graph is shaped
 
@@ -49,7 +68,7 @@ the right relation on the wrong node is NOT detectable — the back-link lands a
 reports itself healthy, with the claim reversed. A correction is a NEW node that supersedes
 or retracts the old one, never an edit to it.
 
-## The loop
+## Before you work
 
 1. `knoten frontier` — what is worth doing next: open work, dead ends whose stated
    reopen condition may now hold, and gates nothing has been through.
@@ -61,15 +80,26 @@ or retracts the old one, never an edit to it.
    produced them, for anything that looks close.
 4. `knoten gates` — what a result must survive here. Read this BEFORE designing the
    experiment; a claim cannot be filed as alive without citing a gate it survived.
-5. `knoten commit <id> --frontmatter <file> --body <file>` — file the claim when the
-   work concludes, INCLUDING when it fails. `knoten update <id> --status dead --append
-   <file> --field cause=<value>` if you opened the node earlier and are now closing it.
-   `--field` sets any top-level field, including one already recorded — the graph's own
-   rules decide what is acceptable, and a node that fails them never reaches disk.
-   `--result` still refuses to change a number already recorded: correct a published
-   result by retracting or superseding the node, not by editing it.
+## When the work concludes
+
+5. `knoten commit <id> --frontmatter <file> --body <file>` — file the claim, INCLUDING
+   when it failed. A dead hypothesis with a stated cause is the most valuable node in the
+   graph and the one that would otherwise be lost. Use `knoten update <id> --status dead
+   --append <file> --field cause=<value>` instead if you opened the node earlier.
 6. `knoten attach <id> <files...>` — the script that ran it and the plot that shows it.
    A claim nobody can re-run is a claim nobody trusts in six months.
+
+## Writing details
+
+`--frontmatter`, `--body` and `--append` take a file path or `-` for stdin. `--result
+key=value` records a number, `--link rel=to` adds an edge, `--field key=value` sets any
+top-level field including one already recorded. `--result` refuses to change a number the
+node already carries: correct a published result by superseding or retracting the node,
+never by editing it. A node that fails the graph's rules never reaches disk.
+
+An experiment that takes a week does not finish in the session that started it. Open the
+node now with `status: open`, come back, and close it — `knoten index --status open` is
+what shows you the ones you left hanging.
 
 ## Reading the output
 
