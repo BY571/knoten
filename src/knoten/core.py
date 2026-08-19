@@ -43,11 +43,19 @@ INVERSE = {
     "npx:retracts":        "npx:retractedBy",
     "npx:supersedes":      "npx:supersededBy",
     "prov:wasDerivedFrom": "prov:hadDerivation",
+    # How a claim was reached, not merely that it was. `prov:wasDerivedFrom` records the
+    # fact of a derivation and never its kind; these three name the kind, so a rule can
+    # demand something of one without demanding it of all (SPEC §4). Plain verbs, and
+    # inverses read from the object, matching the gate pair above — Peirce's own words
+    # would be worse here: "abduced" reads as "abducted".
+    "kn:explains":         "kn:explainedBy",
+    "kn:generalises":      "kn:generalisedBy",
+    "kn:followsFrom":      "kn:entails",
     "prov:used":           "prov:wasUsedBy",
 }
 GENERATED = set(INVERSE.values())
 
-# The claim lifecycle. A node with any other status is not a claim (a method, a source).
+# The claim lifecycle. A node with any other status is not a claim (a gate, a source).
 VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 
 # The three conventions `frontier` reads. They are conventions, not core vocabulary — a
@@ -55,7 +63,7 @@ VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 # named here rather than buried so that stays obvious.
 OPEN = "open"
 REOPEN_SECTION = "What would reopen this"
-GATE_TYPE = "method"
+GATE_TYPE = "gate"
 GATE_SECTIONS = ("The rule", "Why it exists")
 
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)

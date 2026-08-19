@@ -21,7 +21,7 @@ type: hypothesis
 status: dead
 cause: weak_baseline
 links:
-  - {rel: kn:killedByGate, to: method-compute-matched-baseline}
+  - {rel: kn:killedByGate, to: gate-compute-matched-baseline}
 repro:
   script: experiments/self_consistency.py
   model: Qwen3-8B-Instruct
@@ -62,7 +62,7 @@ Three months later, when someone proposes self-consistency again:
 $ knoten query "self-consistency"
 
   [✗ DEAD] hyp-self-consistency
-      killed by : method-compute-matched-baseline
+      killed by : gate-compute-matched-baseline
       reopen if : A task where the majority-vote aggregation does real work, i.e.
                   where the gain survives a compute-matched baseline…
 ```
@@ -118,7 +118,38 @@ rules:
     message: A cause of death you cannot filter on is a story, not an index.
 ```
 
-That last one is what makes a dead end *reusable*. Once the cause is a field rather than
+A rule can also demand something of what an edge *points at*, not just that the edge
+exists. This is the first check that outlives the moment it is written:
+
+```yaml
+  - id: methods-rest-on-live-claims
+    when_type: method
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, status: alive}
+    message: A method built on a dead finding is a method built on sand.
+```
+
+`validate` re-runs over the whole graph, so this is not a create-time check. The day a
+finding dies, everything derived from it fails — killing one result indicts what was built
+on top of it, instead of leaving it standing unchallenged. Add `min: 3` and the same key
+states an inductive standard: one observation is an anecdote, not a pattern.
+
+The mirror of that key asks what points **at** a node, which is the only way to police
+work that was *abandoned* rather than written badly:
+
+```yaml
+  - id: hypotheses-must-be-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {rel: kn:testedBy, type: experiment}
+    message: An untested hypothesis is not alive, it is unexamined.
+```
+
+Every other rule key starts from what the node itself declares, so they all police the
+author of a claim. A hypothesis nobody ever tested declares nothing wrong — there is no
+node to attach the complaint to. `require_backlink` reads the generated back-links, so the
+complaint lands on the hypothesis that was left hanging.
+
+That cause-of-death rule is what makes a dead end *reusable*. Once the cause is a field rather than
 a sentence, the question you actually ask six months later is a query:
 
 ```bash
@@ -153,7 +184,7 @@ learn; one that reshuffles when the graph's shape changes is telling you somethi
 Your graph also declares its own vocabulary, and that is enforced too:
 
 ```yaml
-node_types: [hypothesis, experiment, finding, method, source]
+node_types: [hypothesis, experiment, finding, gate, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```
@@ -246,7 +277,7 @@ $ knoten frontier
       reopen if : A task where the majority-vote aggregation is doing real work…
 
   UNTESTED GATES — no claim has been through them
-    method-holdout-period     Gate: hold out the last 20%
+    gate-holdout-period     Gate: hold out the last 20%
 ```
 
 A dead end with a standing offer is a **cheaper experiment than a new idea**, because the
@@ -266,7 +297,7 @@ used still finds it:
 $ knoten query "has anyone tried self-consistency?"
 
   [✗ DEAD] hyp-self-consistency
-      killed by : method-compute-matched-baseline
+      killed by : gate-compute-matched-baseline
       reopen if : A task where the majority-vote aggregation does real work…
 ```
 
@@ -295,7 +326,7 @@ cannot be filed. `gates` puts the specification in front of the work:
 ```
 $ knoten gates
 
-  method-compute-matched-baseline  (killed 1, survived by 1)
+  gate-compute-matched-baseline  (killed 1, survived by 1)
     Gate: compute-matched baseline
     the rule : Any method that spends more inference compute must be compared against a
                baseline given the same budget — not against greedy decoding at 1x.
@@ -346,7 +377,7 @@ Reach for `--json`; don't default to it.
 `--link rel=to` (repeatable, adds an edge — e.g. the gate a claim just survived):
 
 ```bash
-knoten update hyp-idea --status alive --link kn:survivedGate=method-compute-matched-baseline
+knoten update hyp-idea --status alive --link kn:survivedGate=gate-compute-matched-baseline
 ```
 
 `knoten update` appends, moves the status, and sets the fields a death is supposed to
@@ -470,7 +501,7 @@ is told it was retracted — not just what the claim said:
 
 ```
   [✓ ALIVE] hyp-few-shot-format
-      survived     : method-compute-matched-baseline
+      survived     : gate-compute-matched-baseline
       RETRACTED by : ret-oops
 ```
 

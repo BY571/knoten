@@ -32,10 +32,10 @@ A task where the aggregation does real work.
 def g(graph):
     graph.node("hyp-open", "id: hyp-open\ntype: hypothesis\nstatus: open", "# Untested\n")
     graph.node("hyp-dead", DEAD_WITH_OFFER, BODY_WITH_OFFER)
-    graph.node("method-used", "id: method-used\ntype: method\nstatus: active", "# Gate A\n")
-    graph.node("method-idle", "id: method-idle\ntype: method\nstatus: active", "# Gate B\n")
+    graph.node("gate-used", "id: gate-used\ntype: gate\nstatus: active", "# Gate A\n")
+    graph.node("gate-idle", "id: gate-idle\ntype: gate\nstatus: active", "# Gate B\n")
     graph.node("hyp-killed", "id: hyp-killed\ntype: hypothesis\nstatus: dead\nlinks:\n"
-                             "  - {rel: kn:killedByGate, to: method-used}", "# Killed\n")
+                             "  - {rel: kn:killedByGate, to: gate-used}", "# Killed\n")
     return graph
 
 
@@ -59,11 +59,11 @@ def test_a_dead_claim_with_no_standing_offer_is_not_reopenable(g):
 def test_a_gate_nothing_has_been_through_is_surfaced(g):
     """A gate that has never fired is either useless or never applied, and both are worth
     knowing. It is free to compute — the back-links already exist."""
-    assert [n.id for n in frontier(load(g.root))["untested_gates"]] == ["method-idle"]
+    assert [n.id for n in frontier(load(g.root))["untested_gates"]] == ["gate-idle"]
 
 
 def test_a_gate_that_killed_something_is_not_untested(g):
-    assert "method-used" not in [n.id for n in frontier(load(g.root))["untested_gates"]]
+    assert "gate-used" not in [n.id for n in frontier(load(g.root))["untested_gates"]]
 
 
 # ------------------------------------------------------------------ surfaces
@@ -75,7 +75,7 @@ def test_the_agent_surface_returns_all_three_buckets(g):
 
     assert [r["id"] for r in res["open"]] == ["hyp-open"]
     assert res["reopenable"][0]["reopen_if"].startswith("A task where")
-    assert [r["id"] for r in res["untested_gates"]] == ["method-idle"]
+    assert [r["id"] for r in res["untested_gates"]] == ["gate-idle"]
 
 
 def test_the_cli_prints_all_three_buckets(g, monkeypatch, capsys):
@@ -87,4 +87,4 @@ def test_the_cli_prints_all_three_buckets(g, monkeypatch, capsys):
 
     assert "hyp-open" in out
     assert "hyp-dead" in out and "A task where" in out
-    assert "method-idle" in out
+    assert "gate-idle" in out

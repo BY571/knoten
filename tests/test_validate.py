@@ -62,8 +62,8 @@ id: hyp-x
 type: hypothesis
 status: dead
 links:
-  - {rel: kn:killdByGate, to: method-gate}
-""").node("method-gate", "id: method-gate\ntype: method")
+  - {rel: kn:killdByGate, to: gate-cost}
+""").node("gate-cost", "id: gate-cost\ntype: gate")
 
     violations = check(load(graph.root), graph.root)
 
@@ -79,8 +79,8 @@ id: hyp-x
 type: hypothesis
 status: dead
 links:
-  - {rel: kn:gateKilled, to: method-gate}
-""").node("method-gate", "id: method-gate\ntype: method")
+  - {rel: kn:gateKilled, to: gate-cost}
+""").node("gate-cost", "id: gate-cost\ntype: gate")
 
     violations = check(load(graph.root), graph.root)
 
@@ -117,8 +117,8 @@ id: hyp-x
 type: hypothesis
 status: alive
 links:
-  - {rel: kn:survivedGate, to: method-gate}
-""").node("method-gate", "id: method-gate\ntype: method")
+  - {rel: kn:survivedGate, to: gate-cost}
+""").node("gate-cost", "id: gate-cost\ntype: gate")
 
     assert check(load(graph.root), graph.root) == []
 
@@ -293,3 +293,163 @@ rules:
     violations = check(load(graph.root), graph.root)
 
     assert f"malformed-{block}" in [v.rule for v in violations]
+
+
+# ----------------------------------------------- rules can see what an edge points at
+
+CASCADE = """\
+name: t
+rules:
+  - id: methods-rest-on-live-claims
+    when_type: method
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, status: alive}
+    message: A method built on a dead finding is a method built on sand.
+"""
+
+
+def cascade(graph, finding_status):
+    return (graph.rules(CASCADE)
+            .node("find-a", f"id: find-a\ntype: finding\nstatus: {finding_status}")
+            .node("method-x", "id: method-x\ntype: method\nstatus: alive\nlinks:\n"
+                              "  - {rel: prov:wasDerivedFrom, to: find-a}"))
+
+
+def test_a_claim_resting_on_a_live_finding_passes(graph):
+    g = cascade(graph, "alive")
+
+    assert [v.rule for v in check(load(g.root), g.root)] == []
+
+
+def test_the_day_the_finding_dies_everything_built_on_it_fails(graph):
+    """The reason this primitive exists. `validate` re-runs over the whole graph, so this
+    is not a create-time check — killing one result indicts everything standing on it.
+    Before this, knoten recorded that a claim died and let its dependants stand."""
+    g = cascade(graph, "dead")
+
+    assert [v.rule for v in check(load(g.root), g.root)] == ["methods-rest-on-live-claims"]
+
+
+def test_a_generalisation_can_demand_more_than_one_instance(graph):
+    """`min:` is what makes an inductive standard writable: one observation is an
+    anecdote. Without it a rule can only ask whether the edge exists at all."""
+    graph.rules("""\
+name: t
+rules:
+  - id: needs-instances
+    when_type: hypothesis
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, min: 2}
+    message: One observation is not a pattern.
+""").node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: prov:wasDerivedFrom, to: find-a}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["needs-instances"]
+
+
+def test_a_dangling_target_does_not_count_towards_the_requirement(graph):
+    """A link to a node that does not exist is already `dangling-edge`. It must not also
+    satisfy a requirement — that would let a typo stand in for evidence."""
+    graph.rules(CASCADE).node("method-x", "id: method-x\ntype: method\nstatus: alive\n"
+                              "links:\n  - {rel: prov:wasDerivedFrom, to: nope}")
+
+    rules = [v.rule for v in check(load(graph.root), graph.root)]
+
+    assert "methods-rest-on-live-claims" in rules
+
+
+@pytest.mark.parametrize("bad", ["prov:used", "{rel: [a, b]}", "{type: finding}",
+                                 "{rel: nope:invented}", "{rel: kn:gateKilled}",
+                                 "{rel: prov:used, min: 0}", "{rel: prov:used, min: true}"])
+def test_a_malformed_requirement_is_a_graph_error_not_a_crash(graph, bad):
+    """Same bargain as every other rule key: the shape is checked once, loudly, rather
+    than blowing up mid-validation on somebody's node.
+
+    `kn:gateKilled` is the interesting one. It is a real relation — but a GENERATED
+    back-link, which no node ever declares, so the rule would load cleanly and then fail
+    every node forever with no hint that the direction was wrong. An always-firing rule
+    is as corrosive as a never-firing one. `min: true` is here because `bool` is a
+    subclass of `int` and would otherwise sail through as 1."""
+    graph.rules(f"name: t\nrules:\n  - id: r\n    require_edge_target: {bad}\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)
+
+
+def test_citing_the_same_finding_twice_is_not_two_findings(graph):
+    """`min` states an inductive standard — one observation is an anecdote. Counting
+    EDGES rather than distinct targets let copy-paste satisfy it."""
+    graph.rules("""\
+name: t
+rules:
+  - id: needs-instances
+    when_type: hypothesis
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, min: 2}
+    message: One observation is not a pattern.
+""").node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: prov:wasDerivedFrom, to: find-a}\n"
+                        "  - {rel: prov:wasDerivedFrom, to: find-a}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["needs-instances"]
+
+
+def test_the_violation_says_what_was_wanted_and_what_was_found(graph):
+    """The message is the product: an agent reads it and has to know what to do next."""
+    graph.rules(CASCADE).node("method-x", "id: method-x\ntype: method\nstatus: alive")
+
+    msg = next(v.message for v in check(load(graph.root), graph.root)
+               if v.rule == "methods-rest-on-live-claims")
+
+    assert "0 matching, need >= 1" in msg and "status=alive" in msg
+
+
+# ------------------------------------------- rules can also look at what points AT a node
+
+TESTED = """\
+name: t
+rules:
+  - id: hypotheses-must-be-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {rel: kn:testedBy, type: experiment}
+    message: An untested hypothesis is not alive, it is unexamined.
+"""
+
+
+def test_a_hypothesis_nobody_tested_is_reported(graph):
+    """The gap `require_edge` structurally cannot cover: rules see only what a node
+    DECLARES, so they police the author of a claim and never what the graph failed to do
+    next. That is the failure an autonomous loop actually has — not writing bad nodes,
+    but abandoning good ones."""
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
+
+
+def test_a_hypothesis_with_an_experiment_passes(graph):
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+    graph.node("exp-a", "id: exp-a\ntype: experiment\nstatus: alive\nlinks:\n"
+                        "  - {rel: kn:tests, to: hyp-x}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == []
+
+
+def test_the_wrong_kind_of_neighbour_does_not_satisfy_it(graph):
+    """A hypothesis someone merely commented on is still untested."""
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+    graph.node("find-a", "id: find-a\ntype: finding\nstatus: alive\nlinks:\n"
+                         "  - {rel: kn:tests, to: hyp-x}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
+
+
+def test_naming_the_forward_relation_on_a_backlink_rule_is_an_error(graph):
+    """The trap the two keys create together. `kn:tests` is what an experiment DECLARES;
+    the back-link it generates is `kn:testedBy`. A rule asking for the forward name on
+    the incoming side would load cleanly and then fail every hypothesis forever, with
+    nothing in the message saying the direction was wrong."""
+    graph.rules("name: t\nrules:\n  - id: r\n    when_type: hypothesis\n"
+                "    require_backlink: {rel: kn:tests}\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)

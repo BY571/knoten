@@ -116,14 +116,44 @@ Adopt existing predicates. Coin only what the field genuinely lacks.
 
 ### Novel — this is the actual contribution
 
+#### How a claim was reached
+
+| predicate | inverse | meaning |
+|---|---|---|
+| `kn:explains` | `kn:explainedBy` | this claim is the best explanation of that observation |
+| `kn:generalises` | `kn:generalisedBy` | this claim generalises those instances |
+| `kn:followsFrom` | `kn:entails` | this claim follows from that one by argument |
+
+Peirce named three ways a claim gets proposed — abduction, induction, deduction — and
+Popper named the one way it gets tested. knoten had rich vocabulary for the testing
+(the gate pair) and one untyped `prov:wasDerivedFrom` for all three of the others.
+
+The distinction earns its place because a rule can act on it. `require_edge_target`
+matches on the relation, so with a single `prov:wasDerivedFrom` there is no way to say
+*"a generalisation must cite at least three findings"* without saying it of every
+derivation:
+
+```yaml
+require_edge_target: {rel: kn:generalises, type: finding, status: alive, min: 3}
+```
+
+A per-edge qualifier — `{rel: prov:wasDerivedFrom, to: x, mode: induction}` — parses
+today and no rule key can see it. `prov:wasDerivedFrom` stays as the untyped form: a
+graph that does not care about the distinction should not be made to draw one.
+
+**A kind confers no status.** A generalisation is a conjecture that repeated observation
+happened to suggest; it faces the same gates as any other claim and can still die. A
+vocabulary in which "established by induction" exempted a claim from falsification would
+contradict the thesis of this tool.
+
 The field has no way to say *"this claim survived / was killed by a named
 methodological gate."* DISK's `LineOfInquiry` is the closest blueprint and it
 **cannot express failure** (zero falsification terms in its ontology).
 
 | predicate | domain → range | meaning |
 |---|---|---|
-| `kn:survivedGate` | claim → method | **claim passed this gate.** A `status: alive` claim MUST have ≥1. |
-| `kn:killedByGate` | claim → method | **the gate that killed it.** The predicate the entire field is missing. |
+| `kn:survivedGate` | claim → gate | **claim passed this gate.** A `status: alive` claim MUST have ≥1. |
+| `kn:killedByGate` | claim → gate | **the gate that killed it.** The predicate the entire field is missing. |
 | `kn:blockedBy` | claim → finding | a *structural* blocker (a fee schedule, a venue, a data licence) — not a result, a wall. |
 
 `kn:survivedGate` + the rule engine is the whole safety mechanism: **an unchallenged
@@ -189,7 +219,7 @@ never in code.**
 LinkML was the original plan and was dropped: it validates *shape*, and every rule that
 matters here is a *predicate over a node* ("does this claim cite a gate?"). A LinkML
 schema plus a bespoke predicate layer is strictly more machinery than the predicate
-layer alone. The rule engine is ~40 lines in `validate.py`.
+layer alone. The rule engine is ~50 lines in `validate.py`.
 
 ```yaml
 # graph.yaml — each rule is a SCAR. Write one only when you have a corpse.
@@ -221,6 +251,8 @@ rules:
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
 | `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
+| `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets |
+| `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse) |
 
 **An unknown rule key is a hard error.** A rule the engine cannot understand would
 enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is
@@ -231,7 +263,7 @@ does not parse.
 The graph also declares its own vocabulary, and it is enforced:
 
 ```yaml
-node_types: [hypothesis, experiment, finding, method, source]
+node_types: [hypothesis, experiment, finding, gate, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```

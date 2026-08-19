@@ -10,10 +10,11 @@ import pytest
 from knoten import ops
 from knoten.cli import main
 from knoten.core import gates, load
+from knoten.validate import check
 
 GATE = """\
-id: method-compute-matched
-type: method
+id: gate-compute-matched
+type: gate
 status: active
 """
 
@@ -30,13 +31,13 @@ Most "technique X improves accuracy" results are really "X spends more tokens".
 
 @pytest.fixture
 def g(graph):
-    graph.node("method-compute-matched", GATE, GATE_BODY)
-    graph.node("method-idle", "id: method-idle\ntype: method\nstatus: active", "# Gate B\n")
+    graph.node("gate-compute-matched", GATE, GATE_BODY)
+    graph.node("gate-idle", "id: gate-idle\ntype: gate\nstatus: active", "# Gate B\n")
     graph.node("hyp-killed", "id: hyp-killed\ntype: hypothesis\nstatus: dead\nlinks:\n"
-                             "  - {rel: kn:killedByGate, to: method-compute-matched}",
+                             "  - {rel: kn:killedByGate, to: gate-compute-matched}",
                "# Killed\n")
     graph.node("hyp-lived", "id: hyp-lived\ntype: hypothesis\nstatus: alive\nlinks:\n"
-                            "  - {rel: kn:survivedGate, to: method-compute-matched}",
+                            "  - {rel: kn:survivedGate, to: gate-compute-matched}",
                "# Lived\n")
     return graph
 
@@ -44,16 +45,16 @@ def g(graph):
 def test_a_gate_reports_what_it_killed_and_what_survived_it(g):
     by_id = {n.id: (killed, survived) for n, killed, survived in gates(load(g.root))}
 
-    assert by_id["method-compute-matched"] == (["hyp-killed"], ["hyp-lived"])
+    assert by_id["gate-compute-matched"] == (["hyp-killed"], ["hyp-lived"])
 
 
 def test_a_gate_nothing_went_through_reports_empty(g):
     by_id = {n.id: (killed, survived) for n, killed, survived in gates(load(g.root))}
 
-    assert by_id["method-idle"] == ([], [])
+    assert by_id["gate-idle"] == ([], [])
 
 
-def test_only_method_nodes_are_gates(g):
+def test_only_gate_nodes_are_gates(g):
     assert "hyp-killed" not in [n.id for n, _, _ in gates(load(g.root))]
 
 
@@ -65,7 +66,7 @@ def test_the_agent_gets_the_rule_and_the_reason_up_front(g):
     """Knowing a gate exists is not enough to design an experiment that passes it. The
     agent needs what to run, and why the check is there at all."""
     res = ops.gates(g.root)
-    gate = next(x for x in res["gates"] if x["id"] == "method-compute-matched")
+    gate = next(x for x in res["gates"] if x["id"] == "gate-compute-matched")
 
     assert gate["rule"].startswith("Compare at an equal token budget")
     assert "spends more tokens" in gate["why_it_exists"]
@@ -79,6 +80,36 @@ def test_the_cli_lists_gates_with_their_record(g, monkeypatch, capsys):
     assert main(["gates"]) == 0
     out = capsys.readouterr().out
 
-    assert "method-compute-matched" in out
+    assert "gate-compute-matched" in out
     assert "Compare at an equal token budget" in out
-    assert "method-idle" in out
+    assert "gate-idle" in out
+
+
+# --------------------------------------------------- the type is `gate`, not `method`
+
+def test_a_node_cited_as_a_gate_but_typed_otherwise_is_reported(graph):
+    """The rename's whole risk. `method` meant the bar a claim must survive — the
+    opposite of what the English word suggests — so real graphs grew ids like
+    `method-gate-net-of-costs`, the type name and the concept fighting for one slot.
+    A graph written before the rename keeps `type: method`, and `knoten gates` then
+    quietly returns one fewer row. Silence is the one failure mode a falsification tool
+    must not have."""
+    graph.node("method-old", "id: method-old\ntype: method\nstatus: active", "# Gate\n")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: kn:survivedGate, to: method-old}", "# A claim\n")
+
+    rules = [v.rule for v in check(load(graph.root), graph.root)]
+
+    assert "not-a-gate" in rules
+
+
+def test_a_graph_with_its_own_word_for_the_bar_is_left_alone(graph):
+    """The migration check must not become the core inventing vocabulary. core.py promises
+    a graph that names things differently "an empty bucket, not a wrong answer" — so a
+    graph whose bar is a `criterion` gets an empty `knoten gates` and no complaint."""
+    graph.rules("name: t\nnode_types: [hypothesis, criterion]\nrules: []\n")
+    graph.node("crit-costs", "id: crit-costs\ntype: criterion\nstatus: active", "# Bar\n")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: kn:survivedGate, to: crit-costs}", "# A claim\n")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == []

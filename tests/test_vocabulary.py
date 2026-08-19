@@ -11,7 +11,7 @@ from knoten.validate import check, load_rules
 
 VOCAB = """\
 name: t
-node_types: [hypothesis, method]
+node_types: [hypothesis, gate]
 statuses: [alive, dead, retracted, active]
 rules: []
 """
@@ -51,7 +51,7 @@ def test_a_node_with_no_type_is_a_violation(graph):
 
 def test_a_declared_vocabulary_passes(graph):
     vocab(graph).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
-    vocab(graph).node("method-g", "id: method-g\ntype: method\nstatus: active")
+    vocab(graph).node("gate-g", "id: gate-g\ntype: gate\nstatus: active")
 
     assert check(load(graph.root), graph.root) == []
 
@@ -60,7 +60,7 @@ def test_omitting_status_is_a_violation_when_statuses_are_declared(graph):
     """The same fail-open as `status: ded`, reached by omission: a node with no status
     escapes every `when_status` rule AND never shows up in a query. If you declared a
     status vocabulary, you said nodes have one."""
-    vocab(graph).node("src-x", "id: src-x\ntype: method")
+    vocab(graph).node("src-x", "id: src-x\ntype: gate")
 
     violations = check(load(graph.root), graph.root)
 
@@ -70,8 +70,8 @@ def test_omitting_status_is_a_violation_when_statuses_are_declared(graph):
 def test_status_is_not_required_when_the_graph_declares_no_statuses(graph):
     """Still no vocabulary invented by the core."""
     (graph.root / "graph.yaml").write_text(
-        "name: t\nnode_types: [method]\nrules: []\n", encoding="utf-8")
-    graph.node("src-x", "id: src-x\ntype: method")
+        "name: t\nnode_types: [gate]\nrules: []\n", encoding="utf-8")
+    graph.node("src-x", "id: src-x\ntype: gate")
 
     assert check(load(graph.root), graph.root) == []
 
@@ -104,7 +104,7 @@ def test_node_types_must_be_a_list(graph):
 
 TAGGED = """\
 name: t
-node_types: [hypothesis, method]
+node_types: [hypothesis, gate]
 statuses: [alive, dead, retracted, active]
 tags: [decoding, prompting, evaluation]
 rules: []
@@ -159,3 +159,25 @@ def test_a_node_whose_tags_are_not_a_list_is_a_violation(graph):
     violations = check(load(graph.root), graph.root)
 
     assert [v.rule for v in violations] == ["malformed-tags"]
+
+
+# ------------------------------------------------- how a claim was reached, not just that
+
+@pytest.mark.parametrize("rel,inverse", [
+    ("kn:explains", "kn:explainedBy"),
+    ("kn:generalises", "kn:generalisedBy"),
+    ("kn:followsFrom", "kn:entails"),
+])
+def test_the_kind_of_a_derivation_is_a_relation_with_a_back_link(graph, rel, inverse):
+    """knoten had one `prov:wasDerivedFrom`, which records THAT a claim came from
+    something and never HOW. Rules match on the relation, so with one untyped derivation
+    there is no way to demand three instances of a generalisation without demanding them
+    of every derivation. A per-edge qualifier would not help: no rule key can see one."""
+    graph.node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", f"id: hyp-x\ntype: hypothesis\nstatus: open\nlinks:\n"
+                        f"  - {{rel: {rel}, to: find-a}}")
+
+    nodes = load(graph.root)
+
+    assert [b["rel"] for b in nodes["find-a"].backlinks] == [inverse]
+    assert check(nodes, graph.root) == []

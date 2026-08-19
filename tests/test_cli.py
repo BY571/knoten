@@ -114,7 +114,7 @@ def test_validate_returns_nonzero_on_violation(graph, monkeypatch):
 
 def test_validate_returns_zero_on_a_clean_graph(graph, monkeypatch):
     monkeypatch.chdir(graph.root)
-    graph.node("method-gate", "id: method-gate\ntype: method")
+    graph.node("gate-cost", "id: gate-cost\ntype: gate")
 
     assert main(["validate"]) == 0
 
@@ -150,7 +150,7 @@ def test_new_scaffolds_a_node_that_already_passes_the_rules(graph, monkeypatch, 
     mode this tool exists to prevent was caused by FRICTION, so friction on the write path
     is the thing to attack hardest."""
     monkeypatch.chdir(graph.root)
-    graph.node("method-gate", "id: method-gate\ntype: method")
+    graph.node("gate-cost", "id: gate-cost\ntype: gate")
 
     assert main(["new", "hypothesis", "hyp-my-idea"]) == 0
 
@@ -246,8 +246,8 @@ def retracted_graph(graph):
     graph.node("hyp-wrong", "id: hyp-wrong\ntype: hypothesis\nstatus: retracted")
     graph.node("ret-oops", "id: ret-oops\ntype: hypothesis\nstatus: alive\nlinks:\n"
                            "  - {rel: npx:retracts, to: hyp-wrong}\n"
-                           "  - {rel: kn:survivedGate, to: method-gate}")
-    graph.node("method-gate", "id: method-gate\ntype: method")
+                           "  - {rel: kn:survivedGate, to: gate-cost}")
+    graph.node("gate-cost", "id: gate-cost\ntype: gate")
     return graph
 
 

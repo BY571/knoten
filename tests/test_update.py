@@ -16,7 +16,7 @@ from knoten.update import update
 RULES = """\
 name: t
 statuses: [open, alive, dead]
-node_types: [hypothesis, method]
+node_types: [hypothesis, gate]
 rules:
   - id: live-claims-must-cite-their-gates
     when_status: alive
@@ -33,7 +33,7 @@ rules:
 def g(graph):
     graph.rules(RULES)
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open", "# A claim\n")
-    graph.node("method-gate", "id: method-gate\ntype: method\nstatus: open")
+    graph.node("gate-cost", "id: gate-cost\ntype: gate\nstatus: open")
     return graph
 
 
@@ -64,7 +64,7 @@ def test_marking_a_claim_alive_still_requires_a_gate(g):
         update(g.root, "hyp-x", status="alive")
 
     update(g.root, "hyp-x", status="alive",
-           links=[{"rel": "kn:survivedGate", "to": "method-gate"}])
+           links=[{"rel": "kn:survivedGate", "to": "gate-cost"}])
 
     assert load(g.root)["hyp-x"].status == "alive"
 
@@ -138,7 +138,7 @@ def test_an_update_that_changes_nothing_is_an_error(g):
 CAUSES = """\
 name: t
 statuses: [open, alive, dead]
-node_types: [hypothesis, method]
+node_types: [hypothesis, gate]
 rules:
   - id: deaths-must-name-a-cause
     when_status: dead
