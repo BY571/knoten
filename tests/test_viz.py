@@ -183,3 +183,102 @@ def test_declared_meanings_reach_the_legend(graph):
     graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open")
 
     assert viz.payload(graph.root)["graph"]["vocab"] == {"hypothesis": "a falsifiable claim"}
+
+
+# ------------------------------------------------------------------ --watch
+
+def test_the_static_file_never_reloads_itself(small):
+    """A file you emailed someone, or opened on a plane, must not sit there re-fetching
+    itself. The reload only exists while `--watch` is holding the file open."""
+    assert "location.reload" not in viz.render(small.root)
+
+
+def test_watch_injects_a_reload(small):
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "location.reload" in html
+    assert "2000" in html
+
+
+def test_the_fingerprint_changes_when_a_node_is_written(small, graph):
+    """What `--watch` polls. It has to notice a node being added AND a node being
+    edited in place, which is what an agent loop does all day."""
+    before = viz.fingerprint(small.root)
+
+    graph.node("hyp-new", "id: hyp-new\ntype: hypothesis\nstatus: open")
+
+    assert viz.fingerprint(small.root) != before
+
+
+def test_the_fingerprint_is_stable_when_nothing_changes(small):
+    assert viz.fingerprint(small.root) == viz.fingerprint(small.root)
+
+
+def test_the_fingerprint_notices_a_rules_change(small):
+    """The rules decide what renders — a legend line, a violation ring — so a graph.yaml
+    edit has to redraw even though no node moved."""
+    before = viz.fingerprint(small.root)
+
+    (small.root / "graph.yaml").write_text("name: t\nrules: []\n", encoding="utf-8")
+
+    assert viz.fingerprint(small.root) != before
+
+
+def test_the_watch_block_is_cut_out_entirely_when_off(small):
+    """Not merely guarded by a falsy constant: a file you emailed someone should contain
+    no code that reloads it. It may still remember which legend you had open — that is
+    the page being polite, not the page phoning home."""
+    html = viz.render(small.root)
+
+    assert "location.reload" not in html
+    assert "beforeunload" not in html
+    assert "__RELOAD_MS__" not in html
+
+
+def test_watch_keeps_your_place_in_the_record(small):
+    """The reload used to drop you back at the top of whatever you were reading, because
+    `select()` resets the panel's scroll. Two seconds is not long enough to read a
+    post-mortem."""
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "panel.scrollTop = seat.read" in html
+    assert "read: panel.scrollTop" in html
+
+
+def test_watch_does_not_reload_while_you_are_reading(small):
+    """The pointer resting on the record is the clearest signal there is that a redraw
+    should wait its turn."""
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "reading ? tick() : location.reload()" in html
+
+
+def test_a_gate_column_leaves_room_for_the_tally_rail(graph):
+    """Gate cards carry a rail showing what they killed and what they passed, so they are
+    taller than every other card. Stepping every column by one fixed row height overlapped
+    them by about the height of that rail."""
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: active\ncreated: 2026-01-01")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: active\ncreated: 2026-01-02")
+    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open\ncreated: 2026-01-01")
+    graph.node("hyp-b", "id: hyp-b\ntype: hypothesis\nstatus: open\ncreated: 2026-01-02")
+
+    pos = viz.layout(load(graph.root))["columns"]
+    gate_step = pos["gate-b"][1] - pos["gate-a"][1]
+    claim_step = pos["hyp-b"][1] - pos["hyp-a"][1]
+
+    assert gate_step > claim_step
+    assert gate_step >= viz.CARDH + viz.RAIL
+
+
+def test_a_section_keeps_its_shape_in_the_panel(graph):
+    """`core.section` collapses whitespace because the CLI prints it inline. The panel
+    is a reading surface: collapsing turned every result table in a node body into one
+    long row of pipes."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open",
+               "# A claim\n\n## The result\n| tau | b |\n|---|---|\n| 0-60 | 1.05 |\n")
+
+    text = next(s["text"] for s in viz.payload(graph.root)["nodes"][0]["sections"]
+                if s["title"] == "The result")
+
+    assert text.count("\n") >= 2
+    assert "| 0-60 | 1.05 |" in text
