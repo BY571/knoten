@@ -20,11 +20,10 @@ that graph says it means. A common shape:
                  └────── findings open new ideas ────────┘
 
     gate    stands outside the loop: the bar every claim must survive
-    method  the answer derived from findings that are still alive
 
-Nothing is one-to-one: one idea yields several hypotheses, one hypothesis several
-experiments, one experiment several findings, and a finding may rest on several
-experiments. Write the node you have; the edges carry the structure.
+Those names are the order `knoten viz` lays columns out in; a type it does not know lands
+after the ones it does. Links are a list, so one hypothesis can carry several experiments
+and several findings.
 
 ## Which way an edge points
 
@@ -34,14 +33,16 @@ forward edge and never authored.
 
     kn:survivedGate / kn:killedByGate   claim ──▶ the gate it faced
     kn:tests                            experiment ──▶ the hypothesis it tests
-    kn:explains                         claim ──▶ the observation it accounts for
-    kn:generalises                      claim ──▶ the instances behind it
-    kn:followsFrom                      claim ──▶ the premise it argues from
-    prov:wasDerivedFrom / prov:used     claim ──▶ what it came from / used
-    mp:supports / mp:challenges         claim ──▶ the claim it bears on
-    npx:supersedes / npx:retracts       the newer node ──▶ the one it replaces
+    prov:wasDerivedFrom                 claim ──▶ what it came from
 
-A correction is a NEW node that supersedes or retracts the old one, never an edit to it.
+`knoten validate` lists every relation it knows when you name one it does not, so ask it
+rather than guessing — `kn:explains`, `kn:generalises` and `kn:followsFrom` name the KIND
+of a derivation when that matters.
+
+Writing the generated name (`kn:testedBy` where you meant `kn:tests`) is refused. Writing
+the right relation on the wrong node is NOT detectable — the back-link lands and the graph
+reports itself healthy, with the claim reversed. A correction is a NEW node that supersedes
+or retracts the old one, never an edit to it.
 
 ## The loop
 

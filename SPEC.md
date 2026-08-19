@@ -77,7 +77,13 @@ rather than thinking.**
 
 ### Node types (conventions, not hardcoded)
 
-`hypothesis` · `experiment` · `finding` · `method` · `source` · `retraction`
+`source` · `idea` · `hypothesis` · `experiment` · `finding` · `retraction` · `gate`
+
+A convention only — the core checks `node_types` for membership and nothing else. `gate`
+stands outside the loop the others form: it is the bar a claim must survive, not a stage
+it passes through. `method` is deliberately unclaimed; the rename that freed it reserved
+it for "the approach derived from findings that survived", and nothing implements that
+yet.
 
 ### Status lifecycle
 
@@ -268,6 +274,18 @@ statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```
 
+`node_types` also takes a mapping, which is the only place a graph's words can be
+*defined* — the core refuses to define them and must therefore let the graph do it:
+
+```yaml
+node_types:
+  hypothesis: a falsifiable claim derived from an idea
+  gate:       a standing rule every claim must survive; a bar, not a stage
+```
+
+The keys are the vocabulary and are enforced identically; the values are for the reader
+and for `knoten viz`, which labels each column with them. `knoten init` writes this form.
+
 The core invents neither list — declare none and none is checked (§2: the core knows no
 domain). But a graph that *does* declare one has said those are the only legal words, so
 `type: hypthesis` is a typo and `status: ded` is a claim that would silently vanish from
@@ -275,7 +293,9 @@ every query.
 
 Always-on structural checks, which no graph has to declare: `dangling-edge`,
 `missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
-`unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`.
+`unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`, `mismatched-id`,
+`malformed-results`, `malformed-repro`, and `not-a-gate` (a migration aid for graphs
+written before the gate type was renamed; deletable once they have moved).
 
 A biology graph declares entirely different rules. The core never changes.
 

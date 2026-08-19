@@ -219,3 +219,14 @@ def test_a_meaning_that_is_not_a_sentence_is_rejected(graph):
 
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
+
+
+def test_a_list_of_one_key_mappings_is_caught(graph):
+    """The natural half-migration to the mapping form: `- hypothesis: a claim` is still a
+    LIST, so it passed the type check, and then no node's `type` could equal a dict —
+    every node in the graph reported `unknown-type` with raw dicts printed back at the
+    reader. Documenting both forms four lines apart is what made this reachable."""
+    graph.rules("name: t\nnode_types:\n  - hypothesis: a falsifiable claim\nrules: []\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)

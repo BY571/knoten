@@ -62,17 +62,28 @@ def load_config(root: Path) -> dict:
     # Membership is checked against the keys either way — `in` and iteration over a dict
     # give exactly that — so nothing downstream changes. The values are for the reader and
     # for `knoten viz`, because knoten defines none of these words itself.
-    if isinstance(cfg.get("node_types"), dict):
-        for k, v in cfg["node_types"].items():
+    for key in ("node_types", "statuses", "tags"):
+        allowed = (list, dict) if key == "node_types" else (list,)
+        if key in cfg and not isinstance(cfg[key], allowed):
+            raise GraphError(f"graph.yaml: `{key}` must be a list, got {cfg[key]!r}")
+
+    types = cfg.get("node_types")
+    if isinstance(types, dict):
+        for k, v in types.items():
             if not isinstance(v, str) or not v.strip():
                 raise GraphError(
                     f"graph.yaml: `node_types` entry '{k}' must be a one-line meaning, "
                     f"got {v!r}. Use a plain list if you do not want to write meanings.")
-
-    for key in ("node_types", "statuses", "tags"):
-        if key in cfg and not isinstance(cfg[key], (list, dict) if key == "node_types"
-                                         else list):
-            raise GraphError(f"graph.yaml: `{key}` must be a list, got {cfg[key]!r}")
+    else:
+        # `- hypothesis: a claim` is the natural half-migration to the mapping form: a
+        # LIST of one-key mappings, which is still a list and so passed the check above.
+        # No node's `type` can equal a dict, so every node in the graph would report
+        # `unknown-type` and the message would print raw dicts back at the reader.
+        for t in types or []:
+            if isinstance(t, (dict, list)):
+                raise GraphError(
+                    f"graph.yaml: `node_types` entry {t!r} is not a type name. To write "
+                    f"meanings, drop the `- ` and make `node_types` a mapping.")
 
     rules = cfg.get("rules") or []
     if not isinstance(rules, list):

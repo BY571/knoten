@@ -65,10 +65,10 @@ a gate stands outside that loop as the bar every claim must survive. Nothing is
 one-to-one: one hypothesis may have several experiments and several findings.
 
 An edge always points from the NEW node to the one it depends on — claim -> the gate it
-faced, experiment -> the hypothesis it tests, claim -> what it was derived from. Back-links
-are generated from the forward edge and must never be authored, so an edge written the
-wrong way round leaves the node invisible from the other side. A correction is a new node
-that supersedes or retracts the old one, never an edit to it.
+faced, experiment -> the hypothesis it tests, claim -> what it was derived from. Writing
+the generated back-link name is refused; writing the right relation on the wrong node is
+NOT detectable and silently reverses the claim, so get the subject right. A correction is
+a new node that supersedes or retracts the old one, never an edit to it.
 
 The loop, in order:
 

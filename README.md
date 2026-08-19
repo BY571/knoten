@@ -193,8 +193,12 @@ source ──▶ idea ──▶ hypothesis ──▶ experiment ──▶ findin
              └────── findings open new ideas ────────┘
 
 gate    stands outside the loop: the bar every claim must survive
-method  the answer derived from findings that are still alive
 ```
+
+The names above are a convention, not a rule — `knoten viz` lays columns out in that
+order and puts anything it does not recognise after the ones it does. (`method` is
+deliberately unused: the rename in #15 freed the word for "the approach derived from
+findings that survived", and nothing claims it yet.)
 
 Nothing is one-to-one. One idea yields several hypotheses, one hypothesis several
 experiments, one experiment several findings, and a finding may rest on several
@@ -202,10 +206,12 @@ experiments. That already works — links are a list and back-links accumulate.
 
 **Every edge points from the new node to the one it depends on.** A claim points at the
 gate it faced; an experiment at the hypothesis it tests; a claim at what it was derived
-from. Back-links are generated from the forward edge and are never authored, so an edge
-written the wrong way round leaves the node invisible from the other side — `validate`
-reports that as `authored-backlink`. A correction is a *new* node that supersedes or
-retracts the old one, never an edit to it.
+from. Back-links are generated from the forward edge and are never authored: writing the
+generated name — `kn:testedBy` where you meant `kn:tests` — is refused as
+`authored-backlink`. Writing the *right* relation on the *wrong* node is not detectable at
+all: the back-link lands, the graph reports itself healthy, and the claim now says the
+opposite of what you meant. Get the subject right. A correction is a *new* node that
+supersedes or retracts the old one, never an edit to it.
 
 Where a derivation's kind matters, say which it is, so a rule can ask something of one
 kind without asking it of all: `kn:explains` for the best account of an observation,

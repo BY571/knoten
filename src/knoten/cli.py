@@ -344,9 +344,19 @@ TEMPLATE_GRAPH = """\
 name: {name}
 description: TODO — what question is this graph about?
 
-# Enforced. A node whose type or status is not on these lists is a typo — and a claim
-# with a typo'd status silently drops out of every query. Edit them for YOUR topic.
-node_types: [hypothesis, experiment, finding, gate, source, retraction]
+# Enforced. A node whose type or status is not declared here is a typo — and a claim with
+# a typo'd status silently drops out of every query. Edit these for YOUR topic.
+#
+# The meanings are not decoration: knoten defines none of these words, so this is the only
+# place they ARE defined, and `knoten viz` shows them beside each column.
+node_types:
+  source:     external material the work starts from — a paper, dataset or search
+  idea:       what you took from a source; a direction, not yet a testable claim
+  hypothesis: a falsifiable claim derived from an idea
+  experiment: the test built to verify or falsify a hypothesis
+  finding:    what the experiment showed, expected or not — new ideas come from these
+  retraction: a claim withdrawn after the fact
+  gate:       a standing rule every claim must survive; a bar, not a stage
 statuses:   [open, alive, dead, retracted, superseded, active]
 
 # The axis `knoten index --tag` filters on. Declare them and a typo is a violation;
