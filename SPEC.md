@@ -13,7 +13,7 @@ tool combines git-native markdown nodes + falsification-aware typed edges +
 agent-native read/write**. The gap is *structural*: every candidate buys one axis by
 foreclosing another.
 
-| system | markdown + git | falsification edges | agent / CLI |
+| system | markdown + git | falsification edges | agent-native surface |
 |---|---|---|---|
 | Basic Memory | markdown ✓ · **git ✗** | **✗** free-form wikilinks | ✓ |
 | Graphiti | **✗** (Neo4j) | partial (bi-temporal) | ✓ |
@@ -94,7 +94,7 @@ open ──► alive ──────► superseded
    └───► retracted     (WE WERE WRONG — the most valuable node type)
 ```
 
-Every arrow above is walkable from the agent surface via `knoten_update`, which appends
+Every arrow above is walkable from the agent surface via `knoten update`, which appends
 and moves the status but cannot rewrite a claim. Immutability protects **what was
 claimed**, never the status field — the status field *is* the lifecycle, and git already
 holds the before and after (§7). Without this an agent could open a hypothesis and never
@@ -315,7 +315,7 @@ my-graph/
   attachments/<id>/*       # the script that killed it, the plot that shows why
 ```
 
-`knoten new` and `knoten_commit` stamp `created:`; `knoten_update` stamps `updated:`.
+`knoten new` and `knoten commit` stamp `created:`; `knoten update` stamps `updated:`.
 Both are plain ISO date strings, which the YAML 1.2 loader keeps as strings rather than
 coercing to `datetime.date`. Git knows when the *file* changed, which is not when the
 *claim* did — a typo fix and a status flip are the same event to git — and reading it
@@ -389,7 +389,7 @@ until it is clean.
 *"Has this been tried?"* and *"have we done anything **like** this?"* are different
 questions, and one mechanism cannot answer both.
 
-`knoten_query` is keyword retrieval: tokens weighted by idf, ranked, capped. It was
+`knoten query` is keyword retrieval: tokens weighted by idf, ranked, capped. It was
 originally an **AND** over tokens, which made the tool's headline question fail on its own
 README example — `"has anyone tried self-consistency?"` matched nothing, because the node
 contains no "has", "anyone" or "tried", and the agent was told the work was untested. A
@@ -397,7 +397,7 @@ false negative is the only failure mode of this system that causes real work to 
 So: OR with ranking, the full frontmatter in the haystack (`repro.model` was unsearchable),
 and **a miss now says so honestly** — "no keyword match, this is NOT proof it is untested."
 
-`knoten_index` answers the second question, and it does so by **not being a search engine
+`knoten index` answers the second question, and it does so by **not being a search engine
 at all**. It emits the whole graph as one line per node — id, verdict, tags, claim — and
 lets the reader judge relatedness. The reader is an LLM; it is a better semantic matcher
 than any similarity metric we could ship, and it costs nothing to ship. On a 500-node
@@ -445,7 +445,7 @@ Micropublications, nanopublications, PROV-O and LinkML are all open and safe to 
 
 1. **Do we emit RDF?** A `graph.ttl` export would make the graph interoperable with
    the nanopub ecosystem for ~nothing. Probably yes, phase 3.
-2. ~~**Embeddings for `knoten_query`?**~~ **Answered (§8.1): no, and probably never.**
+2. ~~**Embeddings for `knoten query`?**~~ **Answered (§8.1): no, and probably never.**
    The consumer is an LLM, so the whole graph as a one-line-per-node index beats vector
    similarity at the question that matters ("anything like this?") for zero dependencies.
    Revisit only when a tag-filtered index stops fitting in a context window.

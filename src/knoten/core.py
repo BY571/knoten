@@ -70,7 +70,8 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
 # An id becomes a filename, so anything else is a path traversal. Go through node_path()
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
-# the graph: the id was guarded on one path and not on the one people actually used.
+# the graph: an id authored by a model is not a path, and only one entry point
+# checked that — not the one people used.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
@@ -227,7 +228,7 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
 
 
 def parse_text(text: str, nid: str, label: str | None = None) -> Node:
-    """Build a Node from a string. Used by `knoten_commit` to validate a candidate
+    """Build a Node from a string. Used by `knoten commit` to validate a candidate
     node in memory, so an invalid node never reaches the filesystem at all."""
     label = label or f"{nid}.md"
     fm, body = split(text, label)
@@ -400,7 +401,7 @@ def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
     Tokens are weighted by idf, so a word in every node counts for nothing without
     anybody having to list it, and a rare one dominates.
 
-    This is the ONE retrieval seam: `query`, `index` and `frontier` all come through
+    This is the ONE retrieval seam: `query` and `index` both come through
     here, so a semantic backend replaces this body and nothing above it changes.
     """
     pool = [n for n in nodes.values() if _passes(n, tags, status, type, where, since)]

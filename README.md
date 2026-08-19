@@ -270,9 +270,9 @@ rewrite a result already recorded — that is what retraction is for.
 
 `ops.py` holds the one implementation behind every read — index, query, frontier, gates,
 show, validate, path — as a function returning a dict, which the CLI renders as prose or
-dumps with `--json`. There was briefly a second surface for shell-less clients; it cost
-~2,340 tokens of schema in every session against ~304 for `knoten --help`, and it was a
-second thing to keep correct. The shell is the interface.
+dumps with `--json`. There was a second surface for shell-less clients; it cost ~2,340 tokens of schema in
+every session against ~304 for `knoten --help`, and it was a second thing to keep
+correct. It was removed. The shell is the interface.
 
 ## Why bother
 

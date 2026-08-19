@@ -8,26 +8,23 @@ real command, and every command an agent needs appears somewhere in the file.
 import re
 from pathlib import Path
 
-import pytest
-
 
 SKILL = Path(__file__).resolve().parents[1] / "SKILL.md"
 
 # CLI verbs the loop is allowed to talk about, and how a tool-name/verb collapses onto
-# `get` was the verb on a since-removed surface; the CLI verb for the
-# same step is `show`, so they alias onto one subject.
-COMMANDS = {"frontier", "index", "query", "get", "show", "gates", "commit", "update", "attach"}
-ALIAS = {"get": "show"}
+COMMANDS = {"frontier", "index", "query", "show", "gates", "commit", "update", "attach"}
 
 STEP_START = re.compile(r"^(\d+)\.\s")
-MENTION = re.compile(r"knoten[_ ]([a-z]+)")
+# Backticked on purpose: SKILL.md also says "knoten defines none of these words",
+# and prose is not a command.
+MENTION = re.compile(r"`knoten ([a-z]+)")
 
 
 def step_blocks(text):
     """Split text into the numbered-step paragraphs 1..N. A step's block is its opening
     line plus every following non-blank line, up to the next numbered line or a blank
     line — whichever ends the paragraph first. That keeps trailing prose after the last
-    numbered step (INSTRUCTIONS has a paragraph after step 6) from bleeding into it."""
+    numbered step, and a trailing paragraph after the last one, from bleeding into it."""
     blocks = {}
     current = None
     buf = []
@@ -52,9 +49,9 @@ def step_blocks(text):
 
 
 def subjects(block):
-    """The set of CLI commands a step's paragraph names, normalized so a legacy
+    """The set of CLI commands a step's paragraph names — the ones an agent has to
     tool and its CLI verb count as the same subject."""
-    return frozenset(ALIAS.get(w, w) for w in MENTION.findall(block) if w in COMMANDS)
+    return frozenset(w for w in MENTION.findall(block) if w in COMMANDS)
 
 
 def test_the_skill_exists_and_declares_itself():
@@ -82,7 +79,18 @@ def test_the_skill_names_every_cli_command_an_agent_needs():
     for cmd in ["knoten frontier", "knoten index", "knoten query", "knoten show",
                 "knoten gates", "knoten commit", "knoten update", "knoten attach"]:
         assert cmd in text
-
-    # `get` was a verb on the removed surface, never a CLI command — it must not appear as a shell
-    # instruction here, because `knoten get` does not exist.
     assert "knoten get" not in text
+
+
+def test_every_command_the_skill_teaches_is_a_real_subcommand():
+    """The guarantee that went missing when the cross-surface check was dropped. SKILL.md
+    used to be checked against another DOCUMENT; nothing checked it against the code, so
+    renaming a subcommand left the skill teaching a verb that does not exist and the whole
+    suite green. This checks the parser itself, which is the thing that can drift."""
+    from knoten.cli import _parser
+    subs = next(a.choices for a in _parser()._actions if hasattr(a, "choices") and a.choices)
+    taught = set(MENTION.findall(SKILL.read_text(encoding="utf-8")))
+
+    unreal = sorted(v for v in taught if v not in subs)
+
+    assert not unreal, f"SKILL.md teaches commands that do not exist: {unreal}"

@@ -432,7 +432,7 @@ def new(root, ntype, nid, status) -> int:
                          f"are nodes, not edits.")
 
     cfg = load_config(root)
-    # `new` used to skip this while knoten_commit enforced it: the same node was accepted
+    # `new` used to skip this while knoten commit enforced it: the same node was accepted
     # by one entry point and rejected by the other.
     for field, declared in [("type", cfg.get("node_types")), ("status", cfg.get("statuses"))]:
         value = ntype if field == "type" else status

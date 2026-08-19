@@ -8,8 +8,6 @@ per node.
 """
 from datetime import date
 
-import pytest
-
 from knoten.cli import main
 from knoten.commit import commit
 from knoten.core import load, retrieve, today

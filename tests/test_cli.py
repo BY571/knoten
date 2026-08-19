@@ -89,7 +89,7 @@ def test_index_limit_help_states_the_real_default(capsys):
 
 
 def test_index_accepts_a_query_flag_for_relevance_ranking(graph, monkeypatch, capsys):
-    """`ops.index(query=...)` was reachable from the other surface but had no CLI flag — the CLI is
+    """`ops.index(query=...)` was reachable in Python but had no CLI flag — and the CLI is
     primary and should not be missing a parameter of the shared implementation."""
     monkeypatch.chdir(graph.root)
     graph.node("hyp-decoding", "id: hyp-decoding\ntype: hypothesis\nstatus: open",

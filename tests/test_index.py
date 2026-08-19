@@ -1,7 +1,7 @@
-"""`knoten_index` — the whole graph as one line per node.
+"""`knoten index` — the whole graph as one line per node.
 
 The agent surface answered "has this been tried?" and nothing else. It could not answer
-"what is still open?", and a broad `knoten_query` returned every matching node in full:
+"what is still open?", and a broad `knoten query` returned every matching node in full:
 on a 500-node graph that was ~83k tokens in one response, so the tool got LESS usable
 the more it accumulated, which is backwards for a thing whose purpose is to accumulate.
 
@@ -21,7 +21,6 @@ def index(**args):
 @pytest.fixture(autouse=True)
 def cwd(graph, monkeypatch):
     monkeypatch.chdir(graph.root)
-    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
     (graph.root / "graph.yaml").write_text(
         "name: t\nnode_types: [hypothesis, gate]\n"
         "statuses: [open, alive, dead, active]\nrules: []\n", encoding="utf-8")

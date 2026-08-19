@@ -80,3 +80,87 @@ def test_an_id_that_escapes_the_graph_is_refused(graph, tmp_path):
     assert res["status"] == "REJECTED"
     assert not (tmp_path.parent / "pwned.md").exists()
 
+
+# ------------------------------------------------------------- the duplicate warning
+
+def test_commit_warns_when_the_new_claim_resembles_a_settled_one(graph):
+    """A loop running for weeks WILL re-propose an idea it already settled, worded
+    differently, under a new id. The graph then holds two answers to one question and the
+    second has no post-mortem."""
+    graph.node("hyp-self-consistency", "id: hyp-self-consistency\ntype: hypothesis\n"
+                                       "status: dead",
+               "# Self-consistency majority vote beats greedy decoding\n\n"
+               "## Why it died\nThe gain was compute, not method.\n")
+
+    res = commit(graph.root, "hyp-sample-and-vote", "type: hypothesis\nstatus: open",
+                 "# Majority vote over sampled chains beats greedy decoding\n")
+
+    assert res["status"] == "COMMITTED"          # a warning, never a block
+    assert [s["id"] for s in res["similar"]] == ["hyp-self-consistency"]
+    assert res["similar"][0]["verdict"] == "DEAD"
+    assert "supersede" in res["warning"]
+
+
+def test_an_unrelated_claim_gets_no_warning(graph):
+    graph.node("hyp-self-consistency", "id: hyp-self-consistency\ntype: hypothesis\n"
+                                       "status: dead", "# Self-consistency beats greedy\n")
+
+    res = commit(graph.root, "hyp-tokeniser", "type: hypothesis\nstatus: open",
+                 "# A byte-level tokeniser lowers perplexity\n")
+
+    assert "similar" not in res
+
+
+def test_one_shared_word_is_not_a_duplicate(graph):
+    """The warning is worth nothing if it fires on every commit, so it takes two shared
+    title words rather than one.
+
+    Two IS a loose bar — "dropout improves accuracy" and "warmup improves accuracy" would
+    trip it — and that is deliberate: a false positive costs the agent one line it can
+    dismiss, while a false negative costs a duplicated experiment. The asymmetry says lean
+    permissive. Anything tighter (idf over titles, overlap ratios) misbehaves on the small
+    graphs where duplicates start appearing."""
+    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: dead",
+               "# Dropout lowers perplexity\n")
+
+    res = commit(graph.root, "hyp-b", "type: hypothesis\nstatus: open",
+                 "# Warmup improves accuracy on reasoning\n")
+
+    assert "similar" not in res
+
+
+def test_an_unsettled_claim_is_not_reported_as_prior_art(graph):
+    """`open` is not an answer. Warning about one would tell the agent the question is
+    closed when it is exactly what is still being asked."""
+    graph.node("hyp-open", "id: hyp-open\ntype: hypothesis\nstatus: open",
+               "# Majority vote over sampled chains beats greedy decoding\n")
+
+    res = commit(graph.root, "hyp-new", "type: hypothesis\nstatus: open",
+                 "# Majority vote over sampled chains beats greedy decoding\n")
+
+    assert "similar" not in res
+
+
+def test_the_warning_reaches_the_reader(graph, monkeypatch, capsys):
+    """The dict carried it and nothing printed it — a warning nobody sees is not a
+    warning."""
+    from knoten.cli import main
+    graph.node("hyp-self-consistency", "id: hyp-self-consistency\ntype: hypothesis\n"
+                                       "status: dead", "# Self-consistency beats greedy decoding\n")
+    monkeypatch.chdir(graph.root)
+    (graph.root / "fm").write_text("type: hypothesis\nstatus: open\n")
+    (graph.root / "body").write_text("# Majority vote beats greedy decoding\n")
+
+    main(["commit", "hyp-new", "--frontmatter", "fm", "--body", "body"])
+
+    assert "resembles" in capsys.readouterr().out
+
+
+def test_a_malformed_candidate_is_refused_not_raised(graph):
+    """`commit` promises it never raises for a bad candidate, because the caller is
+    usually an agent that needs a refusal it can read rather than a traceback. That
+    promise matters more now that this IS the Python API."""
+    res = commit(graph.root, "hyp-bad", "id: hyp-bad\n  oops: bad indent", "# x\n")
+
+    assert res["status"] == "REJECTED"
+    assert not (graph.root / "nodes" / "hyp-bad.md").exists()
