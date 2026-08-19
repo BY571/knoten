@@ -293,3 +293,75 @@ rules:
     violations = check(load(graph.root), graph.root)
 
     assert f"malformed-{block}" in [v.rule for v in violations]
+
+
+# ----------------------------------------------- rules can see what an edge points at
+
+CASCADE = """\
+name: t
+rules:
+  - id: methods-rest-on-live-claims
+    when_type: method
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, status: alive}
+    message: A method built on a dead finding is a method built on sand.
+"""
+
+
+def cascade(graph, finding_status):
+    return (graph.rules(CASCADE)
+            .node("find-a", f"id: find-a\ntype: finding\nstatus: {finding_status}")
+            .node("method-x", "id: method-x\ntype: method\nstatus: alive\nlinks:\n"
+                              "  - {rel: prov:wasDerivedFrom, to: find-a}"))
+
+
+def test_a_claim_resting_on_a_live_finding_passes(graph):
+    g = cascade(graph, "alive")
+
+    assert [v.rule for v in check(load(g.root), g.root)] == []
+
+
+def test_the_day_the_finding_dies_everything_built_on_it_fails(graph):
+    """The reason this primitive exists. `validate` re-runs over the whole graph, so this
+    is not a create-time check — killing one result indicts everything standing on it.
+    Before this, knoten recorded that a claim died and let its dependants stand."""
+    g = cascade(graph, "dead")
+
+    assert [v.rule for v in check(load(g.root), g.root)] == ["methods-rest-on-live-claims"]
+
+
+def test_a_generalisation_can_demand_more_than_one_instance(graph):
+    """`min:` is what makes an inductive standard writable: one observation is an
+    anecdote. Without it a rule can only ask whether the edge exists at all."""
+    graph.rules("""\
+name: t
+rules:
+  - id: needs-instances
+    when_type: hypothesis
+    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, min: 2}
+    message: One observation is not a pattern.
+""").node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: prov:wasDerivedFrom, to: find-a}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["needs-instances"]
+
+
+def test_a_dangling_target_does_not_count_towards_the_requirement(graph):
+    """A link to a node that does not exist is already `dangling-edge`. It must not also
+    satisfy a requirement — that would let a typo stand in for evidence."""
+    graph.rules(CASCADE).node("method-x", "id: method-x\ntype: method\nstatus: alive\n"
+                              "links:\n  - {rel: prov:wasDerivedFrom, to: nope}")
+
+    rules = [v.rule for v in check(load(graph.root), graph.root)]
+
+    assert "methods-rest-on-live-claims" in rules
+
+
+@pytest.mark.parametrize("bad", ["prov:used", "{rel: [a, b]}", "{type: finding}"])
+def test_a_malformed_requirement_is_a_graph_error_not_a_crash(graph, bad):
+    """Same bargain as every other rule key: the shape is checked once, loudly, rather
+    than blowing up mid-validation on somebody's node."""
+    graph.rules(f"name: t\nrules:\n  - id: r\n    require_edge_target: {bad}\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)
