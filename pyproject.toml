@@ -40,3 +40,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+# `viz.py` reads this at runtime. `packages.find` collects *.py only, so without this the
+# wheel ships a `knoten viz` that cannot find its own template.
+knoten = ["viz.html"]

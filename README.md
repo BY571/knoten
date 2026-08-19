@@ -142,9 +142,13 @@ property of the map; what happened to a claim is a property of the claim, and li
 record panel beside it. Clusters form around the busiest nodes rather than around a type,
 because how many gates a graph declares is a fact about its rules, not about knoten.
 
-Layout is a pure function of the graph and nothing is persisted. Appending a node lands it
-at the end of a column and on the rim of one cluster; nothing already placed moves. A map
-that reshuffles is a map you cannot learn.
+Layout is a pure function of the graph and nothing is persisted. Appending a claim of a
+type already on screen lands it at the end of that column and on the rim of one cluster,
+and moves nothing — that is the case an agent loop hits over and over. Two things do
+reorder the view, both of them real changes in what the graph is: a node introducing a
+type that was not there before, and the hub count stepping up as the graph grows
+(at roughly 7, 13, 21, 31 nodes). A map that reshuffles for no reason is a map you cannot
+learn; one that reshuffles when the graph's shape changes is telling you something.
 
 Your graph also declares its own vocabulary, and that is enforced too:
 

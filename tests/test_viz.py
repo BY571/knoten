@@ -41,10 +41,13 @@ def test_appending_a_node_moves_nothing(small, graph):
             assert after[view][nid] == xy, f"{view}: {nid} moved"
 
 
-def test_the_layout_is_the_same_every_run(small):
-    """No randomness, no force simulation, no dict-order dependence — otherwise `git
-    diff` on an exported file is noise and `--watch` would strobe."""
-    assert viz.layout(load(small.root)) == viz.layout(load(small.root))
+def test_the_layout_does_not_depend_on_dict_order(small):
+    """No randomness, no force simulation, no dict-order dependence. Calling it twice on
+    one dict in one process could not have caught the third of those: the insertion order
+    was identical both times, so the claim in this docstring went untested."""
+    nodes = load(small.root)
+
+    assert viz.layout(nodes) == viz.layout(dict(reversed(list(nodes.items()))))
 
 
 def test_a_graph_with_no_gates_still_lays_out(graph):
@@ -93,12 +96,12 @@ def test_a_node_body_cannot_close_the_script_tag(graph):
     assert "hyp-x" in payload
 
 
-def test_node_content_is_never_written_as_html(small):
-    """Node bodies are written by agents. `innerHTML` on one is arbitrary script
+@pytest.mark.parametrize("sink", ["innerHTML", "outerHTML", "insertAdjacentHTML",
+                                  "document.write", "eval(", "new Function"])
+def test_the_template_uses_no_html_sink(sink):
+    """Node bodies are written by agents. Any of these on one is arbitrary script
     execution in the reader's browser, from a file they opened to read a post-mortem."""
-    template = (viz.HERE / "viz.html").read_text()
-
-    assert "innerHTML" not in template
+    assert sink not in (viz.HERE / "viz.html").read_text()
 
 
 def test_the_payload_carries_what_the_panel_shows(small):
@@ -121,11 +124,52 @@ def test_viz_writes_a_file(small, monkeypatch, tmp_path, capsys):
     assert str(out) in capsys.readouterr().out
 
 
-def test_viz_outside_a_graph_fails_without_a_traceback(tmp_path, monkeypatch, capsys):
-    """Every other command exits 1 with one line. A traceback here would be the first
-    place knoten hands a user a stack trace."""
+def test_viz_on_a_graph_with_no_nodes_directory_fails_cleanly(tmp_path, monkeypatch, capsys):
+    """This used to `chdir` somewhere with no graph.yaml at all, so `find_root` raised
+    before viz was ever reached — it passed for every subcommand and would have passed
+    with viz's own guard deleted. `load()` returns {} for a missing nodes/ dir, so that
+    guard is the only thing between the user and a valid-looking empty page."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("KNOTEN_GRAPH", raising=False)
+    (tmp_path / "graph.yaml").write_text("name: t\nrules: []\n", encoding="utf-8")
 
-    assert main(["viz"]) == 1
+    assert main(["viz", "-o", str(tmp_path / "g.html")]) == 1
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_appending_an_undated_node_does_not_push_everything_down(small, graph):
+    """`str(None or "")` is "", which sorts before every date — so a node written by hand
+    or by another tool took slot 0 and moved every node already placed. `knoten new` and
+    `knoten commit` both stamp `created`, which is why this hid."""
+    before = viz.layout(load(small.root))
+
+    graph.node("hyp-undated", "id: hyp-undated\ntype: hypothesis\nstatus: open")
+    after = viz.layout(load(small.root))
+
+    for nid, xy in before["columns"].items():
+        assert after["columns"][nid] == xy, f"{nid} moved"
+
+
+def test_an_agent_authored_body_cannot_become_markup(graph):
+    """Node bodies are written by agents. Grepping the template for `innerHTML` misses
+    outerHTML, insertAdjacentHTML, document.write and eval — and never executes anything.
+    This pins the property that actually protects the reader: `<` never survives into the
+    payload, so there is no tag to inject."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead",
+               "# Bad\n\n## Why it died\n<img src=x onerror=alert(1)>\n")
+
+    payload = viz.render(graph.root).split("const DATA = ", 1)[1].split("\n", 1)[0]
+
+    assert "<img" not in payload
+    assert "onerror" in payload          # the text is still there, just not as markup
+
+
+def test_open_hands_the_file_to_the_browser(small, monkeypatch, tmp_path):
+    """The one line of wiring nothing else covers."""
+    import webbrowser
+    opened = []
+    monkeypatch.chdir(small.root)
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+
+    main(["viz", "-o", str(tmp_path / "g.html"), "--open"])
+
+    assert opened and opened[0].startswith("file://")
