@@ -137,8 +137,8 @@ def test_show_prose_reports_attachment_size_and_missing(graph, monkeypatch, caps
     assert "attachments/hyp-x/gone.png" in out and "MISSING" in out
 
 
-def test_query_also_line_keeps_non_method_related_nodes(graph, monkeypatch, capsys):
-    """`related_methods` is the MCP contract (type == method); the CLI's "also:" line
+def test_query_also_line_keeps_non_gate_related_nodes(graph, monkeypatch, capsys):
+    """`related_gates` is the MCP contract (type == GATE_TYPE); the CLI's "also:" line
     needs everything else that matched but isn't a claim, or a source node like this one
     silently vanishes from the one place a human sees it."""
     monkeypatch.chdir(graph.root)
@@ -150,3 +150,15 @@ def test_query_also_line_keeps_non_method_related_nodes(graph, monkeypatch, caps
     out = capsys.readouterr().out
 
     assert "also: src-paper" in out
+
+
+def test_query_reports_the_gates_that_matched(graph, monkeypatch):
+    """`related_gates` had no assertion anywhere in the suite, and the type rename walked
+    straight past the one place `ops.py` hardcoded the old string — so the key went
+    silently empty on every renamed graph. That is the same silent absence `not-a-gate`
+    was added to prevent, one module over, and only a test can hold it."""
+    monkeypatch.chdir(graph.root)
+    graph.node("gate-costs", "id: gate-costs\ntype: gate\nstatus: active", "# Gate: costs\n")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead", "# Costs sink it\n")
+
+    assert ops.query(graph.root, "costs")["related_gates"] == ["gate-costs"]

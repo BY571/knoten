@@ -128,7 +128,7 @@ knoten index --where cause=weak_baseline    # we have a stronger baseline now â€
 Your graph also declares its own vocabulary, and that is enforced too:
 
 ```yaml
-node_types: [hypothesis, experiment, finding, method, source]
+node_types: [hypothesis, experiment, finding, gate, source]
 statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation, gate]
 ```

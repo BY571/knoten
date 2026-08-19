@@ -27,9 +27,12 @@ RULE_KEYS = {
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
-GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
-
 GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules"}
+
+# `GATE_TYPE` was this until the rename. Named only so the migration check below can
+# recognise a graph that predates it; nothing else in the package may use it.
+RENAMED_GATE_TYPE = "method"
+GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
 
 
 @dataclass
@@ -214,17 +217,22 @@ def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation
                 out.append(Violation(nid, "missing-attachment",
                                      f"'{a}' is listed but not in attachments/{nid}/"))
 
-    # `gates()` finds nodes by type, so a mistyped gate is not an error anywhere — it is
-    # an ABSENCE: `knoten gates` returns one fewer row and says nothing. Reported once per
-    # node, however many claims cite it.
-    miscast = {l["to"] for n in nodes.values() for l in n.links
-               if l["rel"] in GATE_RELS and l["to"] in nodes
-               and nodes[l["to"]].type != GATE_TYPE}
-    for nid in sorted(miscast):
+    # MIGRATION AID, and deliberately narrow. `GATE_TYPE` used to be "method"; a graph
+    # written before the rename keeps `type: method` and `knoten gates` then returns one
+    # fewer row while saying nothing.
+    #
+    # It fires ONLY on the dead word. A graph that calls its bar `criterion` is not
+    # wrong — core.py promises such a graph "an empty bucket, not a wrong answer" — and
+    # flagging it would be the core inventing vocabulary, which is the one thing this
+    # project does not do. Delete this check once graphs have moved.
+    stale = {l["to"] for n in nodes.values() for l in n.links
+             if l["rel"] in GATE_RELS and nodes.get(l["to"]) is not None
+             and nodes[l["to"]].type == RENAMED_GATE_TYPE}
+    for nid in sorted(stale):
         out.append(Violation(nid, "not-a-gate",
-                             f"cited as a gate but typed '{nodes[nid].type}' — `knoten "
-                             f"gates` only finds `type: {GATE_TYPE}`, so this node is "
-                             f"invisible to it"))
+                             f"cited as a gate but typed '{RENAMED_GATE_TYPE}' — the type "
+                             f"was renamed to '{GATE_TYPE}', and `knoten gates` only finds "
+                             f"that, so this node is invisible to it"))
     return out
 
 

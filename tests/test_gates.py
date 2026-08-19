@@ -54,7 +54,7 @@ def test_a_gate_nothing_went_through_reports_empty(g):
     assert by_id["gate-idle"] == ([], [])
 
 
-def test_only_method_nodes_are_gates(g):
+def test_only_gate_nodes_are_gates(g):
     assert "hyp-killed" not in [n.id for n, _, _ in gates(load(g.root))]
 
 
@@ -87,22 +87,13 @@ def test_the_cli_lists_gates_with_their_record(g, monkeypatch, capsys):
 
 # --------------------------------------------------- the type is `gate`, not `method`
 
-GATE_NODE = "id: gate-cost-hurdle\ntype: gate\nstatus: active"
-
-
-def test_a_node_typed_gate_is_a_gate(graph):
-    """`method` meant the bar a claim must survive, which is the opposite of what the
-    English word suggests — graphs in the wild ended up with ids like
-    `gate-cost-net-of-costs`, the type name and the concept fighting for one slot."""
-    graph.node("gate-cost-hurdle", GATE_NODE, "# Gate\n")
-
-    assert [g.id for g, _, _ in gates(load(graph.root))] == ["gate-cost-hurdle"]
-
-
 def test_a_node_cited_as_a_gate_but_typed_otherwise_is_reported(graph):
-    """The rename's whole risk: a graph written before it keeps `type: gate`, and
-    `knoten gates` quietly returns nothing. Silence is the one failure mode a
-    falsification tool must not have, so the mismatch is a violation."""
+    """The rename's whole risk. `method` meant the bar a claim must survive — the
+    opposite of what the English word suggests — so real graphs grew ids like
+    `method-gate-net-of-costs`, the type name and the concept fighting for one slot.
+    A graph written before the rename keeps `type: method`, and `knoten gates` then
+    quietly returns one fewer row. Silence is the one failure mode a falsification tool
+    must not have."""
     graph.node("method-old", "id: method-old\ntype: method\nstatus: active", "# Gate\n")
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
                         "  - {rel: kn:survivedGate, to: method-old}", "# A claim\n")
@@ -110,3 +101,15 @@ def test_a_node_cited_as_a_gate_but_typed_otherwise_is_reported(graph):
     rules = [v.rule for v in check(load(graph.root), graph.root)]
 
     assert "not-a-gate" in rules
+
+
+def test_a_graph_with_its_own_word_for_the_bar_is_left_alone(graph):
+    """The migration check must not become the core inventing vocabulary. core.py promises
+    a graph that names things differently "an empty bucket, not a wrong answer" — so a
+    graph whose bar is a `criterion` gets an empty `knoten gates` and no complaint."""
+    graph.rules("name: t\nnode_types: [hypothesis, criterion]\nrules: []\n")
+    graph.node("crit-costs", "id: crit-costs\ntype: criterion\nstatus: active", "# Bar\n")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: kn:survivedGate, to: crit-costs}", "# A claim\n")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == []

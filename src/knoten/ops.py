@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .core import (GATE_SECTIONS, VERDICT, GraphError, Node, frontier as _frontier,
-                   gates as _gates, load, retrieve, section, shortest_path)
+from .core import (GATE_SECTIONS, GATE_TYPE, VERDICT, GraphError, Node,
+                   frontier as _frontier, gates as _gates, load, retrieve, section,
+                   shortest_path)
 from .update import update as _update_node
 from .validate import check, load_config
 
@@ -91,7 +92,9 @@ def query(root: Path, term: str) -> dict:
            "truncated": len(claims) > QUERY_LIMIT,
            "claims": [summarise(n) for n in claims[:QUERY_LIMIT]],
            # MCP contract — do not narrow, an agent tool call is keyed on this shape.
-           "related_methods": [n.id for n in hits if n.type == "method"],
+           # Renamed with the type it names: a key called `related_methods` that selects
+           # gates would be the same word doing two jobs that this rename exists to end.
+           "related_gates": [n.id for n in hits if n.type == GATE_TYPE],
            # Everything else that matched but isn't a claim: sources, open work, whatever
            # types this graph declares. The CLI's "also:" line used to show these before
            # it was rewired onto this dict; losing them was silent narrowing, not a fix.

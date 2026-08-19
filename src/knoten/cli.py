@@ -346,8 +346,8 @@ statuses:   [open, alive, dead, retracted, superseded, active]
 # Reused standards: mp:supports / mp:challenges (Micropublications),
 #   npx:retracts / npx:supersedes (Nanopublications),
 #   prov:wasDerivedFrom / prov:used (PROV-O)
-# knoten adds:  kn:survivedGate  (claim -> the method it PASSED)
-#               kn:killedByGate  (claim -> the method that KILLED it)
+# knoten adds:  kn:survivedGate  (claim -> the gate it PASSED)
+#               kn:killedByGate  (claim -> the gate that KILLED it)
 #               kn:blockedBy     (claim -> a structural wall, not a result)
 
 rules:
@@ -443,7 +443,7 @@ def init(name) -> int:
     (root / "nodes" / "gate-example.md").write_text(TEMPLATE_GATE, encoding="utf-8")
     print(f"created graph '{name}'\n")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
-    print(f"  {name}/nodes/       <- one markdown file per hypothesis / method / source\n")
+    print(f"  {name}/nodes/       <- one markdown file per hypothesis / gate / source\n")
     print(f"  next:  cd {name} && git init && knoten hook")
     print("         (the hook makes `git commit` refuse a graph that breaks its own rules)")
     return 0
