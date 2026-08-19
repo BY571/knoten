@@ -25,6 +25,8 @@ RULE_KEYS = {
     "require_result_min",  # {key: minimum} — numeric floor
     "require_field_one_of",  # {field: [allowed]} — closed vocabulary
     "require_edge_target",   # {rel, type, status, min} — what the edge must POINT AT
+    "require_backlink",      # same shape, read from the other side: what must point AT
+                             # this node. `rel` is the GENERATED inverse, e.g. kn:testedBy
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
@@ -105,23 +107,28 @@ def _check_values(r: dict) -> None:
                     f"graph.yaml: rule '{rid}': `require_field_one_of` for '{k}' must be "
                     f"a non-empty list of allowed values, got {v!r}")
 
-    if "require_edge_target" in r:
-        spec = r["require_edge_target"]
+    # The two keys read the same shape from opposite directions, so `rel` is checked
+    # against opposite halves of INVERSE. Getting that backwards is the mistake worth
+    # catching: a rule naming a relation nothing on that side can carry loads cleanly and
+    # then fails every node forever, with nothing saying the direction was wrong.
+    for key, known in (("require_edge_target", INVERSE), ("require_backlink", GENERATED)):
+        if key not in r:
+            continue
+        spec = r[key]
         if not isinstance(spec, dict) or not isinstance(spec.get("rel"), str):
             raise GraphError(
-                f"graph.yaml: rule '{rid}': `require_edge_target` must be a mapping with "
-                f"a `rel` string, e.g. {{rel: prov:wasDerivedFrom, status: alive}}, "
-                f"got {spec!r}")
-        if spec["rel"] not in INVERSE:
+                f"graph.yaml: rule '{rid}': `{key}` must be a mapping with a `rel` "
+                f"string, e.g. {{rel: prov:wasDerivedFrom, status: alive}}, got {spec!r}")
+        if spec["rel"] not in known:
+            side = "a node declares" if key == "require_edge_target" else "is generated"
             raise GraphError(
-                f"graph.yaml: rule '{rid}': `require_edge_target` `rel` must be a "
-                f"relation a node declares, one of {', '.join(sorted(INVERSE))} — "
-                f"got {spec['rel']!r}")
+                f"graph.yaml: rule '{rid}': `{key}` `rel` must be a relation that "
+                f"{side}, one of {', '.join(sorted(known))} — got {spec['rel']!r}")
         least = spec.get("min", 1)
         if isinstance(least, bool) or not isinstance(least, int) or least < 1:
             raise GraphError(
-                f"graph.yaml: rule '{rid}': `require_edge_target` `min` must be a "
-                f"positive whole number, got {least!r}")
+                f"graph.yaml: rule '{rid}': `{key}` `min` must be a positive whole "
+                f"number, got {least!r}")
 
     if "require_result_min" in r:
         floors = r["require_result_min"]
@@ -263,6 +270,21 @@ def _csv(v) -> list[str]:
     return [x.strip() for x in str(v).split(",") if x.strip()]
 
 
+def _matching(spec: dict, edges: list, nodes: dict) -> int:
+    """How many DISTINCT nodes on the other end of these edges match `spec`.
+
+    Distinct, not one per edge: `min: 3` states an inductive standard, and listing one
+    finding three times is not three observations. A target that does not exist is not
+    counted — it is already reported as `dangling-edge`, and a typo must not stand in for
+    evidence.
+    """
+    types, statuses = _csv(spec.get("type")), _csv(spec.get("status"))
+    return len({e["to"] for e in edges
+                if e["rel"] == spec["rel"] and (t := nodes.get(e["to"])) is not None
+                and (not types or t.type in types)
+                and (not statuses or t.status in statuses)})
+
+
 def applies(status: str, ntype: str, r: dict) -> bool:
     """Does this rule apply to a node with this status/type? Shared with `knoten new`, so
     the scaffold and the validator cannot disagree about which rules are in play."""
@@ -296,21 +318,18 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
             # The only check that looks past the node it is checking. `require_edge`
             # asks whether an edge exists; this asks what is on the other end — which is
             # what makes a claim's dependants fail the day the claim it rests on dies.
-            if spec := r.get("require_edge_target"):
-                types, statuses = _csv(spec.get("type")), _csv(spec.get("status"))
-                # DISTINCT targets, not edges: `min: 3` states an inductive standard, and
-                # listing one finding three times is not three observations. A dangling
-                # target is not counted at all — it is already `dangling-edge`, and a typo
-                # must not stand in for evidence.
-                hits = {l["to"] for l in n.links
-                        if l["rel"] == spec["rel"] and (t := nodes.get(l["to"])) is not None
-                        and (not types or t.type in types)
-                        and (not statuses or t.status in statuses)}
-                least = spec.get("min", 1)
-                if len(hits) < least:
-                    want = ", ".join(f"{k}={v}" for k, v in spec.items() if k != "min")
-                    out.append(Violation(n.id, rid, f"{msg} ({want} -> {len(hits)} "
-                                                    f"matching, need >= {least})"))
+            # The two checks that look past the node being checked. Outgoing asks what a
+            # claim rests on — which is what fails the day that claim dies. Incoming asks
+            # what the graph did NEXT, the only way to police work that was abandoned
+            # rather than written badly.
+            for key, edges in (("require_edge_target", n.links),
+                               ("require_backlink", n.backlinks)):
+                if spec := r.get(key):
+                    hits, least = _matching(spec, edges, nodes), spec.get("min", 1)
+                    if hits < least:
+                        want = ", ".join(f"{k}={v}" for k, v in spec.items() if k != "min")
+                        out.append(Violation(n.id, rid, f"{msg} ({want} -> {hits} "
+                                                        f"matching, need >= {least})"))
 
             for fld, allowed in (r.get("require_field_one_of") or {}).items():
                 got = n.frontmatter.get(fld)

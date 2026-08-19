@@ -222,6 +222,7 @@ rules:
 | `require_result_min` | `{key: floor}` — numeric floor on a result. |
 | `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
 | `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets |
+| `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse) |
 
 **An unknown rule key is a hard error.** A rule the engine cannot understand would
 enforce nothing while reporting `✓ all rules pass` — a validator that silently accepts is

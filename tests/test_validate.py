@@ -401,3 +401,55 @@ def test_the_violation_says_what_was_wanted_and_what_was_found(graph):
                if v.rule == "methods-rest-on-live-claims")
 
     assert "0 matching, need >= 1" in msg and "status=alive" in msg
+
+
+# ------------------------------------------- rules can also look at what points AT a node
+
+TESTED = """\
+name: t
+rules:
+  - id: hypotheses-must-be-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {rel: kn:testedBy, type: experiment}
+    message: An untested hypothesis is not alive, it is unexamined.
+"""
+
+
+def test_a_hypothesis_nobody_tested_is_reported(graph):
+    """The gap `require_edge` structurally cannot cover: rules see only what a node
+    DECLARES, so they police the author of a claim and never what the graph failed to do
+    next. That is the failure an autonomous loop actually has — not writing bad nodes,
+    but abandoning good ones."""
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
+
+
+def test_a_hypothesis_with_an_experiment_passes(graph):
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+    graph.node("exp-a", "id: exp-a\ntype: experiment\nstatus: alive\nlinks:\n"
+                        "  - {rel: kn:tests, to: hyp-x}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == []
+
+
+def test_the_wrong_kind_of_neighbour_does_not_satisfy_it(graph):
+    """A hypothesis someone merely commented on is still untested."""
+    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
+    graph.node("find-a", "id: find-a\ntype: finding\nstatus: alive\nlinks:\n"
+                         "  - {rel: kn:tests, to: hyp-x}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
+
+
+def test_naming_the_forward_relation_on_a_backlink_rule_is_an_error(graph):
+    """The trap the two keys create together. `kn:tests` is what an experiment DECLARES;
+    the back-link it generates is `kn:testedBy`. A rule asking for the forward name on
+    the incoming side would load cleanly and then fail every hypothesis forever, with
+    nothing in the message saying the direction was wrong."""
+    graph.rules("name: t\nrules:\n  - id: r\n    when_type: hypothesis\n"
+                "    require_backlink: {rel: kn:tests}\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)
