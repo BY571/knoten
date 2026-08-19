@@ -114,6 +114,21 @@ Adopt existing predicates. Coin only what the field genuinely lacks.
 | `prov:wasDerivedFrom` | PROV-O | this question arose from that one |
 | `prov:used` | PROV-O | used this dataset / method |
 
+| `kn:abducedFrom` | knoten | this claim is the best explanation of that observation |
+| `kn:inducedFrom` | knoten | this claim generalises those instances |
+| `kn:deducedFrom` | knoten | this claim follows from that one by argument |
+
+The last three name the *mode* of a derivation. `prov:wasDerivedFrom` records that a
+claim came from something and never how; the hypothetico-deductive cycle distinguishes
+abduction, induction, deduction and falsification, and knoten could express only the
+fourth. `prov:wasDerivedFrom` remains as the untyped form — a graph that does not care
+about the distinction should not be forced to make one.
+
+**A mode confers no status.** An inductive generalisation is a conjecture that repeated
+observation happened to suggest; it faces the same gates as any other claim and can still
+die. A vocabulary in which "established by induction" exempted a claim from falsification
+would contradict this tool's thesis.
+
 ### Novel — this is the actual contribution
 
 The field has no way to say *"this claim survived / was killed by a named

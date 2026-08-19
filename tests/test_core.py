@@ -2,6 +2,7 @@
 could not understand, so a broken node looked like a valid one."""
 import pytest
 
+from knoten.validate import check
 from knoten.core import GraphError, load
 
 FM = """\
@@ -87,3 +88,45 @@ def test_real_numbers_still_parse_as_numbers(graph):
     r = load(graph.root)["hyp-x"].results
 
     assert r == {"acc": 0.741, "n": 1319, "neg": -3, "exp": 1.2e-3, "big": 0}
+
+
+# ------------------------------------------------------- how a claim was derived, typed
+
+@pytest.mark.parametrize("rel,inverse", [
+    ("kn:abducedFrom", "kn:hadAbduction"),
+    ("kn:inducedFrom", "kn:hadInduction"),
+    ("kn:deducedFrom", "kn:hadDeduction"),
+])
+def test_the_mode_of_inference_is_a_relation_with_a_back_link(graph, rel, inverse):
+    """knoten had one `prov:wasDerivedFrom`, which records THAT a claim came from
+    something and never HOW. Falsification was the only mode of the hypothetico-deductive
+    cycle it could express; these are the other three. Naming follows PROV-O's own
+    `wasDerivedFrom` / `hadDerivation` pair rather than inventing a shape."""
+    graph.node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", f"id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        f"  - {{rel: {rel}, to: find-a}}")
+
+    nodes = load(graph.root)
+
+    assert [b["rel"] for b in nodes["find-a"].backlinks] == [inverse]
+    assert "unknown-relation" not in [v.rule for v in check(nodes, graph.root)]
+
+
+def test_a_mode_confers_no_status(graph):
+    """Popper's constraint, kept structural: an inductive generalisation is a conjecture
+    that repeated observation happened to suggest. If declaring the mode exempted a claim
+    from anything, the tool would be contradicting its own thesis."""
+    graph.rules("""\
+name: t
+rules:
+  - id: live-claims-cite-a-gate
+    when_status: alive
+    when_type: hypothesis
+    require_edge: kn:survivedGate
+    message: An unchallenged claim is not a finding, it is a hope.
+""")
+    graph.node("find-a", "id: find-a\ntype: finding\nstatus: alive")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
+                        "  - {rel: kn:inducedFrom, to: find-a}")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["live-claims-cite-a-gate"]

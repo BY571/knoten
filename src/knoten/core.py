@@ -43,6 +43,13 @@ INVERSE = {
     "npx:retracts":        "npx:retractedBy",
     "npx:supersedes":      "npx:supersededBy",
     "prov:wasDerivedFrom": "prov:hadDerivation",
+    # How a claim was reached, not merely that it was. `prov:wasDerivedFrom` records the
+    # fact of derivation; these name the mode. Falsification — the fourth mode of the
+    # hypothetico-deductive cycle — is the gate pair above. Naming follows PROV-O's own
+    # wasDerivedFrom/hadDerivation shape rather than inventing one.
+    "kn:abducedFrom":      "kn:hadAbduction",
+    "kn:inducedFrom":      "kn:hadInduction",
+    "kn:deducedFrom":      "kn:hadDeduction",
     "prov:used":           "prov:wasUsedBy",
 }
 GENERATED = set(INVERSE.values())
