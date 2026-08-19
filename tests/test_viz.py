@@ -173,3 +173,13 @@ def test_open_hands_the_file_to_the_browser(small, monkeypatch, tmp_path):
     main(["viz", "-o", str(tmp_path / "g.html"), "--open"])
 
     assert opened and opened[0].startswith("file://")
+
+
+def test_declared_meanings_reach_the_legend(graph):
+    """The legend explains each column in the graph's own words. Before this, `node_types`
+    could only be a list, so the branch that reads meanings could never run: a graph that
+    declared them failed to load at all."""
+    graph.rules("name: t\nnode_types:\n  hypothesis: a falsifiable claim\nrules: []\n")
+    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open")
+
+    assert viz.payload(graph.root)["graph"]["vocab"] == {"hypothesis": "a falsifiable claim"}

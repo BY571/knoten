@@ -181,6 +181,44 @@ type that was not there before, and the hub count stepping up as the graph grows
 (at roughly 7, 13, 21, 31 nodes). A map that reshuffles for no reason is a map you cannot
 learn; one that reshuffles when the graph's shape changes is telling you something.
 
+## How a graph is shaped
+
+knoten defines no research vocabulary. `hypothesis`, `finding` and the rest mean whatever
+your `graph.yaml` says they mean — the core checks `node_types` for membership and
+nothing else. A shape that recurs:
+
+```
+source ──▶ idea ──▶ hypothesis ──▶ experiment ──▶ finding
+             ▲                                       │
+             └────── findings open new ideas ────────┘
+
+gate    stands outside the loop: the bar every claim must survive
+```
+
+The names above are a convention, not a rule — `knoten viz` lays columns out in that
+order and puts anything it does not recognise after the ones it does. (`method` is
+deliberately unused: the rename in #15 freed the word for "the approach derived from
+findings that survived", and nothing claims it yet.)
+
+Nothing is one-to-one. One idea yields several hypotheses, one hypothesis several
+experiments, one experiment several findings, and a finding may rest on several
+experiments. That already works — links are a list and back-links accumulate.
+
+**Every edge points from the new node to the one it depends on.** A claim points at the
+gate it faced; an experiment at the hypothesis it tests; a claim at what it was derived
+from. Back-links are generated from the forward edge and are never authored: writing the
+generated name — `kn:testedBy` where you meant `kn:tests` — is refused as
+`authored-backlink`. Writing the *right* relation on the *wrong* node is not detectable at
+all: the back-link lands, the graph reports itself healthy, and the claim now says the
+opposite of what you meant. Get the subject right. A correction is a *new* node that
+supersedes or retracts the old one, never an edit to it.
+
+Where a derivation's kind matters, say which it is, so a rule can ask something of one
+kind without asking it of all: `kn:explains` for the best account of an observation,
+`kn:generalises` for a claim over instances, `kn:followsFrom` for one that argues from a
+premise. Plain `prov:wasDerivedFrom` stays available when the distinction is not worth
+drawing.
+
 Your graph also declares its own vocabulary, and that is enforced too:
 
 ```yaml
@@ -195,6 +233,23 @@ tool exists to prevent. Both are now violations. So is `tags: [decodng]`: tags a
 axis you filter a big graph on, so a typo'd tag leaves the node in the graph but outside
 every view of it. Declare no `tags:` and tagging stays free — the core invents no
 vocabulary, it only enforces the one you declared.
+
+Because it invents none, the only place your words can be *defined* is your own graph.
+`node_types` takes a mapping when you want to write those definitions down:
+
+```yaml
+node_types:
+  source:     external material the work starts from — a paper, dataset or search
+  idea:       what you took from a source; a direction, not yet a testable claim
+  hypothesis: a falsifiable claim derived from an idea
+  experiment: the test built to verify or falsify a hypothesis
+  finding:    what the experiment showed, expected or not — new ideas come from these
+  gate:       a standing rule every claim must survive; a bar, not a stage
+```
+
+The keys are the vocabulary and are enforced exactly as the list form is. The values are
+for whoever arrives at your graph next — including the agent working in it, and
+`knoten viz`, which shows each column's meaning in your words rather than inventing one.
 
 A rule key — or a config key — `knoten` doesn't recognise is a **hard error**, not a
 shrug. Config that enforces nothing is decoration, and a rule that enforces nothing is
