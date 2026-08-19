@@ -9,6 +9,40 @@ description: Use when working in a knoten research graph — before starting an
 
 A research graph that remembers what did NOT work. Run `knoten` in the graph directory.
 
+## How the graph is shaped
+
+`graph.yaml` declares the node kinds and, if the author wrote them, what each word means.
+**Read it first** — knoten defines none of these words, so `hypothesis` means whatever
+that graph says it means. A common shape:
+
+    source ──▶ idea ──▶ hypothesis ──▶ experiment ──▶ finding
+                 ▲                                       │
+                 └────── findings open new ideas ────────┘
+
+    gate    stands outside the loop: the bar every claim must survive
+    method  the answer derived from findings that are still alive
+
+Nothing is one-to-one: one idea yields several hypotheses, one hypothesis several
+experiments, one experiment several findings, and a finding may rest on several
+experiments. Write the node you have; the edges carry the structure.
+
+## Which way an edge points
+
+An edge always points from the NEW node to the one it depends on. Getting this backwards
+makes the node invisible from the other side, because back-links are generated from the
+forward edge and never authored.
+
+    kn:survivedGate / kn:killedByGate   claim ──▶ the gate it faced
+    kn:tests                            experiment ──▶ the hypothesis it tests
+    kn:explains                         claim ──▶ the observation it accounts for
+    kn:generalises                      claim ──▶ the instances behind it
+    kn:followsFrom                      claim ──▶ the premise it argues from
+    prov:wasDerivedFrom / prov:used     claim ──▶ what it came from / used
+    mp:supports / mp:challenges         claim ──▶ the claim it bears on
+    npx:supersedes / npx:retracts       the newer node ──▶ the one it replaces
+
+A correction is a NEW node that supersedes or retracts the old one, never an edit to it.
+
 ## The loop
 
 1. `knoten frontier` — what is worth doing next: open work, dead ends whose stated

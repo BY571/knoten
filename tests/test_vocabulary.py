@@ -181,3 +181,41 @@ def test_the_kind_of_a_derivation_is_a_relation_with_a_back_link(graph, rel, inv
 
     assert [b["rel"] for b in nodes["find-a"].backlinks] == [inverse]
     assert check(nodes, graph.root) == []
+
+
+# ------------------------------------- a graph may also say what its own words MEAN
+
+MEANINGS = """\
+name: t
+node_types:
+  hypothesis: a falsifiable claim derived from an idea
+  gate: a standing rule every claim must survive
+rules: []
+"""
+
+
+def test_a_mapping_declares_the_vocabulary_and_its_meaning(graph):
+    """knoten defines none of these words — `validate` checks `node_types` for membership
+    and nothing else — so the only place `hypothesis` can be defined is the graph that
+    uses it. As a bare list a graph can say WHICH words are legal but never what they
+    mean, and a reader arriving at somebody's graph has nothing to read."""
+    graph.rules(MEANINGS).node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open")
+
+    assert check(load(graph.root), graph.root) == []
+
+
+def test_the_meanings_form_still_enforces_membership(graph):
+    """The keys ARE the vocabulary. If declaring meanings quietly stopped enforcing them,
+    writing documentation would cost you your typo checking."""
+    graph.rules(MEANINGS).node("x", "id: x\ntype: nonsense\nstatus: open")
+
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["unknown-type"]
+
+
+def test_a_meaning_that_is_not_a_sentence_is_rejected(graph):
+    """`hypothesis:` with nothing after it is the natural half-finished edit, and it would
+    otherwise declare a type whose meaning renders as the word None."""
+    graph.rules("name: t\nnode_types:\n  hypothesis:\nrules: []\n")
+
+    with pytest.raises(GraphError):
+        check(load(graph.root), graph.root)

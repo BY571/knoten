@@ -58,8 +58,20 @@ def load_config(root: Path) -> dict:
             f"graph.yaml: unknown key(s) {', '.join(sorted(unknown))}. "
             f"Known keys: {', '.join(sorted(GRAPH_KEYS))}"
         )
+    # `node_types` may also be a MAPPING of type -> what that word means in this graph.
+    # Membership is checked against the keys either way — `in` and iteration over a dict
+    # give exactly that — so nothing downstream changes. The values are for the reader and
+    # for `knoten viz`, because knoten defines none of these words itself.
+    if isinstance(cfg.get("node_types"), dict):
+        for k, v in cfg["node_types"].items():
+            if not isinstance(v, str) or not v.strip():
+                raise GraphError(
+                    f"graph.yaml: `node_types` entry '{k}' must be a one-line meaning, "
+                    f"got {v!r}. Use a plain list if you do not want to write meanings.")
+
     for key in ("node_types", "statuses", "tags"):
-        if key in cfg and not isinstance(cfg[key], list):
+        if key in cfg and not isinstance(cfg[key], (list, dict) if key == "node_types"
+                                         else list):
             raise GraphError(f"graph.yaml: `{key}` must be a list, got {cfg[key]!r}")
 
     rules = cfg.get("rules") or []

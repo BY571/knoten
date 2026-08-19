@@ -205,6 +205,8 @@ def payload(root: Path) -> dict:
     pos, walls = _map(nodes)
     columns = _columns(nodes)
 
+    # A graph may declare `node_types` as a plain list, or as a mapping of type -> what
+    # that word means here. Only the second can fill the legend.
     types = cfg.get("node_types")
     return {
         "root": root.name,
