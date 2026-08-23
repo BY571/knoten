@@ -56,6 +56,12 @@ Those names are the order `knoten viz` lays columns out in; a type it does not k
 after the ones it does. Links are a list, so one hypothesis can carry several experiments
 and several findings.
 
+**Every stage names the one before it.** One idea can produce several hypotheses and one
+hypothesis several experiments, but the requirement runs the other way and is not optional:
+every hypothesis cites an idea, every experiment cites a hypothesis it tests, every idea
+cites the question, a source or the finding that prompted it. A node with nothing behind it
+cannot be traced back to why anyone did the work.
+
 **One node is one stage.** The commonest way to get this wrong is to write the claim, the
 run and the number into a single hypothesis: `results:` and a `## The result` section on a
 node whose type says it is a claim. Split them — the hypothesis states what you believe
@@ -153,6 +159,22 @@ comes back, the frontier gets shorter, and the commit tells you exactly what you
 refused compression costs nothing but the attempt; a lazy one cannot land, because the
 bar is checked, so every general node that exists is one the graph considers stronger
 than what it replaced.
+
+## Stage prompts
+
+`src/knoten/prompts/` holds one prompt per stage: how to write a `source`, an `idea`, a
+`hypothesis`, an `experiment`, a `finding`, a `gate`, and the root `question`. Read them
+at the start of a turn, then follow the one the next action asks for, and do not write a
+node from a prompt whose type it is not. Each prompt names the stage before it, lists the
+scaffold sections to fill, and points at the kill or reopen field that stage carries. They
+are the per-stage "write it like this"; the loop itself is above.
+
+## Ideas a human dropped in
+
+`knoten idea "<one sentence>"` files an idea as `status: open`, so anything a person
+wants looked at shows up at the top of `knoten frontier` alongside your own open work.
+Treat those the same way: read the sentence, derive hypotheses from it, and if you decide
+against it, close it with a reason rather than leaving it open forever.
 
 ## When you run out of ideas
 

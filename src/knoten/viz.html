@@ -30,6 +30,8 @@ header .sub{display:block;margin-top:4px;font:600 9px/1 var(--mono);letter-spaci
   color:var(--alive);display:flex;align-items:center;gap:6px}
 .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--alive);
   animation:pulse 2s ease-in-out infinite}
+.live.stale{color:var(--dead);text-transform:none;letter-spacing:.02em}
+.live.stale::before{background:var(--dead);animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.live::before{animation:none}}
 .stats{margin-left:auto;display:flex;align-items:baseline;gap:18px;min-width:0}
@@ -79,6 +81,14 @@ body.map .card,body.map .colhead{display:none}
 .card:focus-visible{outline:2px solid var(--active);outline-offset:2px}
 .card.on{border-color:var(--ink);box-shadow:0 4px 14px #15161a1f}
 .card.faded{opacity:.34}
+.card.broken{border-color:var(--dead);box-shadow:0 0 0 1px var(--dead) inset}
+.card .broke{display:block;margin-top:7px;padding-top:6px;border-top:1px solid var(--line);
+  font:600 10px var(--mono);letter-spacing:.03em;color:var(--dead)}
+#dots circle.cell.broken{stroke:var(--dead);stroke-width:2.5}
+#panel .broke{margin-top:13px;border-left:4px solid var(--dead);background:#FDF6F4;
+  border-radius:0 8px 8px 0;padding:10px 13px}
+#panel .broke h3{margin:0 0 4px;color:var(--dead)}
+#panel .broke p{margin:0 0 6px;font-size:12.5px;color:var(--ink-2)}
 .card .ttl{display:-webkit-box;font-size:12.5px;line-height:1.35;font-weight:520;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card.closed .ttl{text-decoration:line-through;text-decoration-color:var(--dead);color:var(--ink-2)}
@@ -93,8 +103,13 @@ body.map .card,body.map .colhead{display:none}
 .rail .cnt{margin-left:auto;font:600 10px/1 var(--mono);color:var(--ink-3);
   font-variant-numeric:tabular-nums}
 
-#panel{width:390px;border-left:1px solid var(--line);background:var(--surface);
-  overflow:auto;padding:20px 22px 60px}
+#panel{width:var(--panelw,390px);flex:none;border-left:1px solid var(--line);
+  background:var(--surface);overflow:auto;padding:20px 22px 60px}
+#grip{flex:none;width:7px;cursor:col-resize;background:var(--paper);position:relative}
+#grip::after{content:"";position:absolute;inset:0 3px;background:var(--line-2);opacity:0;
+  transition:opacity .12s}
+#grip:hover::after,#grip.dragging::after{opacity:1}
+body.resizing{cursor:col-resize;user-select:none}
 #panel .eyebrow{font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
   color:var(--ink-3)}
 #panel h2{margin:9px 0 0;font-size:19px;line-height:1.28;font-weight:620;letter-spacing:-.02em}
@@ -136,6 +151,8 @@ dd{margin:0;font-variant-numeric:tabular-nums}
 .link:focus-visible{outline:2px solid var(--active);outline-offset:-2px}
 .link small{display:block;color:var(--ink-3);font-size:11px}
 .blank{margin-top:64px;text-align:center;color:var(--ink-3);font-size:13px}
+#panel h3.field{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);margin:.7em 0 .25em}
 
 #clegend,#klegend{position:absolute;right:16px;bottom:16px;max-width:390px;
   background:#F8F6F1F2;border:1px solid var(--line);border-radius:9px;padding:11px 13px}
@@ -203,12 +220,19 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
       </details>
       <footer>drag to pan · wheel to zoom · <b>f</b> fit · <b>v</b> switch · <b>esc</b> clear</footer>
     </div>
+    <div id=grip title="drag to resize · double-click to reset"></div>
     <aside id=panel><div class=blank>Select a node to read its record.</div></aside>
   </main>
 </div>
 
 <script>
 const DATA = __KNOTEN_DATA__;
+
+// The scaffold the record panel rewrites a node into. Matched against the agent's own
+// section titles (its aliases), rendered under this label in this fixed order. Kept here
+// rather than duplicated from Python so there is one list, in the wire, that the panel
+// reads.
+const PANEL_SECTIONS = __PANEL_SECTIONS__;
 
 const VC = {alive:"var(--alive)", dead:"var(--dead)", active:"var(--active)",
             open:"var(--open)", retracted:"var(--held)", superseded:"var(--held)",
@@ -275,7 +299,9 @@ DATA.columns.forEach((c, i) => {
 
 const cardOf = {}, dotOf = {};
 for (const n of DATA.nodes){
-  const b = el("button", "card" + (CLOSED.includes(n.status) ? " closed" : ""));
+  const bad = (DATA.violations || {})[n.id] || [];
+  const b = el("button", "card" + (CLOSED.includes(n.status) ? " closed" : "")
+                              + (bad.length ? " broken" : ""));
   b.style.left = n.columns[0] + "px"; b.style.top = n.columns[1] + "px";
   b.style.setProperty("--edge", vc(n));
   b.append(el("span","verdict", n.status || "?"), el("span","ttl", n.title || n.id),
@@ -293,12 +319,15 @@ for (const n of DATA.nodes){
     rail.append(cnt);
     b.append(rail);
   }
+  if (bad.length) b.append(el("span", "broke",
+    `✗ ${bad.length} rule${bad.length > 1 ? "s" : ""} this graph declared`));
   b.onclick = () => select(n.id);
   b.onmouseenter = () => focus(n.id); b.onmouseleave = () => focus(sel);
   stage.append(b); cardOf[n.id] = b;
 
   const g = mk("g", {}); g.style.cursor = "pointer";
-  g.append(mk("circle", {class:"halo", r:0}), mk("circle", {class:"cell", r:6}));
+  g.append(mk("circle", {class:"halo", r:0}),
+           mk("circle", {class:"cell" + ((DATA.violations||{})[n.id] ? " broken" : ""), r:6}));
   const t = mk("text", {y:19}); g.append(t);
   g.onclick = () => select(n.id);
   g.onmouseenter = () => focus(n.id); g.onmouseleave = () => focus(sel);
@@ -463,20 +492,46 @@ function select(id){
   sel = id; const n = byId[id];
   panel.textContent = ""; panel.scrollTop = 0;
   panel.append(el("div", "eyebrow", n.type), el("h2", null, n.title || n.id), lifecycle(n));
+  const broke = (DATA.violations || {})[n.id] || [];
+  if (broke.length){
+    const box = el("div", "broke");
+    box.append(el("h3", null, `breaks ${broke.length} rule${broke.length > 1 ? "s" : ""}`));
+    for (const v of broke) box.append(el("p", null, `[${v.rule}] ${v.message}`));
+    panel.append(box);
+  }
   const meta = el("div", "meta");
   (n.tags || []).forEach(t => meta.append(el("span", "tag", t)));
   if (n.created) meta.append(el("span", "tag", n.created));
   meta.append(el("span", "tag", n.id));
   panel.append(meta);
-  for (const title of CALLOUT){
-    const s = n.sections.find(x => x.title === title && x.text);
+  const seen = new Set();
+  // 1. The scientific scaffold, in a fixed order and relabeled, so two findings never
+  //    disagree on shape. A label is matched against the aliases the author might have
+  //    written ("kill criterion", "kill condition", "when this is wrong"), then rendered
+  //    under the canonical label.
+  for (const p of PANEL_SECTIONS){
+    const s = n.sections.find(x => !seen.has(x.title) && p.aliases.includes(x.title)
+                                    && x.text);
     if (!s) continue;
+    seen.add(s.title);
+    panel.append(el("h3", "field", p.label));
+    panel.append(el("p", null, s.text));
+  }
+  // 2. The two payoffs, matched by prefix so the finding's merged "Why it died / why it
+  //    held" heading still lands here and renders under the canonical label.
+  for (const title of CALLOUT){
+    const s = n.sections.find(x => !seen.has(x.title) && x.title.startsWith(title)
+                                    && x.text);
+    if (!s) continue;
+    seen.add(s.title);
     const c = el("div", "callout" + (title === CALLOUT[1] ? " offer" : ""));
     c.append(el("h3", null, title), el("p", null, s.text));
     panel.append(c);
   }
+  // 3. Any prose the author wrote that matched no scaffold field. Kept, in document
+  //    order, so nothing is ever lost - only reorganised.
   for (const s of n.sections){
-    if (!s.text || CALLOUT.includes(s.title)) continue;
+    if (!s.text || seen.has(s.title) || CALLOUT.includes(s.title)) continue;
     panel.append(el("h3", null, s.title));
     panel.append(el("p", null, s.text));
   }
@@ -555,6 +610,33 @@ for (const id of ["clegend", "klegend"]){
   }
 }
 
+// ---------------- a record you can widen ----------------
+// Some post-mortems are a page of prose and a results table. Remembered across reloads
+// for the same reason the legend is: `--watch` must not undo what you just set.
+{
+  const grip = document.getElementById("grip"), KEY = "knoten:panelw", DEFAULT = 390;
+  const clamp = w => Math.max(300, Math.min(w, innerWidth - 320));
+  const setW = w => document.documentElement.style.setProperty("--panelw", clamp(w) + "px");
+  const saved = parseFloat(sessionStorage.getItem(KEY) || "");
+  if (saved) setW(saved);
+
+  let from = null;
+  grip.addEventListener("mousedown", e => {
+    from = {x: e.clientX, w: panel.getBoundingClientRect().width};
+    grip.classList.add("dragging"); document.body.classList.add("resizing");
+    e.preventDefault();
+  });
+  addEventListener("mousemove", e => { if (from) setW(from.w + (from.x - e.clientX)); });
+  addEventListener("mouseup", () => {
+    if (!from) return;
+    from = null; grip.classList.remove("dragging"); document.body.classList.remove("resizing");
+    sessionStorage.setItem(KEY, panel.getBoundingClientRect().width);
+  });
+  grip.addEventListener("dblclick", () => {
+    setW(DEFAULT); sessionStorage.setItem(KEY, DEFAULT);
+  });
+}
+
 // ---------------- pan, zoom, view ----------------
 let view = {x:0, y:0, k:1}, drag = null;
 const apply = () => stage.style.transform =
@@ -622,7 +704,13 @@ if (RELOAD_MS){
   panel.addEventListener("mouseleave", () => reading = false);
   (function tick(){ setTimeout(() => reading ? tick() : location.reload(), RELOAD_MS); })();
 
-  const live = el("span", "live", "live");
+  // The badge has to be able to say NO. A watcher that died leaves the page reloading a
+  // frozen file for ever, and a green "live" on stale data is worse than no badge.
+  const BUILT_AT = __BUILT_AT__ * 1000;
+  const stale = Date.now() - BUILT_AT > Math.max(4 * RELOAD_MS, 30000);
+  const live = el("span", "live" + (stale ? " stale" : ""),
+    stale ? `stale — last built ${new Date(BUILT_AT).toLocaleTimeString()}` : "live");
+  live.title = stale ? "the --watch process is not running; this page is not updating" : "";
   document.querySelector("header .viewsw").after(live);
 }
 /*__WATCH__*/

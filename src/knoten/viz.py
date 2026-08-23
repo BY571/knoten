@@ -15,10 +15,11 @@ and a `layout.json` in git would be a merge conflict generator with ten agents a
 import hashlib
 import json
 import math
+import time
 from pathlib import Path
 
 from .core import GATE_TYPE, GraphError, load, section
-from .validate import load_config
+from .validate import check, load_config
 
 HERE = Path(__file__).parent
 
@@ -198,6 +199,38 @@ def layout(nodes: dict) -> dict:
 SECTION_LIMIT = 4000
 
 
+# The scaffold the panel lays a node's record into. A node body is free-form: an agent
+# writes "kill criterion", "kill condition", or "when this is wrong" and any of them is
+# the same field, so each canonical LABEL is matched against the aliases the author might
+# have used, and rendered under the label in this fixed order. The label is ours, not the
+# author's, which is what keeps two findings from disagreeing on shape.
+#
+# It shapes a claim and its verdict. A node whose headings match no label (a source, a
+# gate) renders under the agent's own headings in document order, so nothing is lost -
+# only reorganised where it helps.
+PANEL_SECTIONS = [
+    {"label": "Claim", "aliases": ["The claim", "The idea", "The direction"]},
+    {"label": "Scope", "aliases": [
+        "What this does not test", "What it excludes", "What is out of scope",
+        "Out of scope", "What it is not"]},
+    {"label": "Rationale", "aliases": [
+        "Why it might be true", "Why it might work", "Why it might hold", "Why here",
+        "Rationale", "Why this holds"]},
+    {"label": "Risk", "aliases": [
+        "Why it might be false", "Why it fails", "Why it won't work", "Risks", "Doubts",
+        "Why it might not hold"]},
+    {"label": "Method", "aliases": [
+        "The setup", "Test", "Method", "The test", "How I tested it", "Design",
+        "How it was tested"]},
+    {"label": "Result", "aliases": [
+        "Result", "The outcome", "Conclusion", "What I found", "The result"]},
+    {"label": "Evidence", "aliases": [
+        "Evidence", "The number", "Numbers", "The figures"]},
+    {"label": "Kill criterion", "aliases": [
+        "Kill criterion", "Kill condition", "When this is wrong", "Kill threshold"]},
+]
+
+
 def _clip(text: str) -> str:
     """Say when the section is cut. The panel folds long prose behind "show more", which
     would otherwise present a truncated section as the whole of it."""
@@ -217,6 +250,12 @@ def payload(root: Path) -> dict:
 
     # A graph may declare `node_types` as a plain list, or as a mapping of type -> what
     # that word means here. Only the second can fill the legend.
+    # What the graph's own rules say is wrong with it. Without this the page renders a
+    # graph that breaks its own rules exactly as it renders a clean one.
+    broken = {}
+    for v in check(nodes, root):
+        broken.setdefault(v.node, []).append({"rule": v.rule, "message": v.message})
+
     types = cfg.get("node_types")
     return {
         "root": root.name,
@@ -225,6 +264,7 @@ def payload(root: Path) -> dict:
         "gate_types": sorted(gates),
         "shelf_types": sorted(shelves),
         "walls": walls,
+        "violations": broken,
         "graph": {
             "name": cfg.get("name"),
             # `node_types` is a list when a graph only declares its vocabulary, and a
@@ -276,13 +316,17 @@ def render(root: Path, reload_ms: int = 0) -> str:
     blob = json.dumps(payload(root), default=str).replace("<", "\\u003c")
     html = (HERE / "viz.html").read_text(encoding="utf-8")
     if reload_ms:
-        html = html.replace("__RELOAD_MS__", str(int(reload_ms)))
+        # Stamped only under --watch. A static export must stay byte-identical for the
+        # same graph, or `git diff` on a committed page is noise.
+        html = (html.replace("__RELOAD_MS__", str(int(reload_ms)))
+                    .replace("__BUILT_AT__", str(int(time.time()))))
     else:
         # Cut the block out rather than leave it behind a falsy guard. A file you emailed
         # someone should contain no code that reloads it, not merely code that declines to.
         a, b = html.index("/*__WATCH__*/"), html.rindex("/*__WATCH__*/")
         html = html[:a] + html[b + len("/*__WATCH__*/"):]
-    return html.replace("__KNOTEN_DATA__", blob)
+    return (html.replace("__PANEL_SECTIONS__", json.dumps(PANEL_SECTIONS))
+                 .replace("__KNOTEN_DATA__", blob))
 
 
 def write(root: Path, dest: Path, reload_ms: int = 0) -> Path:
