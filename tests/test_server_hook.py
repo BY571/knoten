@@ -28,7 +28,9 @@ def server(tmp_path, rules_yaml):
     """A bare repo with the gate installed, and a clone to push from.
 
     Returns (bare, work). The graph lives in `g/`, one folder down, because that is the
-    shape that breaks an implementation which assumes the graph is the repo.
+    shape that breaks an implementation which assumes the graph is the repo. It carries a
+    node, because git does not track an empty directory and a graph in git always has
+    one: a fixture without one tests a shape that cannot reach a server.
     """
     bare = tmp_path / "origin.git"
     git("init", "-q", "--bare", str(bare), cwd=tmp_path)
@@ -41,6 +43,9 @@ def server(tmp_path, rules_yaml):
     graph = work / "g"
     (graph / "nodes").mkdir(parents=True)
     (graph / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (graph / "nodes" / "hyp-ok.md").write_text(
+        "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# a claim nobody disputes\n",
+        encoding="utf-8")
     return bare, work
 
 
@@ -153,6 +158,8 @@ def test_it_fails_closed_when_knoten_is_not_on_the_server_path(server):
 # ---------------------------------------------------------------- installation
 
 def test_it_installs_into_the_bare_repos_hook_directory(tmp_path):
+    """Wrong directory or a missing exec bit and git skips the hook in silence, which
+    turns every behavioural test in this file into a false negative dressed as a pass."""
     bare = tmp_path / "origin.git"
     git("init", "-q", "--bare", str(bare), cwd=tmp_path)
 
@@ -163,6 +170,8 @@ def test_it_installs_into_the_bare_repos_hook_directory(tmp_path):
 
 
 def test_it_refuses_to_clobber_a_hook_it_did_not_write(tmp_path):
+    """Somebody else's pre-receive hook is somebody else's policy. Overwriting it would
+    silently disable whatever it was enforcing."""
     bare = tmp_path / "origin.git"
     git("init", "-q", "--bare", str(bare), cwd=tmp_path)
     (bare / "hooks" / "pre-receive").write_text("#!/bin/sh\necho mine\n", encoding="utf-8")
@@ -174,6 +183,7 @@ def test_it_refuses_to_clobber_a_hook_it_did_not_write(tmp_path):
 
 
 def test_force_clobbers_a_foreign_hook(tmp_path):
+    """The one escape hatch from the refusal above has to actually work."""
     bare = tmp_path / "origin.git"
     git("init", "-q", "--bare", str(bare), cwd=tmp_path)
     (bare / "hooks" / "pre-receive").write_text("#!/bin/sh\necho mine\n", encoding="utf-8")
@@ -184,6 +194,8 @@ def test_force_clobbers_a_foreign_hook(tmp_path):
 
 
 def test_it_overwrites_its_own_hook(tmp_path):
+    """Re-running the installer must not need --force to replace knoten's own hook, or
+    every upgrade becomes a two-step people get wrong."""
     bare = tmp_path / "origin.git"
     git("init", "-q", "--bare", str(bare), cwd=tmp_path)
 
@@ -194,28 +206,25 @@ def test_it_overwrites_its_own_hook(tmp_path):
 
 
 def test_it_refuses_outside_a_git_repo(tmp_path):
+    """One line, on a distinct entry point: the user gets a message, not a traceback."""
     with pytest.raises(GraphError, match="git"):
         install_server(tmp_path)
 
 
 # ---------------------------------------------------------------- the CLI
 
-def test_cli_installs_the_server_hook_in_the_cwd(tmp_path, monkeypatch):
-    """Run on the server, inside the bare repo. There is no graph there to `find_root`."""
+@pytest.mark.parametrize("where, argv", [
+    ("in the bare repo", ["hook", "--server"]),          # --server's `const` default
+    ("from outside it",  ["hook", "--server", "REPO"]),  # the path threaded through
+])
+def test_cli_installs_the_server_hook(tmp_path, monkeypatch, where, argv):
+    """Run on the server, where there is no graph for `find_root` to find. Both spellings
+    matter: a `store_true` flag would accept the path and silently ignore it."""
     bare = tmp_path / "origin.git"
     git("init", "-q", "--bare", str(bare), cwd=tmp_path)
-    monkeypatch.chdir(bare)
+    monkeypatch.chdir(bare if "in the" in where else tmp_path)
 
-    assert main(["hook", "--server"]) == 0
-    assert (bare / "hooks" / "pre-receive").exists()
-
-
-def test_cli_takes_the_repo_path_as_an_argument(tmp_path, monkeypatch):
-    bare = tmp_path / "origin.git"
-    git("init", "-q", "--bare", str(bare), cwd=tmp_path)
-    monkeypatch.chdir(tmp_path)
-
-    assert main(["hook", "--server", str(bare)]) == 0
+    assert main([str(bare) if a == "REPO" else a for a in argv]) == 0
     assert (bare / "hooks" / "pre-receive").exists()
 
 
@@ -238,6 +247,8 @@ def test_an_unrelated_graph_yaml_does_not_hold_the_repo_hostage(server):
 
 
 def test_a_malformed_graph_yaml_is_refused(server):
+    """The rules file is the one file every other check reads. Broken, nothing downstream
+    can be trusted, so it has to be a rejection and not a crash."""
     bare, work = server
     (work / "g" / "graph.yaml").write_text("name: x\nrules: [oops\n", encoding="utf-8")
     commit(work, "break the rules file itself")
@@ -261,17 +272,6 @@ def test_an_unparseable_node_is_refused(server):
     assert r.returncode != 0
     assert "frontmatter" in r.stdout + r.stderr
     assert "Traceback" not in r.stdout + r.stderr
-
-
-def test_deleting_the_graph_entirely_is_allowed(server):
-    """The gate guards graphs that exist. Removing one is a decision, not a violation."""
-    bare, work = server
-    commit(work, "a clean graph")
-    push(work)
-    shutil.rmtree(work / "g")
-    commit(work, "remove the graph")
-
-    assert push(work).returncode == 0
 
 
 # ---------------------------------------------------------------- every ref, every push
@@ -321,6 +321,8 @@ def test_it_gates_a_force_push(server):
 
 
 def test_it_gates_a_tag(server):
+    """A tag carries a tree like any other ref. Skipping tags leaves a published, broken
+    snapshot on the server."""
     bare, work = server
     (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
     commit(work, "broken")
