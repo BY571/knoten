@@ -70,6 +70,10 @@ or retracts the old one, never an edit to it.
 
 ## Before you work
 
+If the graph is shared, `git pull` FIRST. Every read below answers from the files on
+disk, so a stale clone reports work a collaborator settled days ago as still open. That
+is the exact failure this graph exists to prevent, arriving through the back door.
+
 1. `knoten frontier` — what is worth doing next: open work, dead ends whose stated
    reopen condition may now hold, and gates nothing has been through.
 2. `knoten index` — the whole graph, one line per node. Read it and judge relatedness

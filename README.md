@@ -16,7 +16,8 @@ It exists because research loops forget, whether they are run by a human or an a
 They re-propose an idea that was settled last month under a different name, and they file
 the wins while the failures evaporate. knoten makes the failure the artifact: a claim
 cannot be marked alive unless it cites a test it survived, and a dead end has to say what
-would reopen it. Your graph declares its own rules in `graph.yaml`; the tool enforces them
+would reopen it. One graph can be shared by a whole team, humans and agents alike, with
+those rules enforced on the server rather than on trust. Your graph declares its own rules in `graph.yaml`; the tool enforces them
 and knows nothing else about your field.
 
 The point is to run it **before** the work, not after. `knoten frontier` says what is worth
@@ -89,6 +90,7 @@ knoten attach hyp-idea run.py accuracy.png       # the code and the plot
 
 knoten validate               # enforce this graph's rules
 knoten hook                   # make `git commit` refuse a broken graph
+knoten hook --server g.git    # ...and `git push`, for every contributor
 knoten viz --open             # the whole graph as one HTML file
 ```
 
@@ -132,6 +134,58 @@ node_types:
 statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation]
 ```
+
+## A shared graph
+
+A graph is a folder in git, so a whole lab can work in one. That changes what the graph
+is. A personal record of what died becomes a shared one, and "has this been tried?" stops
+quietly meaning "have *I* tried this?".
+
+```bash
+# on any box you and your collaborators can reach
+git init --bare lab-graph.git
+knoten hook --server lab-graph.git   # the gate, on the repo everyone pushes to
+
+# everyone else, human or agent
+git clone you@box:lab-graph.git
+```
+
+`knoten hook` gates the person who ran it, in the clone they ran it in, and
+`git commit --no-verify` walks past it. `knoten hook --server` installs a `pre-receive`
+hook on the repo everyone pushes *to*: it unpacks the tree being pushed, finds every
+graph in it, runs `knoten validate` on each, and refuses the push if any fails. No CI, no
+runner, no minutes, and nobody can skip it from a laptop. If knoten is missing from the
+server it refuses rather than waving the push through, because a gate that cannot check
+is not a gate.
+
+This is what makes the rules worth writing down. On one machine `graph.yaml` is a note to
+self you can always overrule. On a shared repo it is the contract, enforced identically
+for everyone, including whoever wrote it.
+
+**Agents scale the same way.** Several agents on several machines can run the same loop
+against the same graph: pull, read `knoten frontier`, do the work, push the claim. The
+gate refuses whatever breaks the rules regardless of which machine wrote it, so an agent
+cannot file a hopeful result as a finding any more than you can.
+
+**Nodes go straight to master.** The rules are the reviewer, and putting a human in front
+of every node kills the loop this tool exists to speed up. `graph.yaml` is the file worth
+being slow about: a rule is evaluated against every node that already exists, so changing
+one can kill claims committed months ago. Protect that file, not the graph.
+
+Two people working at once do not collide. An edge is declared once, on the subject, and
+back-links are generated at load time, so adding connections touches two different files
+and git merges them. Pull before you work: a frontier computed from a week-old clone will
+confidently recommend something a collaborator killed on Tuesday.
+
+Reading needs nothing installed. Nodes are markdown, so any forge renders them, and
+`knoten viz` writes the whole graph as one self-contained HTML file you can hand to
+someone who has never heard of knoten.
+
+If you want per-user permissions, a web view, or "this change needs two approvals from
+these two people", run [Forgejo](https://forgejo.org) and let it handle the people. It
+has required approvals, an allowlist of who may approve, and different rules per file
+pattern, all as settings. The server hook still does the part no forge can: enforcing
+this graph's own rules.
 
 ## For agents
 

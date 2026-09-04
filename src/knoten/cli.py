@@ -14,7 +14,7 @@ from pathlib import Path
 from . import attachments, ops, viz
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
-from .hook import install as install_hook
+from .hook import install as install_hook, install_server
 from .validate import _csv, applies, load_config
 
 # Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
@@ -212,6 +212,17 @@ def hook(root, force) -> int:
     h = install_hook(root, force=force)
     print(f"  ✓ installed {h}")
     print("    `git commit` now runs `knoten validate` and refuses a broken graph.")
+    return 0
+
+
+def server_hook(repo, force) -> int:
+    """The gate for a graph several people push to. Run it ON the server, in the repo
+    they push to — there is no graph there to `find_root`, which is why it bypasses it."""
+    h = install_server(Path(repo), force=force)
+    print(f"  ✓ installed {h}")
+    print("    `git push` now runs `knoten validate` on the pushed tree and refuses a")
+    print("    broken graph — for every contributor, including the ones who never ran")
+    print("    `knoten hook` and the ones who used `git commit --no-verify`.")
     return 0
 
 
@@ -578,9 +589,13 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("-o", "--out", default="knoten.html", help="where to write it")
     s.add_argument("--open", dest="show", action="store_true", help="open it when done")
 
-    s = sub.add_parser("hook", help="install the git pre-commit gate")
+    s = sub.add_parser("hook", help="install the git gate that refuses a broken graph")
+    s.add_argument("--server", nargs="?", const=".", metavar="REPO",
+                   help="install the pre-receive gate in the repo everyone pushes to "
+                        "(run this ON the server, inside the bare repo) instead of the "
+                        "pre-commit gate in this clone")
     s.add_argument("--force", action="store_true",
-                   help="overwrite a pre-commit hook knoten did not write")
+                   help="overwrite a hook knoten did not write")
 
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
@@ -628,6 +643,10 @@ def main(argv=None) -> int:
             return validate(find_root(), getattr(args, "json", False))
         if args.cmd == "init":
             return init(args.name)
+
+        # Both bypass find_root(): `init` has no graph yet, and a bare repo never has one.
+        if args.cmd == "hook" and args.server is not None:
+            return server_hook(args.server, args.force)
 
         root = find_root()
         return {
