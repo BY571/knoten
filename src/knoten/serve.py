@@ -21,7 +21,7 @@ import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .core import GraphError
+from .core import GraphError, MAX_PUSH_BYTES
 from .registry import Registry
 
 GIT_RE = re.compile(r"^/([a-z0-9][a-z0-9_-]*)\.git(/.*)$")
@@ -63,7 +63,7 @@ class _Handler(BaseHTTPRequestHandler):
             # GraphError: the thread died with no response and a traceback on the
             # server's stderr. GraphError instead turns into an ordinary 400.
             raise GraphError("request body length is invalid") from None
-        if not (0 <= length <= 104857600):     # matches receive.maxInputSize (100 MB)
+        if not (0 <= length <= MAX_PUSH_BYTES):   # the same ceiling receive.maxInputSize sets
             # A negative length reaches rfile.read(-1), which reads until EOF -- on a
             # socket the client never closes, that parks the thread forever: an
             # unauthenticated way to exhaust the server's thread pool one request at a time.

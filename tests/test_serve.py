@@ -95,6 +95,38 @@ def test_an_unknown_graph_looks_like_a_wrong_token(hub, trading, tmp_path):
     assert auth_refused(r), r.stderr
 
 
+def test_a_force_push_is_refused_by_the_shared_repo(hub, trading, tmp_path):
+    """A `write` collaborator's stray `--force` wiped the shared graph, and the repo kept
+    no reflog to recover it from. The refusal belongs in the config of the repo everyone
+    pushes to, not in the discipline of every clone."""
+    tok = hub.registry.mint("trading", "maria", "write")
+    dest = tmp_path / "maria"
+    git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(dest), cwd=tmp_path)
+    git("config", "user.email", "m@m.m", cwd=dest); git("config", "user.name", "m", cwd=dest)
+    repo = hub.registry.repo("trading")
+    before = git("rev-parse", "master", cwd=repo).stdout.strip()
+    git("commit", "-q", "--amend", "-m", "rewritten history", cwd=dest)
+
+    r = git("push", "-f", "origin", "master", cwd=dest)
+
+    assert r.returncode != 0
+    assert git("rev-parse", "master", cwd=repo).stdout.strip() == before
+
+
+def test_deleting_a_branch_on_the_server_is_refused(hub, trading):
+    """A shared graph is append-only. This is deliberately the opposite of
+    `test_deleting_a_branch_is_not_treated_as_a_push`, which drives the raw hook on a
+    bare repo with none of this config: the HOOK must still tolerate an all-zero oid, and
+    the REPO must still refuse the deletion that carries it."""
+    work = trading["work"]
+    assert git("push", "-q", "origin", "master:scratch", cwd=work).returncode == 0
+
+    r = git("push", "origin", "--delete", "scratch", cwd=work)
+
+    assert r.returncode != 0
+    assert "scratch" in git("branch", cwd=hub.registry.repo("trading")).stdout
+
+
 # ---------------------------------------------------------------- the gate, over HTTP
 
 def test_the_rule_gate_refuses_a_broken_push_over_http(hub, trading):

@@ -27,6 +27,11 @@ except ImportError:                           # pragma: no cover
 
 LOCK = ".knoten.lock"
 
+# The ceiling on one push, named once so the server's read bound and the repo's own
+# `receive.maxInputSize` cannot drift apart: a body the HTTP layer accepts and git then
+# refuses is a push that spends the bandwidth before it is told no.
+MAX_PUSH_BYTES = 100 * 1024 * 1024
+
 
 class GraphError(Exception):
     """The graph on disk is malformed. Always name the file."""

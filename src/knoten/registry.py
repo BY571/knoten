@@ -21,10 +21,18 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .core import GraphError, ID_RE, graph_lock, write_atomic
+from .core import GraphError, ID_RE, MAX_PUSH_BYTES, graph_lock, write_atomic
 from .hook import install_server
 
 ROLES = ("read", "write", "admin")
+
+# A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
+# bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an
+# opaque OSError after the data directory had already been touched.
+MAX_NAME = 64
+
+# An invite is a bearer secret. A year is already generous for one.
+MAX_DAYS = 365
 
 
 def _hash(secret: str) -> str:
@@ -46,7 +54,11 @@ def _now() -> datetime:
 class Registry:
     def __init__(self, data: Path):
         self.data = Path(data)
-        (self.data / "graphs").mkdir(parents=True, exist_ok=True)
+        # 0700, not the 0755 mkdir defaults to: tokens.json, the owner secret and every
+        # graph live under here, and on a server with more than one local account the
+        # default made all of it world-readable.
+        self.data.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (self.data / "graphs").mkdir(mode=0o700, exist_ok=True)
 
     # ---------------------------------------------------------------- owner
 
@@ -54,13 +66,26 @@ class Registry:
         """Created on first call, 0600, printed once by `knoten serve` and never again."""
         p = self.data / "owner"
         if not p.exists():
-            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            # Temp file then rename, because a crash between the create and the write
+            # left a zero-byte `owner` that every later run treated as already made:
+            # the secret was never printed, and the empty string became the secret.
+            tmp = p.with_name("owner.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as fh:
                 fh.write(secrets.token_hex(32))
+            os.chmod(tmp, 0o600)     # os.open's mode is ignored when the temp file existed
+            os.replace(tmp, p)
         return p.read_text(encoding="utf-8").strip()
 
     def check_owner(self, secret: str) -> bool:
-        return hmac.compare_digest(secret or "", self.owner_secret())
+        """Fail closed. This must never CREATE the secret: it is reached by an
+        unauthenticated request, and creating one here would mint a secret nobody is
+        watching for. `knoten serve` creates it at startup, where the owner can read it."""
+        p = self.data / "owner"
+        stored = p.read_text(encoding="utf-8").strip() if p.exists() else ""
+        # An empty owner file made "" a valid secret, so a truncated file handed graph
+        # creation to anyone who sent no password at all.
+        return bool(stored) and hmac.compare_digest(secret or "", stored)
 
     # ---------------------------------------------------------------- graphs
 
@@ -69,6 +94,8 @@ class Registry:
         # so `../etc` cannot reach mkdir through any entry point.
         if not ID_RE.match(name or ""):
             raise GraphError(f"'{name}' is not a valid graph name (use kebab-case: my-topic)")
+        if len(name) > MAX_NAME:
+            raise GraphError(f"graph name is too long (max {MAX_NAME} characters)")
         return self.data / "graphs" / name
 
     def exists(self, name: str) -> bool:
@@ -86,12 +113,30 @@ class Registry:
         d = self.graph_dir(name)
         if self.exists(name):
             raise GraphError(f"graph '{name}' already exists on this server")
+        if d.exists():
+            # Only repo.git used to be checked. A graph deleted by removing repo.git left
+            # tokens.json and invites.json behind, and the graph recreated under the same
+            # name inherited them: the deleted graph's tokens authenticated on the new one.
+            raise GraphError(f"graph '{name}' has a leftover directory on this server; "
+                             f"remove {d} first")
         try:
-            d.mkdir(parents=True, exist_ok=True)
+            d.mkdir(mode=0o700, parents=True)
             repo = d / "repo.git"
             subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
             for key, value in (("http.receivepack", "true"),
-                               ("receive.maxInputSize", "104857600")):   # 100 MB per push
+                               ("receive.maxInputSize", str(MAX_PUSH_BYTES)),
+                               # A `write` collaborator's stray `--force` rewrote the
+                               # shared graph and left no reflog to recover it from and no
+                               # line in any log saying it had happened. A shared graph is
+                               # append-only: no rewrites, no deletions, every ref update
+                               # recorded.
+                               ("receive.denyNonFastForwards", "true"),
+                               ("receive.denyDeletes", "true"),
+                               ("core.logAllRefUpdates", "true"),
+                               # A malformed object accepted here is one every clone then
+                               # fails to check out, and the server is where it can still
+                               # be refused.
+                               ("receive.fsckObjects", "true")):
                 subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
             install_server(repo)
             return self.mint(name, admin, "admin")
@@ -120,6 +165,8 @@ class Registry:
             raise GraphError(f"role must be one of {', '.join(ROLES)}, not '{role}'")
         if not ID_RE.match(user or ""):
             raise GraphError(f"'{user}' is not a valid contributor name (use kebab-case)")
+        if len(user) > MAX_NAME:
+            raise GraphError(f"contributor name is too long (max {MAX_NAME} characters)")
         self.repo(name)
 
     def mint(self, name: str, user: str, role: str) -> str:
@@ -152,18 +199,44 @@ class Registry:
                 raise GraphError(f"no contributor '{user}' on graph '{name}'")
             del tokens[user]
             self._write(name, "tokens.json", tokens)
+            # A revoked admin's outstanding invite still redeemed the next day, and it
+            # redeemed as admin: revoking their token ended nothing. Their own pending
+            # invite goes, and so does every invite they issued.
+            invites = self._read(name, "invites.json")
+            open_ = {h: e for h, e in invites.items()
+                     if e.get("name") != user and e.get("by") != user}
+            if len(open_) != len(invites):
+                self._write(name, "invites.json", open_)
 
     # ---------------------------------------------------------------- invites
 
-    def invite(self, name: str, user: str, role: str, days: int = 7) -> str:
+    def invite(self, name: str, user: str, role: str, days: int = 7, by: str = "") -> str:
         self._check(name, user, role)
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            raise GraphError("days must be a whole number") from None
+        if not 1 <= days <= MAX_DAYS:
+            # `--expires 999999999999` reached timedelta, which raised OverflowError and
+            # killed the serving thread with no response at all.
+            raise GraphError(f"days must be between 1 and {MAX_DAYS}")
         code = secrets.token_hex(16)
         expires = (_now() + timedelta(days=days)).isoformat()
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")
-            invites[_hash(code)] = {"name": user, "role": role, "expires": expires}
+            # `by` so revoking an admin can take their outstanding invites with them, and
+            # so the list an admin reads says who let each pending person in.
+            invites[_hash(code)] = {"name": user, "role": role, "expires": expires, "by": by}
             self._write(name, "invites.json", invites)
         return code
+
+    def invites(self, name: str) -> list[dict]:
+        """The open invites, without their hashes. An admin needs to see who is still
+        pending; the hash is the one thing in that file worth stealing."""
+        self.repo(name)
+        return [{"name": e.get("name", ""), "role": e.get("role", ""),
+                 "expires": e.get("expires", ""), "by": e.get("by", "")}
+                for e in self._read(name, "invites.json").values()]
 
     def redeem(self, name: str, code: str) -> tuple[str, str, str]:
         """One use. Returns (user, role, token). The code is removed on first try
@@ -175,7 +248,14 @@ class Registry:
             if entry is None:
                 raise GraphError("that invite code is not valid for this graph")
             self._write(name, "invites.json", invites)
-        if datetime.fromisoformat(entry["expires"]) < _now():
+        try:
+            # .get and a guarded parse, matching authenticate's fail-closed read: a
+            # hand-edited or truncated invites.json used to raise ValueError or KeyError
+            # here, which killed the serving thread instead of refusing the code.
+            expires = datetime.fromisoformat(entry.get("expires", ""))
+        except ValueError:
+            raise GraphError("that invite is malformed; ask for a new one") from None
+        if expires < _now():
             raise GraphError("that invite has expired; ask the admin for a new one")
         # Outside the lock: mint takes it again, and flock on a fresh handle would wait
         # on our own lock forever.

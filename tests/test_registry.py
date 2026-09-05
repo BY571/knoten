@@ -1,13 +1,14 @@
 """What a server knows that the graph does not: who may connect, who is invited, who
 owns the box. Files, hashed, locked. Losing this directory loses availability, never the
 meaning of a graph."""
+import json
 import os
 import stat
 
 import pytest
 
 from knoten.core import GraphError
-from knoten.registry import ROLES, Registry
+from knoten.registry import ROLES, Registry, _hash
 
 
 @pytest.fixture
@@ -97,15 +98,19 @@ def test_a_minted_token_authenticates_with_its_role(reg):
     assert reg.authenticate("trading", "maria", tok) == "write"
 
 
-def test_the_wrong_token_the_wrong_user_and_the_wrong_graph_all_fail_closed(reg):
+@pytest.mark.parametrize("graph, user, token", [
+    pytest.param("trading", "maria", "not-it", id="wrong-token"),
+    pytest.param("trading", "seb", "MARIAS", id="another-users-token"),
+    pytest.param("biology", "maria", "MARIAS", id="no-such-graph"),
+    pytest.param("trading", "maria", "", id="empty-token"),
+    pytest.param("trading", "", "MARIAS", id="empty-user"),
+])
+def test_authenticate_fails_closed(reg, graph, user, token):
+    """Every near miss is None, never a role. One wrong half is a whole refusal."""
     reg.create("trading", admin="seb")
-    tok = reg.mint("trading", "maria", "write")
+    marias = reg.mint("trading", "maria", "write")
 
-    assert reg.authenticate("trading", "maria", "not-it") is None
-    assert reg.authenticate("trading", "seb", tok) is None          # someone else's token
-    assert reg.authenticate("biology", "maria", tok) is None        # no such graph
-    assert reg.authenticate("trading", "maria", "") is None
-    assert reg.authenticate("trading", "", tok) is None
+    assert reg.authenticate(graph, user, marias if token == "MARIAS" else token) is None
 
 
 def test_tokens_are_stored_hashed(reg):
@@ -180,7 +185,13 @@ def test_an_expired_invite_is_refused_and_spent(reg):
     """Expired codes are removed when tried, so a stale invites.json does not grow
     forever and a late guess cannot be retried after the clock is fixed."""
     reg.create("trading", admin="seb")
-    code = reg.invite("trading", "maria", "write", days=-1)
+    code = reg.invite("trading", "maria", "write")
+    # days is clamped to 1..365 now, so a stale invite is made by aging the stored entry
+    # rather than by asking for a negative lifetime.
+    p = reg.graph_dir("trading") / "invites.json"
+    stored = json.loads(p.read_text(encoding="utf-8"))
+    stored[_hash(code)]["expires"] = "2000-01-01T00:00:00+00:00"
+    p.write_text(json.dumps(stored), encoding="utf-8")
 
     with pytest.raises(GraphError, match="expired"):
         reg.redeem("trading", code)
@@ -213,3 +224,142 @@ def test_secrets_that_travel_on_a_command_line_never_start_with_a_dash(reg):
         assert not reg.invite("trading", "maria", "write").startswith("-")
     assert not reg.owner_secret().startswith("-")
     assert all(c in "0123456789abcdef" for c in reg.owner_secret())
+
+
+# ---------------------------------------------------------------- names, dirs, files
+
+def test_a_name_longer_than_the_cap_is_refused(reg):
+    """A graph name becomes a directory and a URL segment. ID_RE bounds the alphabet and
+    nothing bounded the length, so NAME_MAX surfaced as an opaque OSError from mkdir
+    after the data directory had been touched."""
+    with pytest.raises(GraphError, match="too long"):
+        reg.create("a" * 65, admin="seb")
+
+    assert sorted(p.name for p in (reg.data / "graphs").iterdir()) == []
+    reg.create("a" * 64, admin="seb")            # the cap itself is allowed
+
+
+def test_recreating_a_graph_over_a_leftover_directory_is_refused(reg):
+    """Deleting a graph by removing repo.git left tokens.json behind, and the graph
+    recreated under that name inherited it: the deleted graph's tokens authenticated on
+    the new one, which nobody had invited them to."""
+    import shutil
+    reg.create("trading", admin="seb")
+    tok = reg.mint("trading", "maria", "write")
+    shutil.rmtree(reg.repo("trading"))
+
+    with pytest.raises(GraphError, match="leftover directory"):
+        reg.create("trading", admin="seb")
+
+    assert reg.authenticate("trading", "maria", tok) is None, "a stale token still works"
+
+
+def test_the_data_directory_is_private_to_its_user(reg):
+    """Tokens, invite hashes and the owner secret live under it. The 0755 mkdir defaults
+    to made all of it readable by every other local account on the server."""
+    reg.create("trading", admin="seb")
+
+    for d in (reg.data, reg.data / "graphs", reg.graph_dir("trading")):
+        assert stat.S_IMODE(d.stat().st_mode) == 0o700, f"{d} is {oct(d.stat().st_mode)}"
+
+
+def test_check_owner_is_false_when_the_owner_file_is_empty(reg):
+    """An empty owner file made "" a valid secret, so a truncated file handed graph
+    creation to anyone who sent no password at all. check_owner must also not CREATE
+    one: it is reached unauthenticated, and `knoten serve` is what shows the owner theirs."""
+    reg.data.mkdir(parents=True, exist_ok=True)
+    (reg.data / "owner").write_text("", encoding="utf-8")
+
+    assert not reg.check_owner("")
+    assert not reg.check_owner("anything")
+
+
+def test_check_owner_is_false_when_there_is_no_owner_file(reg):
+    assert not reg.check_owner("anything")
+    assert not (reg.data / "owner").exists(), "check_owner minted a secret nobody saw"
+
+
+def test_the_shared_repo_refuses_rewrites_and_deletions(reg):
+    """A `write` collaborator's stray `--force` wiped the shared graph with no reflog to
+    recover from. The refusal has to be in the repo's own config, not in one clone."""
+    import subprocess
+    reg.create("trading", admin="seb")
+    repo = reg.repo("trading")
+
+    def config(key):
+        return subprocess.run(["git", "-C", str(repo), "config", key],
+                              capture_output=True, text=True).stdout.strip()
+
+    assert config("receive.denyNonFastForwards") == "true"
+    assert config("receive.denyDeletes") == "true"
+    assert config("core.logAllRefUpdates") == "true"
+    assert config("receive.fsckObjects") == "true"
+
+
+# ---------------------------------------------------------------- invite bookkeeping
+
+@pytest.mark.parametrize("days", [0, -1, 366, 999999999999])
+def test_an_invite_lifetime_outside_the_range_is_refused(reg, days):
+    """`--expires 999999999999` reached timedelta, which raised OverflowError and killed
+    the serving thread with no response at all."""
+    reg.create("trading", admin="seb")
+
+    with pytest.raises(GraphError, match="between 1 and 365"):
+        reg.invite("trading", "maria", "write", days=days)
+
+
+def test_a_malformed_expiry_is_a_refusal_not_a_crash(reg):
+    """A hand-edited or truncated invites.json used to raise ValueError out of
+    fromisoformat, which killed the serving thread instead of refusing the code."""
+    reg.create("trading", admin="seb")
+    code = reg.invite("trading", "maria", "write")
+    p = reg.graph_dir("trading") / "invites.json"
+    stored = json.loads(p.read_text(encoding="utf-8"))
+    stored[_hash(code)]["expires"] = "not-a-date"
+    p.write_text(json.dumps(stored), encoding="utf-8")
+
+    with pytest.raises(GraphError, match="malformed"):
+        reg.redeem("trading", code)
+
+
+def test_invites_lists_the_open_ones_and_never_their_hashes(reg):
+    """An admin needs to see who is still pending. The hash is the one thing in that
+    file worth stealing, so it must not travel back out of it."""
+    reg.create("trading", admin="seb")
+    code = reg.invite("trading", "maria", "write", days=3, by="seb")
+
+    listed = reg.invites("trading")
+
+    assert listed == [{"name": "maria", "role": "write",
+                       "expires": listed[0]["expires"], "by": "seb"}]
+    assert _hash(code) not in json.dumps(listed)
+    reg.redeem("trading", code)
+    assert reg.invites("trading") == [], "a spent invite is still listed as open"
+
+
+def test_revoking_a_user_takes_their_pending_invite_with_them(reg):
+    """Revoking maria's token left the invite she had not yet redeemed alive, so she
+    redeemed it the next day and was back in."""
+    reg.create("trading", admin="seb")
+    reg.mint("trading", "maria", "write")
+    code = reg.invite("trading", "maria", "write", by="seb")
+
+    reg.revoke("trading", "maria")
+
+    with pytest.raises(GraphError, match="not valid"):
+        reg.redeem("trading", code)
+
+
+def test_revoking_an_admin_kills_the_invites_they_issued(reg):
+    """A revoked admin's earlier invite still redeemed, and it redeemed as admin: the
+    revocation ended their token and nothing they had already handed out."""
+    reg.create("trading", admin="seb")
+    rogue = reg.mint("trading", "rogue", "admin")
+    assert reg.authenticate("trading", "rogue", rogue) == "admin"
+    code = reg.invite("trading", "friend", "admin", by="rogue")
+
+    reg.revoke("trading", "rogue")
+
+    with pytest.raises(GraphError, match="not valid"):
+        reg.redeem("trading", code)
+    assert reg.invites("trading") == []
