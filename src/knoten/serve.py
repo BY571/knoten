@@ -37,6 +37,16 @@ WRITE = "git-receive-pack"
 KEEP_ENV = ("PATH", "HOME", "LANG", "TMPDIR")
 
 
+def _field(value) -> str:
+    """One event, one line. A Basic username is chosen by whoever is connecting and is
+    logged BEFORE authentication on the refused-push path, so a newline in it wrote a
+    second, forged line into the access log: an attacker could invent pushes that never
+    happened. Printable non-space characters, 64 of them at most, `-` when nothing is left.
+    """
+    kept = "".join(c for c in str(value) if c.isprintable() and not c.isspace())
+    return kept[:64] or "-"
+
+
 class _Server(ThreadingHTTPServer):
     """The registry belongs to the server, not to a handler class minted per call.
 
@@ -71,8 +81,8 @@ class _Handler(BaseHTTPRequestHandler):
         Reads stay silent, or the log is a `git fetch` poll loop and nothing else.
         """
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        print(f"{stamp} {self.client_address[0]} {graph} {user} {action} {status}",
-              file=sys.stderr, flush=True)
+        print(f"{stamp} {self.client_address[0]} {_field(graph)} {_field(user)} "
+              f"{_field(action)} {status}", file=sys.stderr, flush=True)
 
     # ---------------------------------------------------------------- helpers
 

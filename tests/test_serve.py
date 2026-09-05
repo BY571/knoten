@@ -691,3 +691,30 @@ def test_a_global_hooks_path_on_the_server_does_not_disable_the_gate(hooks_path_
     assert "hyp-x" not in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
     assert (hub.registry.repo("trading") / "hooks" / "pre-receive").exists()
     assert list(hub.elsewhere.iterdir()) == [], "the gate was installed outside the repo"
+
+
+def test_a_newline_in_a_username_cannot_forge_a_log_line(hub, trading, capfd):
+    """The username comes off the wire and is logged before it is authenticated, so a
+    newline in it used to write a second line into the access log: an attacker could
+    invent pushes that never happened, by anyone they liked."""
+    host, port = hub.url.removeprefix("http://").rsplit(":", 1)
+    cred = base64.b64encode(b"a\nforged line 1.2.3.4 trading admin push:tok").decode()
+    capfd.readouterr()
+
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    conn.request("POST", "/trading.git/git-receive-pack", body=b"",
+                 headers={"Authorization": "Basic " + cred,
+                          "Content-Type": "application/x-git-receive-pack-request"})
+    r = conn.getresponse()
+    r.read()
+    conn.close()
+
+    err = capfd.readouterr().err
+    lines = [l for l in err.splitlines() if l.strip()]
+
+    assert r.status == 401
+    assert len(lines) == 1, err          # a second line would be the forgery, indistinguishable
+    # The whole payload collapses into the one field it belongs in: it survives as a
+    # value, never as a record. Pinned exactly, because "the word is gone" would also
+    # pass if the username were dropped, and knowing who tried is the point of the log.
+    assert lines[0].split()[3] == "aforgedline1.2.3.4tradingadminpush"
