@@ -173,19 +173,33 @@ node is your problem and on a shared one it would be everybody's.
 who is connecting and nothing else; what a token can do is the role the admin gave it.
 The server holds only hashed tokens and open invites. Everything that means anything,
 the nodes, the rules, the history, lives in the graph, so losing the server loses
-availability and not the answer to who said what. The hosted repo refuses force pushes
-and branch deletion: nothing is deleted there either.
+availability and not the answer to who said what.
+
+A shared graph is one line of history. The first push creates the only branch it will
+ever have; after that there are no new branches, no tags, no deletions and no force
+pushes, and each of those is refused with the reason. A second branch is a tree nobody
+pulls, which is a fine place to hide a second set of rules about who may write.
 
 Who may write is written down in the graph, not on the server. `knoten remote create`
 makes you a signing key and lists you as admin in `contributors.yaml`; every commit from
 then on is signed, and the server refuses one that is not signed by someone the file
-lists. An invite is signed on the admin's machine, so a stolen admin token mints nothing.
-Revoking someone is a signed commit that marks them revoked, and the mark outlives the
-server: a clone a year later still says who could write and who let them in.
+lists. On a graph you host with `knoten serve`, only the admin's own token may lay down
+that first `contributors.yaml`, and the commit that does it may touch nothing else. An
+invite is signed on the admin's machine, so a stolen admin token mints nothing. Revoking
+someone is a signed commit that marks them revoked, never a line deleted: the mark
+outlives the server, so a clone a year later still says who could write and who let them
+in. Readers are not listed at all. They hold a token and nothing more, because the file
+is the list of people who may write.
 
 ```bash
-knoten key                              # your signing key; made on first use
+knoten key seb                          # the name the graph lists you under
 ```
+
+The key lives at `~/.config/knoten/keys/<name>` (`KNOTEN_KEYS` moves that directory).
+One name, one key: to sign from a second machine, copy that private file there. Lose it
+and you cannot sign as that name again, so an admin has to add you back under a new one.
+Being revoked takes away your token and your future signatures; your clone and everything
+in its history stay yours.
 
 Reading needs nothing installed. Nodes are markdown, and `knoten viz` writes the graph as
 one self-contained HTML file you can hand to someone who has never heard of knoten.
