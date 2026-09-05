@@ -741,3 +741,25 @@ def test_serve_replaces_an_empty_owner_file_and_shows_the_new_secret(tmp_path, m
     secret = (data / "owner").read_text(encoding="utf-8").strip()
     assert secret and secret in out, out
     assert Registry(data).check_owner(secret)
+
+
+def test_an_over_long_graph_name_is_refused_the_way_an_unknown_one_is(hub, trading, tmp_path):
+    """The length cap belongs on create and mint. Raised on the read path it made a
+    65-character name a 400 where every unknown graph is a 401, which tells an outsider
+    something about a name they were not able to open."""
+    long_name = "a" * 65
+    r = git("clone", "-q", clone_url(hub, long_name, "seb", trading["admin"]),
+            str(tmp_path / "x"), cwd=tmp_path)
+
+    assert auth_refused(r), r.stderr
+
+
+def test_join_on_an_over_long_name_is_byte_identical_to_a_wrong_code(hub, trading):
+    """/join needs no credentials, so every refusal it gives has to look the same. An
+    over-length name raising made its body differ from the wrong-code body, which is the
+    name oracle the identical bodies exist to close."""
+    status_long, body_long = api(hub, "/" + "a" * 65 + "/join", {"code": "x"})
+    status_wrong, body_wrong = api(hub, "/trading/join", {"code": "x"})
+
+    assert status_long == status_wrong == 400
+    assert body_long == body_wrong

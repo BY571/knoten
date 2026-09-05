@@ -112,6 +112,14 @@ class Registry:
         return self.data / "graphs" / name
 
     def exists(self, name: str) -> bool:
+        """Never raises. `authenticate` and the /join route both lean on this, and both
+        owe an outsider the SAME answer for every name they cannot open: a 65-character
+        name that raised came back as a 400 where an unknown graph gets a 401, and gave
+        /join a different body from the one pinned to be identical to a wrong code. Out
+        here, too long is simply no such graph; the raise stays on create and mint, where
+        the caller is naming something they own."""
+        if not ID_RE.match(name or "") or len(name) > MAX_NAME:
+            return False
         return (self.graph_dir(name) / "repo.git").is_dir()
 
     def repo(self, name: str) -> Path:
@@ -200,7 +208,7 @@ class Registry:
         """The role this token grants on this graph, or None. Never raises: an unknown
         graph and a wrong token look identical to the caller, so the server does not
         leak which graphs exist."""
-        if not ID_RE.match(name or "") or not self.exists(name):
+        if not self.exists(name):
             return None
         entry = self._read(name, "tokens.json").get(user or "")
         # .get, not entry["hash"]: a hand-edited or truncated tokens.json then fails
