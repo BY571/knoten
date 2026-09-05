@@ -39,7 +39,11 @@ MAX_PUSH_BYTES = 100 * 1024 * 1024
 # receive-pack read ~/.gitconfig and looked somewhere else entirely: the hook was written
 # where nothing would ever run it, and a push that breaks the graph landed with rc 0. A
 # gate that fails OPEN reports green forever. The client-side `knoten hook` must NOT use
-# this: honouring core.hooksPath is exactly right in a clone (husky, monorepos).
+# this: honouring core.hooksPath is exactly right in a clone (husky, monorepos), and nor
+# must `knoten hook --server`, whose repo is served by somebody else's receive-pack.
+# Dropping global config also drops `init.templateDir` and `init.defaultBranch` for
+# hosted repos, deliberately: a template directory is one more place a hook can arrive
+# from, which is one more place the gate can be replaced without anyone editing the repo.
 SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 

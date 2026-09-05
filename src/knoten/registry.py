@@ -164,7 +164,11 @@ class Registry:
                                ("receive.fsckObjects", "true")):
                 subprocess.run(["git", "-C", str(repo), "config", key, value],
                                check=True, env=env)
-            install_server(repo)
+            # SERVER_GIT_ENV, because this server runs receive-pack itself and
+            # under exactly that. Asked under anything else, git answers with a
+            # different hooks directory and the gate is installed where the git
+            # that enforces it will never look.
+            install_server(repo, env=SERVER_GIT_ENV)
             return self.mint(name, admin, "admin")
         except GraphError:
             # A half-made repo that exists() calls valid would accept pushes with no gate, forever.

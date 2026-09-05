@@ -176,15 +176,19 @@ exit 0
 """
 
 
-def install_server(repo: Path, force: bool = False) -> Path:
+def install_server(repo: Path, force: bool = False, env: dict | None = None) -> Path:
     """Install the pre-receive gate into the repo everyone pushes to.
 
     Takes the repo rather than a graph: a bare repo has no working tree, so there is no
     `graph.yaml` here to read and no graph path worth recording. The hook finds the
     graphs in each pushed tree instead.
+
+    `env` must be whatever the receive-pack that will ENFORCE this gate runs under, since
+    that is what decides where hooks are read from. `knoten serve` owns the repo and runs
+    receive-pack itself, so `Registry.create` passes SERVER_GIT_ENV. `knoten hook
+    --server` does not: that repo is hosted by nginx or sshd under the operator's own
+    account, receive-pack reads their ~/.gitconfig, and forcing SERVER_GIT_ENV here wrote
+    the gate to repo.git/hooks while git went looking at their core.hooksPath. The gate
+    then failed OPEN, which is the one way for it to be wrong and still report green.
     """
-    # SERVER_GIT_ENV, because receive-pack runs under it too. Asked without it, git
-    # answers with the daemon account's core.hooksPath and the gate is installed where
-    # the git that enforces it will never look: the gate fails OPEN and reports green.
-    return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force,
-                       env=SERVER_GIT_ENV)
+    return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force, env=env)

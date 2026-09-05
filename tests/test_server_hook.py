@@ -7,6 +7,7 @@ refuses the push outright rather than reporting afterwards that master is broken
 """
 import os
 import shutil
+import subprocess
 
 import pytest
 from conftest import git
@@ -385,8 +386,6 @@ def test_a_directory_name_containing_a_newline_is_still_validated(server, rules_
     `git commit` will not make by hand. A newline in a directory name split one path
     across two lines of the hook's list, neither of which named a graph, so the gate
     validated nothing and accepted the push while reporting green."""
-    import subprocess
-
     from conftest import GIT_ISOLATION
 
     bare, work = server
@@ -411,6 +410,53 @@ def test_a_directory_name_containing_a_newline_is_still_validated(server, rules_
     assert r.returncode != 0, "the gate never found the graph and accepted the push"
     assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
     assert "sneaky" not in git("branch", cwd=bare).stdout
+
+
+def test_the_manual_install_puts_the_gate_where_this_machines_git_looks(tmp_path,
+                                                                        rules_yaml,
+                                                                        monkeypatch):
+    """`knoten hook --server` runs on a repo somebody else serves: nginx or sshd, under
+    the operator's own account, whose receive-pack reads their ~/.gitconfig. Installing
+    under a pinned config wrote the gate to repo.git/hooks while git went looking at
+    their core.hooksPath, and the push landed ungated with rc 0. A gate that fails OPEN
+    reports green forever, so the install has to ask the git that will enforce it."""
+    home = tmp_path / "operator-home"
+    hooks = home / "shared-hooks"
+    hooks.mkdir(parents=True)
+    (home / ".gitconfig").write_text(f"[core]\n\thooksPath = {hooks}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    # This repo is NOT served by knoten, so nothing pins the config away and both sides
+    # read the same ~/.gitconfig. conftest's git() always merges GIT_ISOLATION, which
+    # would pin it, so this one test calls git itself. HOME above is what keeps the
+    # developer's real config out.
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+
+    def plain_git(*args, cwd):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+
+    bare = tmp_path / "origin.git"
+    plain_git("init", "-q", "--bare", str(bare), cwd=tmp_path)
+    install_server(bare)
+
+    work = tmp_path / "work"
+    plain_git("clone", "-q", str(bare), str(work), cwd=tmp_path)
+    for c in (["config", "user.email", "t@t.t"], ["config", "user.name", "t"]):
+        plain_git(*c, cwd=work)
+    graph = work / "g"
+    (graph / "nodes").mkdir(parents=True)
+    (graph / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (graph / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
+    plain_git("add", "-A", cwd=work)
+    plain_git("commit", "-qm", "broken", cwd=work)
+
+    r = plain_git("push", "origin", "master", cwd=work)
+
+    assert r.returncode != 0, "the gate failed OPEN under the operators core.hooksPath"
+    assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
+    assert (hooks / "pre-receive").exists(), "installed somewhere git does not read"
+    assert plain_git("log", "--oneline", cwd=bare).stdout == ""
 
 
 # ---------------------------------------------------------------- hygiene

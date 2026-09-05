@@ -73,8 +73,8 @@ def test_create_rolls_back_on_partial_failure(reg, monkeypatch):
     """A half-made repo that exists() calls valid would accept pushes with no gate, forever.
     Partial creation must be rolled back atomically so a retry can succeed."""
     import knoten.registry
-    def failing_install(repo):
-        raise OSError("disk full")
+    def failing_install(repo, **kwargs):     # **kwargs, or a signature mismatch would
+        raise OSError("disk full")           # pass this test for the wrong reason
     monkeypatch.setattr(knoten.registry, "install_server", failing_install)
 
     with pytest.raises(GraphError, match="could not create"):
