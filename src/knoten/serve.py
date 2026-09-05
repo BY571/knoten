@@ -19,27 +19,60 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 from .core import GraphError, MAX_PUSH_BYTES
 from .registry import Registry
 
 GIT_RE = re.compile(r"^/([a-z0-9][a-z0-9_-]*)\.git(/.*)$")
-API_RE = re.compile(r"^/([a-z0-9][a-z0-9_-]*)/(join|invite|revoke)$")
+API_RE = re.compile(r"^/([a-z0-9][a-z0-9_-]*)/(join|invites|invite|revoke)$")
 WRITE = "git-receive-pack"
+
+# What `git http-backend` is allowed to inherit from the shell `knoten serve` was started
+# in. NOT os.environ wholesale: a GIT_DIR, GIT_COMMITTER_NAME or GIT_CONFIG_* left in the
+# operator's shell reached the pre-receive hook, which runs against a tree an attacker
+# chose -- GIT_DIR in particular pointed git at a repo nobody meant to touch.
+KEEP_ENV = ("PATH", "HOME", "LANG", "TMPDIR")
+
+
+class _Server(ThreadingHTTPServer):
+    """The registry belongs to the server, not to a handler class minted per call.
+
+    `make_server` used to subclass the handler to carry `registry` as a class attribute,
+    so two servers in one process meant two anonymous handler types and nothing could
+    name either. One attribute on the server the handler already has a reference to.
+    """
+
+    def __init__(self, registry: Registry, address, handler):
+        self.registry = registry
+        super().__init__(address, handler)
 
 
 def make_server(reg: Registry, host: str = "127.0.0.1", port: int = 8899) -> ThreadingHTTPServer:
-    class Handler(_Handler):
-        registry = reg
-    return ThreadingHTTPServer((host, port), Handler)
+    return _Server(reg, (host, port), _Handler)
 
 
 class _Handler(BaseHTTPRequestHandler):
-    registry: Registry
+    # A valid Content-Length whose body never arrived parked a thread on rfile.read
+    # forever: no credentials needed, one thread per connection, until there are none.
+    timeout = 30
 
-    def log_message(self, *args) -> None:      # one line per request is noise on a server
+    def log_request(self, *args) -> None:      # one line per request is noise on a server
         pass
+
+    log_error = log_request                    # send_error's own line, the same noise
+
+    def log_message(self, action: str, graph: str = "-", user: str = "-",
+                    status: int = 200) -> None:
+        """The access log, and only the events an owner would want to answer "who changed
+        this graph, and when" with: creation, joins, invites, revocations and every push.
+        Reads stay silent, or the log is a `git fetch` poll loop and nothing else.
+        """
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        print(f"{stamp} {self.client_address[0]} {graph} {user} {action} {status}",
+              file=sys.stderr, flush=True)
 
     # ---------------------------------------------------------------- helpers
 
@@ -73,7 +106,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _json_body(self) -> dict:
         try:
             result = json.loads(self._body() or b"{}")
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+            # UnicodeDecodeError is not a JSONDecodeError: a body of raw bytes on the
+            # unauthenticated /join route escaped this handler and killed the thread.
             raise GraphError(f"request body is not JSON: {e}") from None
         # A list like [1, 2, 3] parses fine but then crashes the thread on .get().
         if not isinstance(result, dict):
@@ -104,6 +139,14 @@ class _Handler(BaseHTTPRequestHandler):
     def _route(self) -> None:
         path, _, query = self.path.partition("?")
         try:
+            if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+                # _body only ever reads Content-Length bytes, so a chunked body arrives as
+                # nothing at all. On the git routes that handed http-backend an empty
+                # stdin and a bare 500; on /join it silently read {} and refused the code
+                # the caller had actually sent. Refused once, for every route.
+                return self._refuse(411, "knoten: chunked uploads are not supported; set "
+                                    "http.postBuffer to at least the push size (knoten "
+                                    "remote add does this) and push again")
             if m := GIT_RE.match(path):
                 return self._git(m.group(1), m.group(2), query)
             if path == "/graphs" and self.command == "POST":
@@ -113,30 +156,39 @@ class _Handler(BaseHTTPRequestHandler):
             self._refuse(404, "knoten: not found")
         except GraphError as e:
             self._refuse(400, f"knoten: {e}")
+        except Exception as e:                 # noqa: BLE001 - the last line of defence
+            # Anything unforeseen used to leave the thread dead and the client holding a
+            # connection that never answers, which reads to a user as a hung network.
+            # One line on the server's stderr, one refusal on the wire.
+            print(f"knoten serve: {self.command} {self.path}: {e!r}", file=sys.stderr)
+            self._refuse(500, "knoten: internal error")
 
     # ---------------------------------------------------------------- git
 
     def _git(self, name: str, sub: str, query: str) -> None:
         user, token = self._basic()
-        role = self.registry.authenticate(name, user, token)
+        # Decoded, and compared whole. A substring search over the raw query let
+        # `service=git-receive%2Dpack` through: git decodes it, so a `read` token got the
+        # receive-pack advertisement from a check that never saw the word it looks for.
+        service = parse_qs(query).get("service", [""])[0]
+        push = self.command == "POST" and sub == "/" + WRITE
+        role = self.server.registry.authenticate(name, user, token)
         if role is None:
+            if push:
+                self.log_message(WRITE, name, user or "-", 401)
             # Same answer for "wrong token" and "no such graph": the server does not
             # confirm which graphs exist to someone who cannot open them.
             return self._refuse(401, "knoten: credentials required" if not token
                                 else "knoten: that token is not valid here")
-        if role == "read" and (WRITE in query or sub.endswith("/" + WRITE)):
+        if role == "read" and (service == WRITE or push):
+            if push:
+                self.log_message(WRITE, name, user, 403)
             return self._refuse(403, f"knoten: {user} has read access to {name}, not write")
-        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
-            # _body only ever reads Content-Length bytes, so a chunked push (git goes
-            # chunked above http.postBuffer, default 1 MiB) hands http-backend an empty
-            # stdin; http-backend dies and the client sees a bare, unexplained 500.
-            return self._refuse(411, "knoten: chunked uploads are not supported; set "
-                                "http.postBuffer to at least the push size (knoten remote "
-                                "add does this) and push again")
 
         env = {
-            **os.environ,
-            "GIT_PROJECT_ROOT": str(self.registry.graph_dir(name)),
+            **{k: v for k, v in os.environ.items()
+               if k in KEEP_ENV or k.startswith("LC_")},
+            "GIT_PROJECT_ROOT": str(self.server.registry.graph_dir(name)),
             "GIT_HTTP_EXPORT_ALL": "1",
             "PATH_INFO": "/repo.git" + sub,          # the URL says <name>.git; disk says repo.git
             "QUERY_STRING": query,
@@ -167,6 +219,8 @@ class _Handler(BaseHTTPRequestHandler):
                 # exit with no Status line can only be the backend itself dying — a
                 # crashed backend used to relay to the client as a silent 200.
                 return self._refuse(500, "knoten: git http-backend failed on the server; see its log")
+        if push:
+            self.log_message(WRITE, name, user, status)
         self.send_response(status)
         for key, value in headers:
             self.send_header(key, value)
@@ -179,19 +233,21 @@ class _Handler(BaseHTTPRequestHandler):
     def _create(self) -> None:
         user, secret = self._basic()
         # Distinguishing "wrong username" from "wrong secret" would tell an attacker which half they got right.
-        if user != "owner" or not self.registry.check_owner(secret):
+        if user != "owner" or not self.server.registry.check_owner(secret):
             return self._refuse(401, "knoten: the owner secret is required to create a graph")
         body = self._json_body()
-        token = self.registry.create(body.get("name", ""), body.get("admin", ""))
+        token = self.server.registry.create(body.get("name", ""), body.get("admin", ""))
+        self.log_message("graph-created", body.get("name", ""), body.get("admin", ""), 201)
         self._json(201, {"token": token})
 
     def _join(self, name: str) -> None:
         body = self._json_body()
-        if not self.registry.exists(name):
+        if not self.server.registry.exists(name):
             # /join needs no credentials, so it must not become a name oracle: an
             # unknown graph gets the same 400 a wrong code gets, not "no graph 'x'".
             return self._refuse(400, "knoten: that invite code is not valid for this graph")
-        user, role, token = self.registry.redeem(name, body.get("code", ""))
+        user, role, token = self.server.registry.redeem(name, body.get("code", ""))
+        self.log_message(f"join:{role}", name, user, 200)
         self._json(200, {"name": user, "role": role, "token": token})
 
     def _admin(self, name: str) -> str | None:
@@ -201,25 +257,36 @@ class _Handler(BaseHTTPRequestHandler):
         value and must return without writing anything, or the client gets two responses
         on one connection."""
         user, token = self._basic()
-        if self.registry.authenticate(name, user, token) != "admin":
+        if self.server.registry.authenticate(name, user, token) != "admin":
             self._refuse(403, f"knoten: only an admin of {name} can do that")
             return None
         return user
 
     def _invite(self, name: str) -> None:
-        if not self._admin(name):
+        if not (admin := self._admin(name)):
             return
         body = self._json_body()
         try:
             days = int(body.get("days", 7))
         except (TypeError, ValueError):
             raise GraphError("days must be a whole number") from None
-        code = self.registry.invite(name, body.get("name", ""), body.get("role", "write"), days)
+        # `by`, so revoking this admin takes the invites they issued with them. The range
+        # check on days lives in the registry, next to the timedelta that overflowed.
+        code = self.server.registry.invite(name, body.get("name", ""), body.get("role", "write"),
+                                    days, by=admin)
+        self.log_message(f"invite:{body.get('name', '')}", name, admin, 200)
         self._json(200, {"code": code})
 
-    def _revoke(self, name: str) -> None:
+    def _invites(self, name: str) -> None:
+        """Who is still pending, and who let them in. Never the hashes."""
         if not self._admin(name):
             return
+        self._json(200, {"invites": self.server.registry.invites(name)})
+
+    def _revoke(self, name: str) -> None:
+        if not (admin := self._admin(name)):
+            return
         body = self._json_body()
-        self.registry.revoke(name, body.get("name", ""))
+        self.server.registry.revoke(name, body.get("name", ""))
+        self.log_message(f"revoke:{body.get('name', '')}", name, admin, 200)
         self._json(200, {"revoked": body.get("name", "")})

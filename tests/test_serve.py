@@ -7,6 +7,7 @@ import base64
 import http.client
 import json
 import os
+import socket
 import subprocess
 import urllib.error
 import urllib.request
@@ -317,24 +318,28 @@ def test_a_json_body_that_is_not_an_object_is_a_400(hub, trading):
     assert "JSON object" in body["error"]
 
 
-def test_a_malformed_or_negative_content_length_is_a_400_not_a_hang(hub, trading):
+@pytest.mark.parametrize("bad", [
+    pytest.param("abc", id="not-a-number"),
+    pytest.param("-1", id="negative"),
+    pytest.param("999999999", id="past-the-push-ceiling"),
+])
+def test_a_malformed_or_oversized_content_length_is_a_400_not_a_hang(hub, trading, bad):
     """"Content-Length: abc" used to raise ValueError inside _body, unguarded, killing
     the thread with no response. "Content-Length: -1" used to reach rfile.read(-1),
     which reads until the socket closes -- on a connection the client never closes,
     a thread parked forever with no credentials required to trigger it."""
     host, port = hub.url.removeprefix("http://").rsplit(":", 1)
-    for bad in ("abc", "-1"):
-        conn = http.client.HTTPConnection(host, int(port), timeout=5)
-        conn.putrequest("POST", "/trading/join")
-        conn.putheader("Content-Type", "application/json")
-        conn.putheader("Content-Length", bad)
-        conn.endheaders()
-        r = conn.getresponse()
-        body = json.loads(r.read())
-        conn.close()
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    conn.putrequest("POST", "/trading/join")
+    conn.putheader("Content-Type", "application/json")
+    conn.putheader("Content-Length", bad)
+    conn.endheaders()
+    r = conn.getresponse()
+    body = json.loads(r.read())
+    conn.close()
 
-        assert r.status == 400, (bad, body)
-        assert "invalid" in body["error"]
+    assert r.status == 400, (bad, body)
+    assert "invalid" in body["error"]
 
 
 def test_a_non_numeric_days_is_a_400(hub, trading):
@@ -426,14 +431,20 @@ def test_concurrent_joins_do_not_lose_each_other(hub, trading):
 
 
 def test_a_traversal_in_the_url_is_404_not_a_file(hub, trading):
-    """`/../../etc.git` must never reach GIT_PROJECT_ROOT. The regex refuses it before
-    the registry sees it; this pins that the regex stays strict."""
-    req = urllib.request.Request(hub.url + "/../../etc.git/info/refs?service=git-upload-pack")
-    with pytest.raises(urllib.error.HTTPError) as e:
-        urllib.request.urlopen(req)
+    """`/../../etc.git` must never reach GIT_PROJECT_ROOT. Sent down a raw socket, not
+    through urllib: urllib normalises `..` away in the CLIENT, so the old version of this
+    test sent `/etc.git/...` and would have passed against a server with no check at all."""
+    host, port = hub.url.removeprefix("http://").rsplit(":", 1)
+    with socket.create_connection((host, int(port)), timeout=5) as sock:
+        sock.sendall(b"GET /../../etc.git/info/refs?service=git-upload-pack HTTP/1.0\r\n\r\n")
+        first = b""
+        while b"\r\n" not in first:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            first += chunk
 
-    assert e.value.code in (401, 404)
-    e.value.close()  # unread, it leaves the socket for the GC to warn about later
+    assert first.split(b"\r\n")[0] == b"HTTP/1.0 404 Not Found", first[:120]
 
 
 def test_serve_closes_its_socket_when_it_stops(tmp_path, monkeypatch):
@@ -448,3 +459,109 @@ def test_serve_closes_its_socket_when_it_stops(tmp_path, monkeypatch):
         warnings.simplefilter("error", ResourceWarning)
         assert main(["serve", "--data", str(tmp_path / "d"), "--bind", "127.0.0.1:0"]) == 0
         import gc; gc.collect()
+
+
+# ---------------------------------------------------------------- hostile requests
+
+def test_a_body_that_is_not_utf8_is_a_400_not_a_dead_thread(hub, trading):
+    """UnicodeDecodeError is not a JSONDecodeError. Raw bytes on the unauthenticated
+    /join route escaped the handler and killed the serving thread, so the caller got a
+    closed connection and the server lost a thread per request."""
+    req = urllib.request.Request(hub.url + "/trading/join", data=b"\xff\xfe\x00binary",
+                                 method="POST", headers={"Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+
+    assert e.value.code == 400
+    assert "not JSON" in json.loads(e.value.read())["error"]
+
+
+def test_a_percent_encoded_service_does_not_get_a_read_token_past_the_write_gate(hub, trading):
+    """The gate used to look for the literal `git-receive-pack` in the raw query string.
+    git decodes the query, so `service=git-receive%2Dpack` asks for exactly the same
+    service while carrying none of the letters the check searched for, and a `read` token
+    got the receive-pack advertisement."""
+    tok = hub.registry.mint("trading", "reader", "read")
+    req = urllib.request.Request(
+        f"{hub.url}/trading.git/info/refs?service=git-receive%2Dpack",
+        headers={"Authorization": "Basic " + base64.b64encode(
+            f"reader:{tok}".encode()).decode()})
+
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+
+    assert e.value.code == 403
+    assert "read access" in json.loads(e.value.read())["error"]
+
+
+def test_a_chunked_body_on_the_api_is_a_411_not_a_silent_empty_object(hub, trading):
+    """Only the git routes refused chunked. /join read Content-Length bytes, got none,
+    parsed `{}` and refused the code the caller had actually sent -- a wrong answer
+    dressed as the right one."""
+    host, port = hub.url.removeprefix("http://").rsplit(":", 1)
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    conn.putrequest("POST", "/trading/join")
+    conn.putheader("Content-Type", "application/json")
+    conn.putheader("Transfer-Encoding", "chunked")
+    conn.endheaders()
+    conn.send(b"0\r\n\r\n")
+    r = conn.getresponse()
+    body = json.loads(r.read())
+    conn.close()
+
+    assert r.status == 411, body
+    assert "chunked" in body["error"]
+
+
+def test_an_absurd_invite_lifetime_is_a_400_not_a_dropped_connection(hub, trading):
+    """`days: 999999999999` reached timedelta, which raised OverflowError and killed the
+    thread: the client saw the connection close with no status at all."""
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "days": 999999999999},
+                       ("seb", trading["admin"]))
+
+    assert status == 400
+    assert "between 1 and 365" in body["error"]
+
+
+# ---------------------------------------------------------------- the invite list
+
+def test_an_admin_can_list_the_open_invites(hub, trading):
+    """An admin who cannot see who is pending cannot tell a forgotten invite from a
+    revoked one. The hashes stay on the server."""
+    _, invited = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                     ("seb", trading["admin"]))
+
+    status, body = api(hub, "/trading/invites", {}, ("seb", trading["admin"]))
+
+    assert status == 200, body
+    assert body["invites"][0]["name"] == "maria"
+    assert body["invites"][0]["role"] == "write"
+    assert body["invites"][0]["by"] == "seb", "the list does not say who invited them"
+    assert invited["code"] not in json.dumps(body)
+    assert "hash" not in json.dumps(body)
+
+
+def test_a_write_token_cannot_list_the_invites(hub, trading):
+    tok = hub.registry.mint("trading", "maria", "write")
+
+    status, body = api(hub, "/trading/invites", {}, ("maria", tok))
+
+    assert status == 403
+    assert "only an admin" in body["error"]
+
+
+# ---------------------------------------------------------------- the access log
+
+def test_a_join_leaves_a_line_in_the_access_log(hub, trading, capfd):
+    """An owner has to be able to answer "who got access to this graph, and when". Reads
+    stay out of it, or the log is a `git fetch` poll loop and nothing else."""
+    _, invited = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                     ("seb", trading["admin"]))
+    capfd.readouterr()
+
+    api(hub, "/trading/join", {"code": invited["code"]})
+
+    err = capfd.readouterr().err
+    assert "join:write" in err
+    assert "trading" in err and "maria" in err
