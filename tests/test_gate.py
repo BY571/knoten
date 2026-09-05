@@ -996,3 +996,21 @@ def test_a_refused_tag_does_not_spend_the_one_creation_a_push_may_make(bare, mon
     assert rc == 1
     assert f"refs/tags/v1: {gate.ONE_BRANCH}" in err
     assert f"refs/heads/master: {gate.ONE_BRANCH}" not in err
+
+
+def test_a_constitution_in_an_option_shaped_directory_is_refused(signed):
+    """`contributors_dirs` lifts directory names out of the pushed tree exactly as
+    `graph_dirs` does, and now feeds them to the same reads. A component starting with
+    `-` is an option to git, not a path; one check serves both walks."""
+    origin, work, k = signed
+    d = work / "-x"
+    d.mkdir()
+    C.dump(d, {"seb": {"key": pub_line(k["seb"]), "role": "admin"}})
+    commit_signed(work, "seb adds a constitution in an option-shaped directory", k["seb"])
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "would be parsed as a git option" in r.stderr
+    assert "-x/contributors.yaml" not in git("ls-tree", "-r", "--name-only", "master",
+                                             cwd=origin).stdout

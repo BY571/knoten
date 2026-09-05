@@ -64,6 +64,26 @@ def say(msg: str) -> None:
     print(f"knoten: {msg}", file=sys.stderr, flush=True)
 
 
+def _safe_dirs(found: set[str]) -> list[str]:
+    """The directory names, sorted, with any one git could read as something other than a
+    path refused.
+
+    A directory name is a path lifted from the PUSHED tree, never trusted input. A
+    component starting with `-` reaches `git archive`/`git ls-tree` as an OPTION
+    (`--output=x` made git write a file; `--remote=host:path` made it shell out to ssh),
+    and one starting with `:` is pathspec magic (`:(top)`, `:(exclude)`). Both walks that
+    lift a name out of a tree come through here, so no name from a pushed tree ever
+    reaches git as anything but a plain path -- `extract`'s `--` separator is defense in
+    depth, not the only gate."""
+    out = []
+    for d in sorted(found):
+        if d and any(part.startswith(("-", ":")) for part in d.split("/")):
+            say(f"refusing {d}: directory name would be parsed as a git option, not a path")
+            raise GraphError(f"unsafe directory name in pushed tree: {d}")
+        out.append(d)
+    return out
+
+
 def graph_dirs(rev: str, repo: Path | None = None) -> list[str]:
     """Directories at `rev` that hold a graph: a `graph.yaml` blob and a `nodes` tree.
 
@@ -85,19 +105,7 @@ def graph_dirs(rev: str, repo: Path | None = None) -> list[str]:
             yamls.add(parent)
         elif leaf == "nodes" and kind == b"tree":
             nodes.add(parent)
-    safe = []
-    for d in sorted(yamls & nodes):
-        # A directory name is a path lifted from the PUSHED tree, never trusted input. A
-        # component starting with `-` reaches `git archive`/`git ls-tree` as an OPTION
-        # (`--output=x` made git write a file; `--remote=host:path` made it shell out to
-        # ssh), and one starting with `:` is pathspec magic (`:(top)`, `:(exclude)`). Ruling
-        # both out here means no name from a pushed tree ever reaches git as anything but
-        # a plain path -- `extract`'s `--` separator is defense in depth, not the only gate.
-        if d and any(part.startswith(("-", ":")) for part in d.split("/")):
-            say(f"refusing {d}: directory name would be parsed as a git option, not a path")
-            raise GraphError(f"unsafe directory name in pushed tree: {d}")
-        safe.append(d)
-    return safe
+    return _safe_dirs(yamls & nodes)
 
 
 def contributors_dirs(rev: str, repo: Path | None = None) -> list[str]:
@@ -117,7 +125,7 @@ def contributors_dirs(rev: str, repo: Path | None = None) -> list[str]:
         parent, _, leaf = p.rpartition("/")
         if leaf == C.FILE:
             found.add(parent)
-    return sorted(found)
+    return _safe_dirs(found)
 
 
 def extract(rev: str, gdir: str, dest: Path) -> Path:
