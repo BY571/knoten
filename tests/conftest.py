@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -63,6 +64,21 @@ GIT_ISOLATION = {
 }
 
 
+def git(*args, cwd, env=None):
+    """Every test file drives real git. One spelling of the call, so the isolation above
+    cannot be present in two files and missing in the third -- which is what happened:
+    the server-hook tests ran against the developer's own global config."""
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                          env={**os.environ, **GIT_ISOLATION, **(env or {})})
+
+
+def commit_node(work, name, text):
+    """Write one node into a graph and commit it. The unit of almost every push here."""
+    (work / "nodes" / name).write_text(text, encoding="utf-8")
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", name, cwd=work)
+
+
 @pytest.fixture
 def hub(tmp_path, monkeypatch):
     """A real knoten server on a random localhost port, and an isolated credential store.
@@ -99,15 +115,12 @@ def local_graph(tmp_path, rules_yaml):
     "trading" clones to tmp_path/"trading" by default, and that must never collide with
     the admin's own on-disk checkout of the same graph, which happens to share this
     tmp_path in tests."""
-    import subprocess
-
     root = tmp_path / "admin" / "trading"
     (root / "nodes").mkdir(parents=True)
     (root / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
     (root / "nodes" / "hyp-ok.md").write_text(
         "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# a claim\n", encoding="utf-8")
-    env = {**os.environ, **GIT_ISOLATION}
     for cmd in (["init", "-q", "-b", "master"], ["config", "user.email", "t@t.t"],
                 ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "seed"]):
-        subprocess.run(["git", *cmd], cwd=root, check=True, env=env, capture_output=True)
+        assert git(*cmd, cwd=root).returncode == 0, cmd
     return root

@@ -6,30 +6,18 @@ tests therefore drive real git clients at a real server.
 import base64
 import http.client
 import json
-import os
 import socket
-import subprocess
 import urllib.error
 import urllib.request
 
 import pytest
+from conftest import commit_node, git
 
 ALIVE_NO_GATE = "---\nid: hyp-x\ntype: hypothesis\nstatus: alive\n---\n\n# x\n"
 
 
-def git(*args, cwd, env=None):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                          env={**os.environ, **(env or {})})
-
-
 def clone_url(hub, graph, user, token):
     return f"http://{user}:{token}@{hub.url.removeprefix('http://')}/{graph}.git"
-
-
-def commit_node(work, name, text):
-    (work / "nodes" / name).write_text(text, encoding="utf-8")
-    git("add", "-A", cwd=work)
-    git("commit", "-qm", name, cwd=work)
 
 
 def auth_refused(r):
@@ -565,3 +553,82 @@ def test_a_join_leaves_a_line_in_the_access_log(hub, trading, capfd):
     err = capfd.readouterr().err
     assert "join:write" in err
     assert "trading" in err and "maria" in err
+
+
+# ---------------------------------------------------------------- the push itself
+
+def test_a_token_revoked_between_the_advertisement_and_the_push_is_refused(hub, trading,
+                                                                            tmp_path):
+    """Every request is authenticated on its own. git makes two: `info/refs` to see what
+    the server has, then the POST that carries the pack. A token checked only at the
+    first would let a revoked contributor finish a push they had already started."""
+    tok = hub.registry.mint("trading", "maria", "write")
+    dest = tmp_path / "maria"
+    git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(dest), cwd=tmp_path)
+    git("config", "user.email", "m@m.m", cwd=dest); git("config", "user.name", "m", cwd=dest)
+    commit_node(dest, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
+
+    hub.registry.revoke("trading", "maria")
+    r = git("push", "origin", "master", cwd=dest)
+
+    assert auth_refused(r), r.stderr
+    assert "hyp-m" not in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
+
+
+def test_an_annotated_tag_carrying_a_broken_tree_is_refused(hub, trading):
+    """An annotated tag is its own object, not a commit, and it reaches the hook as the
+    new oid. A gate that only knows how to read a commit would let a published, broken
+    snapshot onto the server."""
+    work = trading["work"]
+    commit_node(work, "hyp-x.md", ALIVE_NO_GATE)
+    git("tag", "-a", "v1", "-m", "a broken release", cwd=work)
+
+    r = git("push", "origin", "v1", cwd=work)
+
+    assert r.returncode != 0
+    assert "live-claims-must-cite-their-gates" in r.stderr
+    assert "v1" not in git("tag", cwd=hub.registry.repo("trading")).stdout
+
+
+def test_a_body_announced_with_expect_100_continue_is_answered_before_it_arrives(hub, trading):
+    """A client may withhold the body until the server answers `100 Continue`.
+    BaseHTTPRequestHandler answers that in handle_expect_100, BEFORE anything reads the
+    body: an override that reads the body first, or that refuses the expectation, turns
+    such a request into a deadlock rather than a refusal.
+
+    Hand-built, not driven through git: git appends a bare `Expect:` to its own requests,
+    which tells libcurl never to send the header, so no `git push` can reach this path."""
+    host, port = hub.url.removeprefix("http://").rsplit(":", 1)
+    _, invited = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                     ("seb", trading["admin"]))
+    body = json.dumps({"code": invited["code"]}).encode()
+
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    conn.putrequest("POST", "/trading/join")
+    conn.putheader("Content-Type", "application/json")
+    conn.putheader("Content-Length", str(len(body)))
+    conn.putheader("Expect", "100-continue")
+    conn.endheaders()
+    conn.send(body)
+    r = conn.getresponse()          # http.client swallows the interim 100 for us
+    got = json.loads(r.read())
+    conn.close()
+
+    assert r.status == 200, got
+    assert got["name"] == "maria"
+
+
+def test_a_push_too_big_for_one_read_still_lands(hub, trading):
+    """Every other push here fits in a single buffer. A 64 KB body of incompressible text
+    does not, so this is the one that would catch a `_body` that stops at the first
+    `read()` -- and a graph with a plot pasted into a node pushes at exactly this size."""
+    import random
+    filler = random.Random(0).randbytes(32768).hex()
+    work = trading["work"]
+    commit_node(work, "hyp-big.md",
+                "---\nid: hyp-big\ntype: hypothesis\nstatus: open\n---\n\n" + filler + "\n")
+
+    r = git("push", "origin", "master", cwd=work)
+
+    assert r.returncode == 0, r.stderr
+    assert "hyp-big" in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout

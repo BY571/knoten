@@ -2,19 +2,14 @@
 credential-helper protocol, and commands that wrap git plus four JSON calls."""
 import os
 import stat
-import subprocess
 
 import pytest
+from conftest import commit_node, git
 
 from knoten import remote
 from knoten.cli import main
 from knoten.core import GraphError
 from knoten.remote import _explain, cred_lookup, cred_path, cred_store, credential_helper
-
-
-def git(*args, cwd, env=None):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                          env={**os.environ, **(env or {})})
 
 
 @pytest.fixture(autouse=True)
@@ -117,12 +112,6 @@ def test_the_cli_exposes_the_helper_on_stdin(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------- create, push, pull
-
-def commit_node(work, name, text):
-    (work / "nodes" / name).write_text(text, encoding="utf-8")
-    git("add", "-A", cwd=work)
-    git("commit", "-qm", name, cwd=work)
-
 
 @pytest.fixture
 def shared(hub, local_graph, monkeypatch):

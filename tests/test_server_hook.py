@@ -7,20 +7,15 @@ refuses the push outright rather than reporting afterwards that master is broken
 """
 import os
 import shutil
-import subprocess
 
 import pytest
+from conftest import git
 
 from knoten.cli import main
 from knoten.core import GraphError
 from knoten.hook import SERVER_MARKER, install_server
 
 ALIVE_NO_GATE = "---\nid: hyp-x\ntype: hypothesis\nstatus: alive\n---\n\n# x\n"
-
-
-def git(*args, cwd, env=None):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                          env={**os.environ, **(env or {})})
 
 
 @pytest.fixture
