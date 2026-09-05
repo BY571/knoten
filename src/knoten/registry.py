@@ -21,7 +21,8 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .core import GraphError, ID_RE, MAX_PUSH_BYTES, graph_lock, write_atomic
+from .core import (GraphError, ID_RE, MAX_PUSH_BYTES, SERVER_GIT_ENV, graph_lock,
+                   write_atomic)
 from .hook import install_server
 
 ROLES = ("read", "write", "admin")
@@ -122,7 +123,11 @@ class Registry:
         try:
             d.mkdir(mode=0o700, parents=True)
             repo = d / "repo.git"
-            subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
+            # The same config every other git on this server runs under: a core.hooksPath
+            # or an init.templateDir in the daemon account's ~/.gitconfig would otherwise
+            # make the repo we create and the repo receive-pack sees two different repos.
+            env = {**os.environ, **SERVER_GIT_ENV}
+            subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True, env=env)
             for key, value in (("http.receivepack", "true"),
                                ("receive.maxInputSize", str(MAX_PUSH_BYTES)),
                                # A `write` collaborator's stray `--force` rewrote the
@@ -137,7 +142,8 @@ class Registry:
                                # fails to check out, and the server is where it can still
                                # be refused.
                                ("receive.fsckObjects", "true")):
-                subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+                subprocess.run(["git", "-C", str(repo), "config", key, value],
+                               check=True, env=env)
             install_server(repo)
             return self.mint(name, admin, "admin")
         except GraphError:

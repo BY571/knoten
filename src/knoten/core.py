@@ -32,6 +32,16 @@ LOCK = ".knoten.lock"
 # refuses is a push that spends the bandwidth before it is told no.
 MAX_PUSH_BYTES = 100 * 1024 * 1024
 
+# What every git the SERVER runs must be told, so that the git which installs the gate and
+# the git which enforces it agree on where hooks live. With `core.hooksPath` in the daemon
+# account's ~/.gitconfig, `Registry.create` asked git where hooks go (process env, no
+# HOME override, so hooksPath applied... or did not, depending on the caller) while
+# receive-pack read ~/.gitconfig and looked somewhere else entirely: the hook was written
+# where nothing would ever run it, and a push that breaks the graph landed with rc 0. A
+# gate that fails OPEN reports green forever. The client-side `knoten hook` must NOT use
+# this: honouring core.hooksPath is exactly right in a clone (husky, monorepos).
+SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
 
 class GraphError(Exception):
     """The graph on disk is malformed. Always name the file."""

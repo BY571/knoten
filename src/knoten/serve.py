@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from .core import GraphError, MAX_PUSH_BYTES
+from .core import GraphError, MAX_PUSH_BYTES, SERVER_GIT_ENV
 from .registry import Registry
 
 GIT_RE = re.compile(r"^/([a-z0-9][a-z0-9_-]*)\.git(/.*)$")
@@ -188,6 +188,10 @@ class _Handler(BaseHTTPRequestHandler):
         env = {
             **{k: v for k, v in os.environ.items()
                if k in KEEP_ENV or k.startswith("LC_")},
+            # HOME survives the whitelist, so ~/.gitconfig still reaches receive-pack. A
+            # core.hooksPath there sent it looking for hooks somewhere the gate was never
+            # installed, and the push landed unchecked with rc 0.
+            **SERVER_GIT_ENV,
             "GIT_PROJECT_ROOT": str(self.server.registry.graph_dir(name)),
             "GIT_HTTP_EXPORT_ALL": "1",
             "PATH_INFO": "/repo.git" + sub,          # the URL says <name>.git; disk says repo.git

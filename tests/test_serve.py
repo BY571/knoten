@@ -632,3 +632,62 @@ def test_a_push_too_big_for_one_read_still_lands(hub, trading):
 
     assert r.returncode == 0, r.stderr
     assert "hyp-big" in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
+
+
+# ---------------------------------------------------------------- the gate stays installed
+
+@pytest.fixture
+def hooks_path_hub(tmp_path, monkeypatch):
+    """A server whose account carries `core.hooksPath` in ~/.gitconfig: the shape husky,
+    the pre-commit framework and most monorepos leave behind on a developer machine.
+
+    The gate is installed by one git and enforced by another. The CGI environment keeps
+    HOME, so receive-pack reads ~/.gitconfig; if the git that installed the hook resolved
+    hooksPath differently, the hook sits where the enforcing git never looks and every
+    push lands unchecked with rc 0. A gate that fails OPEN reports green forever.
+    """
+    import threading
+    from types import SimpleNamespace
+
+    from conftest import GIT_ISOLATION
+    from knoten.registry import Registry
+    from knoten.serve import make_server
+
+    home = tmp_path / "daemon-home"
+    elsewhere = home / "unrelated-hooks"
+    elsewhere.mkdir(parents=True)
+    (home / ".gitconfig").write_text(f"[core]\n\thooksPath = {elsewhere}\n", encoding="utf-8")
+    for k, v in GIT_ISOLATION.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("KNOTEN_CREDENTIALS", str(tmp_path / "credentials"))
+    monkeypatch.setenv("HOME", str(home))          # before the Registry, which installs the gate
+
+    reg = Registry(tmp_path / "data")
+    srv = make_server(reg, "127.0.0.1", 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    host, port = srv.server_address
+    yield SimpleNamespace(url=f"http://{host}:{port}", registry=reg,
+                          secret=reg.owner_secret(), elsewhere=elsewhere)
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_a_global_hooks_path_on_the_server_does_not_disable_the_gate(hooks_path_hub,
+                                                                     local_graph):
+    """The install asked git where hooks go under one config and receive-pack answered
+    under another, so the hook was written to repo.git/hooks while git looked in
+    ~/.gitconfig's core.hooksPath. A broken push landed with rc 0 and the server reported
+    success. Both gits now run under the same SERVER_GIT_ENV."""
+    hub = hooks_path_hub
+    admin = hub.registry.create("trading", admin="seb")
+    git("remote", "add", "origin", clone_url(hub, "trading", "seb", admin), cwd=local_graph)
+    assert git("push", "-q", "origin", "master", cwd=local_graph).returncode == 0
+    commit_node(local_graph, "hyp-x.md", ALIVE_NO_GATE)
+
+    r = git("push", "origin", "master", cwd=local_graph)
+
+    assert r.returncode != 0, "the gate failed OPEN under core.hooksPath"
+    assert "live-claims-must-cite-their-gates" in r.stderr
+    assert "hyp-x" not in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
+    assert (hub.registry.repo("trading") / "hooks" / "pre-receive").exists()
+    assert list(hub.elsewhere.iterdir()) == [], "the gate was installed outside the repo"

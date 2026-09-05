@@ -15,11 +15,12 @@ and silently not gating. Which is precisely the failure this module exists to pr
 """
 from __future__ import annotations
 
+import os
 import stat
 import subprocess
 from pathlib import Path
 
-from .core import GraphError
+from .core import GraphError, SERVER_GIT_ENV
 
 MARKER = "# knoten pre-commit gate"
 
@@ -41,9 +42,10 @@ exec knoten validate
 """
 
 
-def _git(root: Path, *args: str) -> str:
+def _git(root: Path, *args: str, env: dict | None = None) -> str:
     try:
-        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
+                           env={**os.environ, **env} if env else None)
     except FileNotFoundError as e:
         raise GraphError("git is not installed") from e
     if r.returncode != 0:
@@ -51,19 +53,24 @@ def _git(root: Path, *args: str) -> str:
     return r.stdout.strip()
 
 
-def hooks_dir(root: Path) -> Path:
-    """Where git ACTUALLY reads hooks from — not where we guess it does."""
-    p = Path(_git(root, "rev-parse", "--git-path", "hooks"))
+def hooks_dir(root: Path, env: dict | None = None) -> Path:
+    """Where git ACTUALLY reads hooks from — not where we guess it does.
+
+    `env` is how the server side asks the same question the server-side git will answer:
+    ask it under a different config and you write the hook where nothing runs it.
+    """
+    p = Path(_git(root, "rev-parse", "--git-path", "hooks", env=env))
     return p if p.is_absolute() else (root / p).resolve()
 
 
-def _write_hook(root: Path, name: str, marker: str, body: str, force: bool) -> Path:
+def _write_hook(root: Path, name: str, marker: str, body: str, force: bool,
+                env: dict | None = None) -> Path:
     """Put a hook where git actually reads it, without clobbering one somebody wrote.
 
     Shared so the two gates cannot drift on the clobber rule, which is the half a reader
     has to trust rather than check.
     """
-    hooks = hooks_dir(root)
+    hooks = hooks_dir(root, env)
     hooks.mkdir(parents=True, exist_ok=True)
     hook = hooks / name
 
@@ -176,4 +183,8 @@ def install_server(repo: Path, force: bool = False) -> Path:
     `graph.yaml` here to read and no graph path worth recording. The hook finds the
     graphs in each pushed tree instead.
     """
-    return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force)
+    # SERVER_GIT_ENV, because receive-pack runs under it too. Asked without it, git
+    # answers with the daemon account's core.hooksPath and the gate is installed where
+    # the git that enforces it will never look: the gate fails OPEN and reports green.
+    return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force,
+                       env=SERVER_GIT_ENV)
