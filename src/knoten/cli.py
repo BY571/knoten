@@ -17,6 +17,7 @@ from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook, install_server
 from .registry import ROLES, Registry
 from .serve import make_server
+from . import remote
 from .validate import _csv, applies, load_config
 
 # Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
@@ -635,6 +636,10 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--data", required=True, metavar="DIR", help="where graphs and tokens live")
     s.add_argument("--bind", default="127.0.0.1:8899", metavar="HOST:PORT")
 
+    # git runs this; nobody types it. `!knoten credential` is set in every clone's config.
+    s = sub.add_parser("credential", help=argparse.SUPPRESS)
+    s.add_argument("action", nargs="?")
+
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
@@ -688,6 +693,11 @@ def main(argv=None) -> int:
 
         if args.cmd == "serve":
             return serve_cmd(args.data, args.bind)
+
+        if args.cmd == "credential":
+            if args.action == "get":
+                sys.stdout.write(remote.credential_helper(sys.stdin.read()))
+            return 0           # store/erase: git manages nothing here; knoten does
 
         root = find_root()
         return {
