@@ -225,7 +225,9 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
     Three shapes. A commit that leaves contributors.yaml alone needs any listed writer's
     signature. A commit that adds exactly one entry carrying an admin-signed invite is a
     join, and needs the NEWCOMER's signature (the invite is the admin's part). Anything
-    else that touches the file is a change to who may write, and needs an admin.
+    else that touches the file is a change to who may write, and needs an admin. Two
+    things are refused outright, whoever signed: dropping a name (revoke, never remove)
+    and, under `knoten serve`, a bootstrap by anything but the graph's admin token.
 
     `has_parent` is the caller's own answer to "does this commit have a parent", asked
     once per commit rather than once per (commit, gdir) pair -- check_ref may call this
