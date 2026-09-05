@@ -328,19 +328,34 @@ def test_the_whole_journey(hub, shared, tmp_path, monkeypatch, capsys):
     assert "live-claims-must-cite-their-gates" in capsys.readouterr().err
 
 
-def test_join_with_a_read_invite_can_pull_but_not_push(hub, shared, tmp_path, monkeypatch, capsys):
+def test_join_with_a_read_invite_can_pull_but_not_push(hub, shared, tmp_path, monkeypatch,
+                                                       capsys, keys_dir):
+    """A reader is not listed. contributors.yaml says who may WRITE, every entry in it is
+    a key the gate accepts commits from, and a reader has nothing to sign -- so `join`
+    used to make them a key and push an entry the server refused for read access, ending
+    a successful join on an error. Their token is the whole of their access."""
     main(["invite", "reader", "--role", "read"])
     code = capsys.readouterr().out.strip().split()[-1]
+    before = (shared / "contributors.yaml").read_text(encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    main(["join", f"{hub.url}/trading", "--invite", code, "--dest", "r"])
-    clone = tmp_path / "r"
-    git("config", "user.email", "r@r.r", cwd=clone); git("config", "user.name", "r", cwd=clone)
-    commit_node(clone, "hyp-r.md", "---\nid: hyp-r\ntype: hypothesis\nstatus: open\n---\n\n# r\n")
-    monkeypatch.chdir(clone)
 
+    assert main(["join", f"{hub.url}/trading", "--invite", code, "--dest", "r"]) == 0
+
+    out = capsys.readouterr().out
+    assert "can pull" in out
+    clone = tmp_path / "r"
+    assert (clone / "nodes" / "hyp-ok.md").exists()
+    assert (clone / "contributors.yaml").read_text(encoding="utf-8") == before
+    assert "reader" not in before
+    assert not (keys_dir / "reader").exists(), "a reader was given a signing key"
+
+    git("config", "user.email", "r@r.r", cwd=clone); git("config", "user.name", "r", cwd=clone)
+    monkeypatch.chdir(clone)
+    assert main(["pull"]) == 0
+
+    commit_node(clone, "hyp-r.md", "---\nid: hyp-r\ntype: hypothesis\nstatus: open\n---\n\n# r\n")
     assert main(["push"]) == 1
     assert "read access, not write" in capsys.readouterr().err
-    assert main(["pull"]) == 0
 
 
 def test_revoke_locks_a_contributor_out_on_their_next_push(hub, shared, tmp_path, monkeypatch, capsys):
@@ -408,6 +423,28 @@ def test_a_clone_failure_after_redemption_says_the_invite_is_spent(hub, shared, 
 
 
 # ---------------------------------------------------------------- a server is not trusted
+
+def test_a_signed_graph_whose_join_reply_carries_no_signature_is_refused(hub, shared_signed,
+                                                                         tmp_path, monkeypatch,
+                                                                         capsys):
+    """The graph is signed, so the join commit needs the admin's blob and signature. A
+    server that answers with a valid name, role and token but drops those cannot be
+    worked around by committing an entry with an empty invite -- the gate would refuse it
+    and the message would blame the newcomer's key."""
+    assert main(["invite", "maria"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+    real_api = remote._api
+
+    def strip_signature(url, body, auth=None):
+        got = real_api(url, body, auth)
+        return {k: v for k, v in got.items() if k not in ("blob", "sig")} if url.endswith("/join") else got
+    monkeypatch.setattr(remote, "_api", strip_signature)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(GraphError, match="the server's reply was malformed"):
+        remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "maria"))
+
+
 
 def test_a_hostile_join_reply_is_refused_and_writes_nothing(hub, tmp_path, monkeypatch):
     """The credentials file is one line per remote, so a `name` carrying a newline
@@ -610,6 +647,29 @@ def test_remote_create_bootstrap_commit_failure_is_one_line(hub, local_graph, mo
                  "--owner-secret", hub.secret]) == 1
     err = capsys.readouterr().err
     assert err.count("\n") == 1 and "could not commit" in err
+
+
+def test_a_failed_create_leaves_one_bootstrap_commit_that_a_rerun_reuses(hub, local_graph,
+                                                                          monkeypatch, capsys):
+    """`_bootstrap` runs before the server is called, so a wrong owner secret leaves the
+    constitution committed locally with nothing on the server. That is deliberate and
+    harmless only if a re-run takes the SECOND path -- the graph already names this admin,
+    so configure the clone to sign as them and commit nothing more. A second bootstrap
+    commit would be a change to contributors.yaml the gate then wants an admin for."""
+    monkeypatch.chdir(local_graph)
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", "no"]) == 1
+    assert "owner secret" in capsys.readouterr().err
+    after_failure = git("rev-parse", "HEAD", cwd=local_graph).stdout.strip()
+    assert git("log", "--format=%s", cwd=local_graph).stdout.count("creates the graph") == 1
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 0
+
+    assert git("rev-parse", "HEAD", cwd=local_graph).stdout.strip() == after_failure
+    assert git("config", "user.signingkey", cwd=local_graph).stdout.strip().endswith("/seb")
+    assert hub.registry.head_graph("trading")[0]["seb"]["role"] == "admin"
 
 
 def test_knoten_key_prints_the_public_line(monkeypatch, capsys, tmp_path):
@@ -841,6 +901,7 @@ def test_revoke_is_idempotent_so_a_failed_server_call_can_be_retried(hub, shared
     admin = cred_lookup(f"{hub.url}/trading.git")
     monkeypatch.chdir(tmp_path)
     assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    maria = cred_lookup(f"{hub.url}/trading.git")
     cred_store(f"{hub.url}/trading.git", *admin)
     monkeypatch.chdir(shared_signed)
 
@@ -861,7 +922,9 @@ def test_revoke_is_idempotent_so_a_failed_server_call_can_be_retried(hub, shared
     assert main(["revoke", "maria"]) == 0
     assert git("rev-parse", "HEAD", cwd=hosted).stdout.strip() == sha_after_first_call
     assert len(calls) == 2
-    assert hub.registry.authenticate("trading", "maria", "anything") is None
+    # Maria's REAL token, not a string nothing would ever match: this asserts the token
+    # died, where "anything" asserted only that some string is not a token.
+    assert hub.registry.authenticate("trading", "maria", maria[1]) is None
 
 
 def test_revoke_refuses_when_this_clone_cannot_sign(hub, shared_signed, capsys, monkeypatch):

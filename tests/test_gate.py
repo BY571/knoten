@@ -602,7 +602,31 @@ def test_an_invite_is_checked_against_the_graph_name_before_this_commit(signed, 
     r = push(work)
 
     assert r.returncode != 0
+    assert "issued for a different name, role or graph" in r.stderr
     assert "name: test" in git("show", "master:g/graph.yaml", cwd=origin).stdout
+
+
+def test_an_invite_for_the_graphs_old_name_is_refused_after_it_is_renamed(signed, keys_dir):
+    """The sibling of the test above, with the rename in a PREVIOUS pushed commit so the
+    join itself touches nothing but contributors.yaml. Without it, "refused" could mean
+    only "you touched graph.yaml" and the name check would never be the thing that fired."""
+    origin, work, k = signed
+    (work / "g" / "graph.yaml").write_text(
+        (work / "g" / "graph.yaml").read_text(encoding="utf-8").replace("name: test", "name: other"),
+        encoding="utf-8")
+    commit_signed(work, "seb renames the graph", k["seb"])
+    assert push(work).returncode == 0
+
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write", invited_by="seb",
+               invite=invite_for(k["seb"], "test", "maria", "write"))
+    commit_signed(work, "maria joins with an invite for the old name", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "issued for a different name, role or graph" in r.stderr
+    assert "maria" not in git("show", "master:g/contributors.yaml", cwd=origin).stdout
 
 
 def test_a_join_naming_a_different_inviter_is_refused(signed, keys_dir):
@@ -714,3 +738,140 @@ def test_a_writer_may_not_become_admin_by_moving_the_graph(signed, keys_dir):
     assert "changes contributors.yaml and is not signed by an admin" in r.stderr
     tree = git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
     assert "g/contributors.yaml" in tree
+
+
+# --------------------------------------------------- a graph, and the only graph
+
+def test_removing_the_graph_but_keeping_its_constitution_needs_an_admin(signed, keys_dir):
+    """`git rm -r g/nodes` leaves contributors.yaml with nothing under it. The file is
+    unchanged, so this needed only a writer's signature -- and the server then read the
+    tip as a phase-1 graph, which is where unsigned invites start being accepted for any
+    role and /join stops re-checking signatures at all."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+    git("rm", "-rq", "g/nodes", cwd=work)
+    commit_signed(work, "maria takes the nodes away", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "stops g being a graph" in r.stderr
+    assert "g/nodes/hyp-ok.md" in git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
+
+    # An admin may: the rule is about who signed, not about the change being forbidden.
+    git("reset", "-q", "--hard", "HEAD~1", cwd=work)
+    git("rm", "-rq", "g/nodes", cwd=work)
+    commit_signed(work, "seb retires the graph", k["seb"])
+    assert push(work).returncode == 0, "an admin may take their own graph down"
+
+
+def test_a_writer_cannot_plant_a_second_graph_naming_themselves_its_admin(signed, keys_dir,
+                                                                          rules_yaml):
+    """A fresh directory with its own graph.yaml, nodes and contributors.yaml reads as a
+    bootstrap, and nobody vouches for a first constitution but itself -- so maria signing
+    her own made her admin of it. Two graphs in one hosted repo is also the state where
+    `head_graph` refuses to answer anything, for anyone, until a human intervenes."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+
+    mine = work / "mine"
+    (mine / "nodes").mkdir(parents=True)
+    (mine / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (mine / "nodes" / "hyp-mine.md").write_text(
+        "---\nid: hyp-mine\ntype: hypothesis\nstatus: open\n---\n\n# mine\n", encoding="utf-8")
+    C.dump(mine, {"maria": {"key": pub_line(maria), "role": "admin"}})
+    commit_signed(work, "maria starts a graph of her own", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "starts a second contributors.yaml" in r.stderr
+    assert "mine/contributors.yaml" not in git("ls-tree", "-r", "--name-only", "master",
+                                               cwd=origin).stdout
+
+
+def test_a_name_is_revoked_never_removed(signed, keys_dir):
+    """Revocation is a mark so history stays attributable. Deleting the entry erases the
+    record the mark exists to keep, and an admin is no more entitled to that than anyone."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+    c = C.load(work / "g")
+    del c["maria"]
+    C.dump(work / "g", c)
+    commit_signed(work, "seb erases maria", k["seb"])
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "revoked, never removed" in r.stderr
+    assert "maria" in git("show", "master:g/contributors.yaml", cwd=origin).stdout
+
+
+def test_a_revoked_writer_cannot_branch_off_the_history_they_could_write(signed, keys_dir):
+    """Every commit on the branch checks out -- maria signed hers while she was still
+    listed. The REF does not: a second branch is a line of history nobody pulls, and the
+    person pushing it is no longer one of this graph's writers."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    (work / "g" / "nodes" / "hyp-m.md").write_text(
+        "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n", encoding="utf-8")
+    commit_signed(work, "maria's claim", maria)
+    hers = git("rev-parse", "HEAD", cwd=work).stdout.strip()
+    assert push(work).returncode == 0
+    c = C.load(work / "g")
+    c["maria"]["revoked"] = "2026-09-05"
+    C.dump(work / "g", c)
+    commit_signed(work, "seb revokes maria", k["seb"])
+    assert push(work).returncode == 0
+
+    r = git("push", "origin", f"{hers}:refs/heads/marias-work", cwd=work)
+
+    assert r.returncode != 0
+    assert "one branch" in r.stderr
+    assert "marias-work" not in git("branch", cwd=origin).stdout
+
+
+def test_a_malformed_contributors_file_refuses_the_push_with_the_parse_error(signed):
+    """The gate parses contributors.yaml out of the PUSHED tree. A file that does not
+    parse cannot say who may write, so the push is refused and the parse message is what
+    the pusher reads -- not a traceback, and not silence."""
+    origin, work, k = signed
+    (work / "g" / C.FILE).write_text("seb: [1\n", encoding="utf-8")
+    commit_signed(work, "seb breaks the constitution", k["seb"])
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "invalid YAML" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_a_graph_whose_every_writer_is_revoked_accepts_nothing(signed, keys_dir):
+    """The last admin revoking themselves is allowed -- they were active when they signed
+    it. What comes after is not: there is no key left that may write here, and an empty
+    key set is a refusal, not a crash and not an open door."""
+    origin, work, k = signed
+    c = C.load(work / "g")
+    c["seb"]["revoked"] = "2026-09-05"
+    C.dump(work / "g", c)
+    commit_signed(work, "seb steps down", k["seb"])
+    assert push(work).returncode == 0
+    (work / "g" / "nodes" / "hyp-after.md").write_text(
+        "---\nid: hyp-after\ntype: hypothesis\nstatus: open\n---\n\n# after\n", encoding="utf-8")
+    commit_signed(work, "seb writes anyway", k["seb"])
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "signed by a key not listed here" in r.stderr

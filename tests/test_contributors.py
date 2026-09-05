@@ -30,6 +30,9 @@ def test_parse_accepts_the_documented_shape():
 
 @pytest.mark.parametrize("text, msg", [
     ("seb:\n  role: admin\n", "key"),
+    # `^...$` in ID_RE also matched just before a trailing newline, so this name parsed
+    # as valid -- and it goes on to be a filename, a directory and a URL segment.
+    (f'"maria\\n":\n  key: {KEY}\n  role: write\n', "not a valid"),
     (f"seb:\n  key: {KEY}\n  role: owner\n", "role"),
     (f"Seb:\n  key: {KEY}\n  role: admin\n", "not a valid"),
     (f"seb:\n  key: rsa-not-here\n  role: admin\n", "ssh-ed25519"),

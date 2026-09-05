@@ -525,6 +525,7 @@ def test_an_absurd_invite_lifetime_is_a_400_not_a_dropped_connection(hub, tradin
 
 from conftest import commit_signed, make_key, pub_line
 from knoten import contributors as C
+from knoten.core import GraphError
 from knoten.keys import INVITE_NS, sign
 
 
@@ -551,7 +552,7 @@ def test_a_signed_graph_refuses_an_unsigned_invite(hub, signed_trading):
     status, body = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
                        ("seb", signed_trading["admin"]))
     assert status == 400
-    assert "signed" in body["error"]
+    assert "invites must carry the admin's signature" in body["error"]
 
 
 def test_a_stolen_admin_token_cannot_mint_an_invite(hub, signed_trading, keys_dir):
@@ -615,7 +616,8 @@ def test_a_revoked_admins_earlier_invite_is_refused_at_join_not_only_at_the_gate
 
     assert status == 400
     assert "no longer valid" in joined["error"]
-    assert hub.registry.authenticate("trading", "maria", joined.get("token", "")) is None
+    # Not "is this token refused" -- there must be no token in the reply at all.
+    assert "token" not in joined
 
 
 def test_an_unsigned_graph_refuses_an_invite_carrying_a_signature(hub, trading):
@@ -626,15 +628,16 @@ def test_an_unsigned_graph_refuses_an_invite_carrying_a_signature(hub, trading):
     assert "not signed" in body["error"]
 
 
-def test_invite_fields_over_the_size_cap_are_refused(hub, trading):
+@pytest.mark.parametrize("blob, sig", [
+    pytest.param("x" * 4097, "", id="blob-over-4096-bytes"),
+    pytest.param("", "y" * 8193, id="sig-over-8192-bytes"),
+    # 2049 two-byte characters is 4098 BYTES: over the cap, though under it counted as
+    # code points, and bytes are what gets stored and signed over.
+    pytest.param("é" * 2049, "", id="blob-over-4096-bytes-in-two-byte-characters"),
+])
+def test_invite_fields_over_the_size_cap_are_refused(hub, trading, blob, sig):
     status, body = api(hub, "/trading/invite",
-                       {"name": "maria", "role": "write", "blob": "x" * 4097, "sig": ""},
-                       ("seb", trading["admin"]))
-    assert status == 400
-    assert "too large" in body["error"]
-
-    status, body = api(hub, "/trading/invite",
-                       {"name": "maria", "role": "write", "blob": "", "sig": "y" * 8193},
+                       {"name": "maria", "role": "write", "blob": blob, "sig": sig},
                        ("seb", trading["admin"]))
     assert status == 400
     assert "too large" in body["error"]
@@ -662,17 +665,6 @@ def test_an_admin_token_not_listed_in_contributors_gets_a_clear_refusal(hub, sig
     assert "not a listed admin" in got["error"]
 
 
-def test_invite_field_size_cap_counts_bytes_not_code_points(hub, trading):
-    """A multi-byte character must count by its actual stored/signed byte length, not
-    code points: 2049 two-byte characters is 4098 bytes -- over the cap, though under it
-    by code-point count alone."""
-    status, body = api(hub, "/trading/invite",
-                       {"name": "maria", "role": "write", "blob": "é" * 2049, "sig": ""},
-                       ("seb", trading["admin"]))
-    assert status == 400
-    assert "too large" in body["error"]
-
-
 def test_an_invite_issued_before_the_graph_was_signed_is_refused_at_join(hub, trading, keys_dir):
     """Bootstrapping a signed graph does not retroactively arm invites that were minted
     unsigned, before there was any admin key to check them against."""
@@ -691,6 +683,80 @@ def test_an_invite_issued_before_the_graph_was_signed_is_refused_at_join(hub, tr
 
     assert status == 400
     assert "issued before this graph was signed" in joined["error"]
+
+
+# ------------------------------------------- who may lay down the first constitution
+
+def test_a_write_token_cannot_bootstrap_a_hosted_graphs_contributors_file(hub, trading,
+                                                                          tmp_path, keys_dir):
+    """A signature says which KEY wrote a commit, never which token pushed it, and the
+    first contributors.yaml is signed by a key it names itself -- so on a phase-1 hosted
+    graph any `write` collaborator could write one naming themselves admin and push it.
+    `knoten serve` tells the hook who it authenticated; only the admin's token may."""
+    tok = hub.registry.mint("trading", "maria", "write")
+    dest = tmp_path / "maria"
+    git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(dest), cwd=tmp_path)
+    git("config", "user.email", "m@m.m", cwd=dest); git("config", "user.name", "m", cwd=dest)
+    maria = make_key(keys_dir, "maria")
+    C.dump(dest, {"maria": {"key": pub_line(maria), "role": "admin"}})
+    commit_signed(dest, "maria writes herself a constitution", maria)
+
+    r = git("push", "origin", "master", cwd=dest)
+
+    assert r.returncode != 0
+    assert "only the graph's admin token may bootstrap" in r.stderr
+    assert hub.registry.head_graph("trading")[0] is None, "the graph is still unsigned"
+
+
+def test_the_admins_own_token_bootstraps(hub, signed_trading):
+    """The other half: the fixture above this one IS the admin's bootstrap, pushed
+    through the same server, and the graph is signed afterwards."""
+    contribs, name = hub.registry.head_graph("trading")
+
+    assert set(contribs) == {"seb"} and contribs["seb"]["role"] == "admin"
+    assert name == "test"
+
+
+def test_a_bootstrap_may_not_bundle_anything_else(hub, trading, keys_dir):
+    """Same restriction a join carries. The signature proves who wrote the constitution,
+    not that the rest of the tree was looked at, and this commit is accepted on the
+    strength of naming its own signer."""
+    work = trading["work"]
+    seb = make_key(keys_dir, "seb")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    (work / "nodes" / "hyp-extra.md").write_text(
+        "---\nid: hyp-extra\ntype: hypothesis\nstatus: open\n---\n\n# extra\n",
+        encoding="utf-8")
+    commit_signed(work, "seb signs the graph and slips a node in", seb)
+
+    r = git("push", "origin", "master", cwd=work)
+
+    assert r.returncode != 0
+    assert "may change nothing else" in r.stderr
+    assert hub.registry.head_graph("trading")[0] is None, "the graph is still unsigned"
+
+
+def test_a_graph_whose_nodes_are_gone_is_broken_not_unsigned(hub, signed_trading):
+    """An admin may retire their graph's contents; the gate allows exactly that. What
+    must not happen is the server then reading a tip that still holds contributors.yaml
+    as phase-1 -- where an UNSIGNED invite for any role is accepted and /join skips the
+    signature re-check entirely."""
+    work = signed_trading["work"]
+    git("rm", "-rq", "nodes", cwd=work)
+    commit_signed(work, "seb retires the graph", signed_trading["seb_key"])
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+
+    with pytest.raises(GraphError, match="but no graph"):
+        hub.registry.head_graph("trading")
+
+    status, body = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                       ("seb", signed_trading["admin"]))
+
+    assert status == 400 and "code" not in body
+    # The refusal reaches an ordinary contributor. The server's own data directory is not
+    # theirs to learn from it.
+    assert "--git-dir" not in body["error"]
+    assert str(hub.data) not in body["error"]
 
 
 # ---------------------------------------------------------------- the invite list
