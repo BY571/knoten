@@ -308,6 +308,50 @@ def test_serve_refuses_a_non_numeric_port_before_creating_the_owner_secret(tmp_p
     assert not (tmp_path / "d" / "owner").exists()
 
 
+# ---------------------------------------------------------------- isolation and races
+
+def test_two_graphs_on_one_server_do_not_share_tokens(hub, trading, tmp_path):
+    """A token for `trading` opens nothing on `biology`, including reading. One server,
+    many graphs, no cross-talk, or the invite model means nothing."""
+    hub.registry.create("biology", admin="seb")
+
+    r = git("clone", "-q", clone_url(hub, "biology", "seb", trading["admin"]),
+            str(tmp_path / "x"), cwd=tmp_path)
+
+    assert auth_refused(r), r.stderr
+
+
+def test_concurrent_joins_do_not_lose_each_other(hub, trading):
+    """Eight invites redeemed at the same moment. A read-modify-write on tokens.json
+    without the lock drops some of them, silently, and the file still parses."""
+    import concurrent.futures
+
+    codes = [hub.registry.invite("trading", f"user-{i}", "write") for i in range(8)]
+
+    def redeem(code):
+        _, body = api(hub, "/trading/join", {"code": code})
+        return body["name"], body["token"]
+
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        results = list(pool.map(redeem, codes))
+
+    for name, token in results:
+        assert hub.registry.authenticate("trading", name, token) == "write", f"{name} lost"
+    on_disk = json.loads((hub.registry.graph_dir("trading") / "tokens.json").read_text())
+    assert len(on_disk) == 9          # seb + eight
+
+
+def test_a_traversal_in_the_url_is_404_not_a_file(hub, trading):
+    """`/../../etc.git` must never reach GIT_PROJECT_ROOT. The regex refuses it before
+    the registry sees it; this pins that the regex stays strict."""
+    req = urllib.request.Request(hub.url + "/../../etc.git/info/refs?service=git-upload-pack")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+
+    assert e.value.code in (401, 404)
+    e.value.close()  # unread, it leaves the socket for the GC to warn about later
+
+
 def test_serve_closes_its_socket_when_it_stops(tmp_path, monkeypatch):
     """`serve_forever` returning is not the socket closing. Left open, the port stays
     bound until the interpreter exits."""
