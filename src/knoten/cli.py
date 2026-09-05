@@ -17,6 +17,7 @@ from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook, install_server
 from .registry import ROLES, Registry
 from .serve import make_server
+from . import gate
 from . import remote
 from .validate import _csv, applies, load_config
 
@@ -687,6 +688,9 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("credential", help=argparse.SUPPRESS)
     s.add_argument("action", nargs="?")
 
+    # git runs this from the pre-receive hook; nobody types it.
+    sub.add_parser("gate", help=argparse.SUPPRESS)
+
     s = sub.add_parser("remote", help="connect this graph to a knoten server")
     rs = s.add_subparsers(dest="remote_cmd", required=True)
     c = rs.add_parser("create", help="create this graph on a server and push it")
@@ -777,6 +781,9 @@ def main(argv=None) -> int:
             if args.action == "get":
                 sys.stdout.write(remote.credential_helper(sys.stdin.read()))
             return 0           # store/erase: git manages nothing here; knoten does
+
+        if args.cmd == "gate":
+            return gate.main()
 
         if args.cmd == "join":
             clone, name, role = remote.join(args.url, args.invite, args.dest)

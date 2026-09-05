@@ -96,6 +96,11 @@ def install(root: Path, force: bool = False) -> Path:
 #
 # The gate above runs in one clone and `--no-verify` walks past it. This one runs on the
 # repo everyone pushes TO, so it cannot be skipped from a laptop.
+#
+# The script itself only proves knoten is on PATH, fail-closed, then execs `knoten gate`
+# (src/knoten/gate.py), which reads the pushed refs from stdin, finds every graph in each
+# pushed tree, unpacks it as regular files only, and runs its rules. That logic moved out
+# of shell because later checks (signatures, the constitution rule) are not shell.
 
 SERVER_MARKER = "# knoten pre-receive gate"
 
@@ -103,8 +108,9 @@ SERVER_HOOK = """\
 #!/bin/sh
 """ + SERVER_MARKER + """ - installed by `knoten hook --server`. Delete this file to remove it.
 #
-# Refuses a push whose graph breaks its own rules, BEFORE the ref moves. Unlike CI this
-# needs no runner and no minutes, and unlike the client hook it cannot be bypassed.
+# Refuses a push whose graph breaks its own rules, or whose commits are not signed by
+# someone the graph lists, BEFORE the ref moves. The checks live in `knoten gate`; this
+# script only makes sure knoten is there to run them.
 
 if ! command -v knoten >/dev/null 2>&1; then
     echo "knoten: not on PATH on the server, so this gate cannot check anything." >&2
@@ -113,66 +119,7 @@ if ! command -v knoten >/dev/null 2>&1; then
     exit 1
 fi
 
-work=$(mktemp -d) || exit 1
-trap 'rm -rf "$work"' EXIT
-failed=$work/failed
-tree=$work/tree
-
-while read -r old new ref; do
-    # An all-zero oid is a deletion: no tree to check. Matched by shape rather than
-    # against a 40-zero literal, which would miss the 64 zeros a SHA-256 repo sends.
-    case "$new" in *[!0]*) ;; *) continue ;; esac
-
-    rm -rf "$tree" && mkdir -p "$tree" || exit 1
-    # Two statements, not a pipe: in POSIX sh a pipeline reports only the LAST command's
-    # status, so `git archive | tar` would hide a failed archive behind a happy tar and
-    # the push would sail through unchecked. `||` short-circuits, so tar never runs on a
-    # failed archive.
-    if ! git archive "$new" > "$work/tree.tar" || ! tar -xf "$work/tree.tar" -C "$tree"; then
-        echo "knoten: cannot read $ref" >&2
-        exit 1
-    fi
-
-    # A symlink in a pushed tree resolves against the SERVER's filesystem, not the
-    # pusher's. A `write` user pushed `trading/nodes -> /some/server/dir`; the gate
-    # followed it, validated that directory, and echoed its file names back on the
-    # `remote:` lines -- a directory listing of the server for anyone who could push.
-    # A graph needs no symlink, so none survives the unpacking.
-    find "$tree" -type l -delete
-
-    # The graph is FOUND, not configured. A path recorded at install time rots the moment
-    # someone moves the folder, and rots silently: the hook then finds no graph and
-    # accepts everything, reporting green.
-    #
-    # -exec, not `find > list` plus a read loop: `git archive` writes every name git will
-    # store, newlines included, and `git mktree` builds trees `git commit` refuses to make
-    # by hand. One newline in a directory name split a single path across two lines,
-    # neither of which named a graph, and the gate accepted the push having checked
-    # nothing. (`-print0` with `read -d ""` is the bash spelling of this; `read -d` is not
-    # POSIX and this hook runs under whatever /bin/sh the server has.)
-    find "$tree" -name graph.yaml -type f -exec sh -c '
-        tree=$1 failed=$2 ref=$3
-        shift 3
-        for cfg do
-            # ${cfg%/*}, not $(dirname): command substitution strips trailing newlines,
-            # so a directory name ending in one came back as a path that does not exist.
-            dir=${cfg%/*}
-            # graph.yaml is not a name knoten owns, and validate rejects unknown keys.
-            # Treating another tool config of that name as a graph would make the WHOLE
-            # repo unpushable forever, citing a file nobody thinks of as a graph. A graph
-            # has nodes/ next to it: a real directory, never a symlink to one.
-            [ -d "$dir/nodes" ] && [ ! -L "$dir/nodes" ] || continue
-            echo "knoten: validating ${cfg#"$tree"/} at $ref" >&2
-            # </dev/null so validate cannot consume the ref list the outer loop reads.
-            ( cd "$dir" && knoten validate ) </dev/null || : > "$failed"
-        done' sh "$tree" "$failed" "$ref" {} +
-done
-
-if [ -e "$failed" ]; then
-    echo "knoten: push REFUSED. Fix the graph, commit, push again." >&2
-    exit 1
-fi
-exit 0
+exec knoten gate
 """
 
 
