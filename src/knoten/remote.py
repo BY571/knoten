@@ -72,3 +72,128 @@ def credential_helper(request: str) -> str:
     url = f"{fields.get('protocol', 'https')}://{fields.get('host', '')}/{fields.get('path', '')}"
     found = cred_lookup(url)
     return f"username={found[0]}\npassword={found[1]}\n" if found else ""
+
+
+# ---------------------------------------------------------------- git and http
+
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+
+
+def _toplevel(root: Path) -> Path:
+    r = _git(root, "rev-parse", "--show-toplevel")
+    if r.returncode != 0:
+        raise GraphError(f"{root} is not in a git repository; run `git init` there first")
+    return Path(r.stdout.strip())
+
+
+def _origin(repo: Path) -> str:
+    r = _git(repo, "remote", "get-url", "origin")
+    if r.returncode != 0:
+        raise GraphError("this graph has no remote; run `knoten remote create` or "
+                         "`knoten remote add` first")
+    return r.stdout.strip()
+
+
+def _wire(repo: Path, git_url: str) -> None:
+    """Point origin at the remote and make git ask knoten for the token."""
+    has = _git(repo, "remote", "get-url", "origin").returncode == 0
+    _git(repo, "remote", "set-url" if has else "add", "origin", git_url)
+    for key, value in (("credential.helper", "!knoten credential"),
+                       ("credential.useHttpPath", "true"),
+                       # Large pushes would otherwise go chunked, which the stdlib
+                       # server does not read. 500 MB keeps them Content-Length.
+                       ("http.postBuffer", "524288000")):
+        _git(repo, "config", key, value)
+
+
+def _api(url: str, body: dict, auth: tuple[str, str] | None = None) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    if auth:
+        cred = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+        req.add_header("Authorization", "Basic " + cred)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            message = json.loads(e.read()).get("error", e.reason)
+        except Exception:
+            message = e.reason
+        raise GraphError(str(message).removeprefix("knoten: ")) from None
+    except urllib.error.URLError as e:
+        raise GraphError(f"cannot reach {url}: {e.reason}") from None
+
+
+def _explain(stderr: str) -> str:
+    """git prints only a status code for an HTTP refusal. Say what it means."""
+    if any(m in stderr for m in ("401", "Authentication failed", "terminal prompts disabled")):
+        return "credentials refused; the token may have been revoked. Ask for a new invite."
+    if "403" in stderr:
+        return "this token has read access, not write"
+    if "pre-receive hook declined" in stderr:
+        return "the server refused the push; fix the violations above and push again"
+    lines = [l for l in stderr.strip().splitlines() if l.strip()]
+    return lines[-1] if lines else "git failed"
+
+
+def _relay(stderr: str) -> None:
+    """The gate's own output arrives as `remote:` lines. Show those, and only those."""
+    for line in stderr.splitlines():
+        if line.startswith("remote:"):
+            print(line, file=sys.stderr)
+
+
+# ---------------------------------------------------------------- commands
+
+def remote_create(root: Path, name: str, on: str, admin: str | None = None,
+                  owner_secret: str | None = None) -> str:
+    repo = _toplevel(root)
+    on = on.rstrip("/")
+    u = urlsplit(on)
+    host_url = f"{u.scheme}://{u.netloc}"
+    secret = owner_secret or (cred_lookup(host_url) or ("", ""))[1]
+    if not secret:
+        import getpass
+        secret = getpass.getpass(f"owner secret for {u.netloc}: ")
+    if admin is None:
+        admin = _git(repo, "config", "user.name").stdout.strip().lower().replace(" ", "-")
+    if not ID_RE.match(admin or ""):
+        raise GraphError(f"'{admin}' is not a valid contributor name; pass --as NAME (kebab-case)")
+
+    token = _api(f"{on}/graphs", {"name": name, "admin": admin}, ("owner", secret))["token"]
+    cred_store(host_url, "owner", secret)
+    git_url = f"{on}/{name}.git"
+    cred_store(git_url, admin, token)
+    _wire(repo, git_url)
+    r = _git(repo, "push", "-u", "origin", "HEAD")
+    _relay(r.stderr)
+    if r.returncode != 0:
+        raise GraphError(_explain(r.stderr))
+    return f"{on}/{name}"
+
+
+def remote_add(root: Path, url: str) -> None:
+    _wire(_toplevel(root), url.rstrip("/") + ".git")
+
+
+def push(root: Path) -> int:
+    repo = _toplevel(root)
+    _origin(repo)
+    r = _git(repo, "push", "origin", "HEAD")
+    _relay(r.stderr)
+    if r.returncode != 0:
+        raise GraphError(_explain(r.stderr))
+    print("  ✓ pushed")
+    return 0
+
+
+def pull(root: Path) -> int:
+    repo = _toplevel(root)
+    _origin(repo)
+    r = _git(repo, "pull", "-q", "--ff-only", "origin")
+    if r.returncode != 0:
+        raise GraphError(_explain(r.stderr))
+    print("  ✓ up to date")
+    return 0

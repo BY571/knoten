@@ -229,6 +229,18 @@ def server_hook(repo, force) -> int:
     return 0
 
 
+def remote_cmd(root, args) -> int:
+    if args.remote_cmd == "create":
+        url = remote.remote_create(root, args.name, args.on, admin=args.admin,
+                                   owner_secret=args.owner_secret)
+        print(f"  ✓ {url}")
+        print("    invite someone:  knoten invite <name> --role write")
+        return 0
+    remote.remote_add(root, args.url)
+    print("  ✓ origin set. `knoten pull` and `knoten push` now use it.")
+    return 0
+
+
 def serve_cmd(data, bind) -> int:
     """Run on the server. Prints the owner secret the first time a data directory is
     used, because that is the one moment the owner is certainly at the keyboard."""
@@ -640,6 +652,19 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("credential", help=argparse.SUPPRESS)
     s.add_argument("action", nargs="?")
 
+    s = sub.add_parser("remote", help="connect this graph to a knoten server")
+    rs = s.add_subparsers(dest="remote_cmd", required=True)
+    c = rs.add_parser("create", help="create this graph on a server and push it")
+    c.add_argument("name")
+    c.add_argument("--on", required=True, metavar="URL", help="the server, e.g. https://graphs.example")
+    c.add_argument("--as", dest="admin", metavar="NAME", help="your contributor name (default: git user.name)")
+    c.add_argument("--owner-secret", help="the server's owner secret (asked for if not stored)")
+    a = rs.add_parser("add", help="point this clone at an existing remote graph")
+    a.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
+
+    sub.add_parser("push", help="push this graph to its remote, through the gate")
+    sub.add_parser("pull", help="fetch what collaborators pushed")
+
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
@@ -720,6 +745,9 @@ def main(argv=None) -> int:
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
+            "remote": lambda: remote_cmd(root, args),
+            "push":   lambda: remote.push(root),
+            "pull":   lambda: remote.pull(root),
         }[args.cmd]()
     except (GraphError, OSError) as e:
         # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error,
