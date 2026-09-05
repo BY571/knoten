@@ -87,6 +87,7 @@ def hub(tmp_path, monkeypatch):
     yield SimpleNamespace(url=f"http://{host}:{port}", registry=reg,
                           secret=reg.owner_secret(), data=tmp_path / "data")
     srv.shutdown()
+    srv.server_close()
 
 
 @pytest.fixture
