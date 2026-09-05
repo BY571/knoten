@@ -273,7 +273,7 @@ def invites_cmd(root, as_json=False) -> int:
 
 def revoke_cmd(root, name) -> int:
     remote.revoke(root, name)
-    print(f"  ✓ {name} can no longer connect. What they already pushed stays.")
+    print(f"  ✓ {name} is revoked and can no longer connect. What they already pushed stays.")
     return 0
 
 

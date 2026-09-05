@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 
 from . import contributors as C
 from . import gate
-from .core import GraphError, ID_RE, _yaml
+from .core import GraphError, ID_RE, _yaml, today
 from .keys import INVITE_NS, configure_signing, ensure_key, key_dir, public_line, sign
 
 
@@ -383,6 +383,57 @@ def invites(root: Path) -> list[dict]:
 
 def revoke(root: Path, name: str) -> None:
     base, auth = _graph_api(root)
+    contribs = C.load(root)
+    if contribs is not None:
+        repo = _toplevel(root)
+        # This clone's history may be behind -- as it is the moment right after someone
+        # new has joined -- and revoking a name this clone cannot yet see would silently
+        # mark nothing.
+        rp = _git(repo, "pull", "-q", "--ff-only", "origin")
+        if rp.returncode != 0:
+            raise GraphError(f"could not update before revoking: {_explain(rp.stderr)}")
+        contribs = C.load(root)
+        # Who acts here is this clone's OWN configured signing key, not whatever this
+        # machine's credential file happens to hold for the remote right now -- a join
+        # run from the very same store (as every test and every single-laptop admin
+        # does) overwrites that entry with the newcomer's token. The signing key survives
+        # that untouched, and it is what the commit below is actually signed with.
+        admin = Path(_git(repo, "config", "user.signingkey").stdout.strip()).name
+        _my_key(contribs, admin)
+        if admin not in C.admins(contribs):
+            raise GraphError("only an admin can revoke")
+        if name not in contribs:
+            raise GraphError(f"'{name}' is not listed in {C.FILE}")
+        if contribs[name].get("revoked"):
+            raise GraphError(f"'{name}' is already revoked")
+        # The mark first, the token second. The mark is what the gate enforces and what
+        # a clone can still read a year on; the token is convenience. If the push is
+        # refused, nothing has changed and the message says why.
+        contribs[name]["revoked"] = today()
+        C.dump(root, contribs)
+        # Only contributors.yaml: `add -A` in the enclosing repo would also stage every
+        # unrelated untracked file the monorepo layout allows next to this graph.
+        _git(repo, "add", "--", str(root / C.FILE))
+        r = _git(repo, "commit", "-q", "-m", f"{admin} revokes {name}")
+        if r.returncode != 0:
+            first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
+            raise GraphError(f"could not commit the revocation: {first_line}")
+        r = _git(repo, "push", "origin", "HEAD")
+        _relay(r.stderr)
+        if r.returncode != 0:
+            raise GraphError(f"the gate refused the revocation: {_explain(r.stderr)}")
+        try:
+            _api(f"{base}/revoke", {"name": name}, auth)
+        except GraphError as e:
+            # The graph mark just pushed is already the source of truth, and it already
+            # locks this person out at the gate; the server's token table catching up is
+            # convenience on top of that, not a condition of success. `auth` here is
+            # whatever this machine's credential file currently holds for the remote --
+            # not necessarily the acting admin's own token, since a join can have
+            # overwritten it -- so a refusal here is not evidence the mark itself failed.
+            print(f"  ⚠ the graph is updated, but the server did not confirm: {e}",
+                 file=sys.stderr)
+        return
     _api(f"{base}/revoke", {"name": name}, auth)
 
 

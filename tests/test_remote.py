@@ -10,7 +10,7 @@ from conftest import commit_node, git, make_key, pub_line
 from knoten import remote
 from knoten import contributors as C
 from knoten.cli import main
-from knoten.core import GraphError
+from knoten.core import GraphError, today
 from knoten.keys import key_dir, public_line
 from knoten.remote import _explain, cred_lookup, cred_path, cred_store, credential_helper
 
@@ -735,3 +735,31 @@ def test_join_finds_the_graph_in_a_monorepo_subdirectory(hub, nested_local_graph
     assert "joins as write" in git("log", "-1", "--format=%s", cwd=hosted).stdout
     files = git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD", cwd=hosted).stdout
     assert files.strip() == "g/contributors.yaml"
+
+
+def test_revoke_is_recorded_in_the_graph_before_the_token_dies(hub, shared_signed, tmp_path, monkeypatch, capsys):
+    """Two things end access: the mark in contributors.yaml (the gate refuses her key)
+    and the token (the server refuses her connection). The mark comes first so the
+    record exists even if the API call then fails."""
+    assert main(["invite", "maria"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    clone = tmp_path / "trading"
+    git("config", "user.email", "m@m.m", cwd=clone); git("config", "user.name", "maria", cwd=clone)
+
+    monkeypatch.chdir(shared_signed)
+    assert main(["revoke", "maria"]) == 0
+
+    contribs, _ = hub.registry.head_graph("trading")
+    assert contribs["maria"]["revoked"] == today()
+    assert hub.registry.authenticate("trading", "maria", "anything") is None
+    commit_node(clone, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
+    monkeypatch.chdir(clone)
+    assert main(["push"]) == 1
+
+
+def test_revoking_a_name_the_graph_does_not_list_is_one_line(hub, shared_signed, monkeypatch, capsys):
+    monkeypatch.chdir(shared_signed)
+    assert main(["revoke", "ghost"]) == 1
+    assert "not listed" in capsys.readouterr().err
