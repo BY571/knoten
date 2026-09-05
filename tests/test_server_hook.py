@@ -331,6 +331,60 @@ def test_it_gates_a_tag(server):
     assert git("push", "origin", "v1", cwd=work).returncode != 0
 
 
+# ---------------------------------------------------------------- hostile trees
+
+def test_a_symlinked_nodes_directory_cannot_read_the_servers_disk(server, tmp_path):
+    """A symlink in a pushed tree resolves on the SERVER. A `write` user pushed
+    `g/nodes -> /some/server/dir`; the gate followed it, validated that directory and
+    echoed its file names back on the `remote:` lines, which made the gate a directory
+    listing for anyone who could push."""
+    bare, work = server
+    private = tmp_path / "server-private"
+    private.mkdir()
+    (private / "secret-plan.md").write_text(
+        "---\nid: secret-plan\ntype: hypothesis\nstatus: alive\n---\n\n# ours\n",
+        encoding="utf-8")
+
+    shutil.rmtree(work / "g" / "nodes")
+    os.symlink(private, work / "g" / "nodes")
+    commit(work, "point nodes at the servers own disk")
+
+    r = push(work)
+
+    assert "secret-plan" not in r.stdout + r.stderr, "the gate read the servers disk"
+    assert "server-private" not in r.stdout + r.stderr
+
+    # And the gate still gates: a real graph pushed afterwards is still checked.
+    (work / "g" / "nodes").unlink()
+    (work / "g" / "nodes").mkdir()
+    (work / "g" / "nodes" / "hyp-ok.md").write_text(
+        "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# a claim\n",
+        encoding="utf-8")
+    commit(work, "a real nodes directory again")
+    assert push(work).returncode == 0, "a clean graph stopped being accepted"
+
+    (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
+    commit(work, "and the gate still catches this")
+    assert push(work).returncode != 0, "the gate stopped finding graphs"
+
+
+def test_one_broken_ref_refuses_the_whole_push(server):
+    """pre-receive runs once for all refs and its exit status is the verdict on all of
+    them. A push carrying a clean branch and a broken one must land neither, or the
+    pusher gets a partial push and the shared repo a branch nobody validated."""
+    bare, work = server
+    commit(work, "a clean graph")
+    git("branch", "other", cwd=work)
+    (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
+    commit(work, "broken, on master")
+
+    r = git("push", "origin", "master", "other", cwd=work)
+
+    assert r.returncode != 0
+    assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
+    assert git("branch", cwd=bare).stdout.strip() == "", "a ref landed anyway"
+
+
 # ---------------------------------------------------------------- hygiene
 
 def test_it_leaves_no_temporary_directories_behind(server, tmp_path):

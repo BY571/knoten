@@ -126,21 +126,39 @@ while read -r old new ref; do
         exit 1
     fi
 
+    # A symlink in a pushed tree resolves against the SERVER's filesystem, not the
+    # pusher's. A `write` user pushed `trading/nodes -> /some/server/dir`; the gate
+    # followed it, validated that directory, and echoed its file names back on the
+    # `remote:` lines -- a directory listing of the server for anyone who could push.
+    # A graph needs no symlink, so none survives the unpacking.
+    find "$tree" -type l -delete
+
     # The graph is FOUND, not configured. A path recorded at install time rots the moment
     # someone moves the folder, and rots silently: the hook then finds no graph and
     # accepts everything, reporting green.
-    find "$tree" -name graph.yaml -type f > "$work/graphs"
-    while IFS= read -r cfg; do
-        dir=$(dirname "$cfg")
-        # `graph.yaml` is not a name knoten owns, and `validate` rejects unknown keys.
-        # Treating another tool's config of that name as a graph would make the WHOLE
-        # repo unpushable forever, citing a file nobody thinks of as a graph. A graph
-        # has nodes/ next to it.
-        [ -d "$dir/nodes" ] || continue
-        echo "knoten: validating ${cfg#"$tree"/} at $ref" >&2
-        # </dev/null so validate cannot consume the ref list this loop is reading.
-        ( cd "$dir" && knoten validate ) </dev/null || : > "$failed"
-    done < "$work/graphs"
+    #
+    # -exec, not `find > list` plus a read loop: `git archive` writes every name git will
+    # store, newlines included, and `git mktree` builds trees `git commit` refuses to make
+    # by hand. One newline in a directory name split a single path across two lines,
+    # neither of which named a graph, and the gate accepted the push having checked
+    # nothing. (`-print0` with `read -d ""` is the bash spelling of this; `read -d` is not
+    # POSIX and this hook runs under whatever /bin/sh the server has.)
+    find "$tree" -name graph.yaml -type f -exec sh -c '
+        tree=$1 failed=$2 ref=$3
+        shift 3
+        for cfg do
+            # ${cfg%/*}, not $(dirname): command substitution strips trailing newlines,
+            # so a directory name ending in one came back as a path that does not exist.
+            dir=${cfg%/*}
+            # graph.yaml is not a name knoten owns, and validate rejects unknown keys.
+            # Treating another tool config of that name as a graph would make the WHOLE
+            # repo unpushable forever, citing a file nobody thinks of as a graph. A graph
+            # has nodes/ next to it: a real directory, never a symlink to one.
+            [ -d "$dir/nodes" ] && [ ! -L "$dir/nodes" ] || continue
+            echo "knoten: validating ${cfg#"$tree"/} at $ref" >&2
+            # </dev/null so validate cannot consume the ref list the outer loop reads.
+            ( cd "$dir" && knoten validate ) </dev/null || : > "$failed"
+        done' sh "$tree" "$failed" "$ref" {} +
 done
 
 if [ -e "$failed" ]; then
