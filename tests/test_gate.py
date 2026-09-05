@@ -998,6 +998,22 @@ def test_a_refused_tag_does_not_spend_the_one_creation_a_push_may_make(bare, mon
     assert f"refs/heads/master: {gate.ONE_BRANCH}" not in err
 
 
+def test_a_tag_that_predates_the_gate_cannot_be_moved(bare, monkeypatch, capsys):
+    """One branch and nothing else holds for updates too. A tag can only exist where it
+    was made before the hook was (a repo gated by hand); the gate must still refuse to
+    move it, or such a ref stays a second writable line of history."""
+    origin, work = bare
+    sha = seeded(work)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+    git("update-ref", "refs/tags/v1", sha, cwd=origin)      # the operator's tag, pre-gate
+    monkeypatch.chdir(origin)
+
+    rc = gate.main(io.StringIO(f"{sha} {sha} refs/tags/v1\n"))
+
+    assert rc == 1
+    assert f"refs/tags/v1: {gate.ONE_BRANCH}" in capsys.readouterr().err
+
+
 def test_a_constitution_in_an_option_shaped_directory_is_refused(signed):
     """`contributors_dirs` lifts directory names out of the pushed tree exactly as
     `graph_dirs` does, and now feeds them to the same reads. A component starting with

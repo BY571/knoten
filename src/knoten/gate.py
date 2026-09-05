@@ -113,7 +113,11 @@ def contributors_dirs(rev: str, repo: Path | None = None) -> list[str]:
 
     `graph_dirs` answers "where are the graphs". This answers "where did somebody sign",
     and the two disagree exactly when a graph's own files are gone while its constitution
-    stays -- a tree that must never be read as a phase-1 (unsigned) graph."""
+    stays -- a tree that must never be read as a phase-1 (unsigned) graph.
+
+    No mode check here, unlike `graph_dirs`: a `contributors.yaml` that is a tree or a
+    symlink drops out of this list, and the rule that then reads it fails closed in
+    `C.parse` ("expected a mapping"). Adding a mode filter would only widen the list."""
     r = _git("ls-tree", "-r", "--name-only", "-z", rev, repo=repo)
     if r.returncode != 0:
         raise GraphError(f"cannot read the tree at {rev[:7]}")
@@ -231,7 +235,8 @@ def _touches_only(sha: str, target: str) -> bool:
 
 
 def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
-                 is_graph: bool = True, parent_dirs: frozenset[str] = frozenset()) -> bool:
+                 is_graph: bool = True, parent_dirs: frozenset[str] = frozenset(),
+                 signed_before: frozenset[str] = frozenset()) -> bool:
     """One commit against the contributors in force BEFORE it.
 
     Three shapes. A commit that leaves contributors.yaml alone needs any listed writer's
@@ -245,7 +250,8 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
     `has_parent` is the caller's own answer to "does this commit have a parent", asked
     once per commit rather than once per (commit, gdir) pair -- check_ref may call this
     for several directories on one sha. `is_graph` and `parent_dirs` say whether `gdir`
-    holds a graph AT this commit and which directories held one at its parent; both are
+    holds a graph AT this commit and which directories held one at its parent;
+    `signed_before` is every directory with a constitution at the parent. All three are
     read once per commit for the same reason."""
     prev = contributors_at(f"{sha}^", gdir) if has_parent else None
     cur = contributors_at(sha, gdir)
@@ -268,7 +274,7 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
         # Every constitution at the parent, not just the ones with a graph under them: a
         # graph an admin has retired still says who its admins are, and they are exactly
         # the people who may found its successor.
-        for d in (contributors_dirs(f"{sha}^") if has_parent else []):
+        for d in sorted(signed_before):
             other = contributors_at(f"{sha}^", d)
             if other is not None:
                 elders.update(C.admins(other))
@@ -387,17 +393,20 @@ def check_ref(old: str, new: str, ref: str) -> bool:
     graph runs, and it is checked BEFORE any signature so a refusal names the real
     reason.
     """
+    if not ref.startswith("refs/heads/"):
+        # A hosted graph has a branch and nothing else, and that holds for moving a ref
+        # as much as for making one: a tag that predates the gate (a repo gated by hand
+        # with `knoten hook --server`) must not stay writable. The branch count below
+        # reads `refs/heads/` only, so it cannot see a tag: into a repo with no branch a
+        # tag answered "none here", landed, and the branch still landed after it.
+        # Counting `refs/` instead would be worse -- a tag would then block the branch
+        # forever.
+        say(f"{ref}: {ONE_BRANCH}")
+        return False
     if ZERO.match(new):
         say(f"{ref}: hosted graphs keep their history; refs are not deleted")
         return False
     if ZERO.match(old):
-        if not ref.startswith("refs/heads/"):
-            # A hosted graph has a branch and nothing else. The branch count below reads
-            # `refs/heads/` only, so it cannot see a tag: into a repo with no branch a tag
-            # answered "none here", landed, and the branch still landed after it. Counting
-            # `refs/` instead would be worse -- a tag would then block the branch forever.
-            say(f"{ref}: {ONE_BRANCH}")
-            return False
         r = _git("for-each-ref", "--format=%(refname)", "refs/heads/")
         if r.returncode != 0:
             raise GraphError(f"cannot list the branches already here, for {ref}")
@@ -450,12 +459,11 @@ def check_ref(old: str, new: str, ref: str) -> bool:
         # against their own key. The same blind spot let a writer rewrite the constitution
         # of a graph an admin had retired, dropping the admin, while its directory held no
         # graph at either end. Watch wherever a constitution is or was, not where a graph is.
-        watched = now | before | frozenset(contributors_dirs(sha))
-        if has_parent:
-            watched |= frozenset(contributors_dirs(f"{sha}^"))
+        signed_before = frozenset(contributors_dirs(f"{sha}^")) if has_parent else frozenset()
+        watched = now | before | signed_before | frozenset(contributors_dirs(sha))
         for gdir in sorted(watched):
-            if not check_commit(sha, gdir, ref, has_parent,
-                                is_graph=gdir in now, parent_dirs=before):
+            if not check_commit(sha, gdir, ref, has_parent, is_graph=gdir in now,
+                                parent_dirs=before, signed_before=signed_before):
                 ok = False
     if not ok:
         return False
