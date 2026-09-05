@@ -170,10 +170,16 @@ WHY = {"N": "unsigned", "U": "signed by a key not listed here",
 
 
 def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
-    """One commit against the contributors in force BEFORE it. Task 5 adds the rule for
-    commits that change contributors.yaml itself. `has_parent` is the caller's own answer
-    to "does this commit have a parent", asked once per commit rather than once per
-    (commit, gdir) pair -- check_ref may call this for several directories on one sha."""
+    """One commit against the contributors in force BEFORE it.
+
+    Three shapes. A commit that leaves contributors.yaml alone needs any listed writer's
+    signature. A commit that adds exactly one entry carrying an admin-signed invite is a
+    join, and needs the NEWCOMER's signature (the invite is the admin's part). Anything
+    else that touches the file is a change to who may write, and needs an admin.
+
+    `has_parent` is the caller's own answer to "does this commit have a parent", asked
+    once per commit rather than once per (commit, gdir) pair -- check_ref may call this
+    for several directories on one sha."""
     prev = contributors_at(f"{sha}^", gdir) if has_parent else None
     cur = contributors_at(sha, gdir)
     where = f"{ref}: {sha[:7]}"
@@ -189,13 +195,41 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
         say(f"{where} introduces {C.FILE} but is not signed by an admin it lists "
             f"({WHY.get(status, status)})")
         return False
-    # cur is None here means this commit moved gdir away or deleted it outright: there is
-    # nothing left at gdir to vouch for itself, so the commit is judged against who could
-    # write here a moment ago (prev), not skipped for having nothing to check against.
-    status, _ = signature(sha, C.keys(prev))
+
+    added, changed, removed = C.diff(prev, cur) if cur is not None else ({}, {}, set(prev))
+    if not added and not changed and not removed:
+        status, _ = signature(sha, C.keys(prev))
+        if status == "G":
+            return True
+        say(f"{where} is not signed by a contributor who may write here ({WHY.get(status, status)})")
+        return False
+
+    if len(added) == 1 and not changed and not removed:
+        name, entry = next(iter(added.items()))
+        inv = entry.get("invite")
+        if isinstance(inv, dict) and inv.get("blob") and inv.get("sig"):
+            blob = str(inv["blob"]).encode()
+            try:
+                by = C.verify_invite(prev, blob, str(inv["sig"]))
+                C.check_blob(C.parse_blob(blob), graph_name_at(sha, gdir), name, entry["role"])
+            except GraphError as e:
+                say(f"{where}: {e}")
+                return False
+            if entry.get("invited_by") not in (None, by):
+                say(f"{where}: {name}'s entry names a different inviter than the one who signed")
+                return False
+            # The invite is the admin's half. The commit must be the newcomer's: signed by
+            # the very key the entry publishes, or eve could arrive with maria's invite.
+            status, _ = signature(sha, {name: entry["key"]})
+            if status == "G":
+                return True
+            say(f"{where} adds {name} but is not signed by {name}'s own key ({WHY.get(status, status)})")
+            return False
+
+    status, _ = signature(sha, C.admins(prev))
     if status == "G":
         return True
-    say(f"{where} is not signed by a contributor who may write here ({WHY.get(status, status)})")
+    say(f"{where} changes {C.FILE} and is not signed by an admin ({WHY.get(status, status)})")
     return False
 
 

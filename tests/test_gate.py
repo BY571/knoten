@@ -467,3 +467,154 @@ def test_a_new_branch_is_not_rewalked_through_already_accepted_history(bare, mon
     r = git("push", "-q", "origin", "feature", cwd=work)
 
     assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------------------------- the constitution
+
+from knoten.keys import INVITE_NS, sign
+
+
+def invite_for(admin_priv, graph, name, role):
+    blob = C.invite_blob(graph, name, role, "2099-01-01", "n0nce")
+    return {"blob": blob.decode(), "sig": sign(admin_priv, blob, INVITE_NS)}
+
+
+def test_a_writer_cannot_change_who_may_write(signed, keys_dir):
+    """Maria may push nodes. She may not add her friend."""
+    origin, work, k = signed
+    maria, friend = make_key(keys_dir, "maria"), make_key(keys_dir, "friend")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+    add_person(work, "friend", friend, "write")
+    commit_signed(work, "maria adds a friend", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not signed by an admin" in r.stderr
+
+
+def test_a_join_with_a_valid_invite_lands_signed_by_the_newcomer(signed, keys_dir):
+    """The one way in without an admin's commit: one new entry, an admin-signed invite
+    for exactly that name and role, and a commit signed by the newcomer's own key."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write", invited_by="seb",
+               invite=invite_for(k["seb"], "test", "maria", "write"))
+    commit_signed(work, "maria joins as write", maria)
+
+    r = push(work)
+
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("graph, name, role", [
+    ("other", "maria", "write"), ("test", "eve", "write"), ("test", "maria", "admin")])
+def test_an_invite_for_something_else_is_refused(signed, keys_dir, graph, name, role):
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write", invited_by="seb",
+               invite=invite_for(k["seb"], graph, name, role))
+    commit_signed(work, "maria joins", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "different name, role or graph" in r.stderr
+
+
+def test_an_invite_signed_by_a_writer_is_refused(signed, keys_dir):
+    origin, work, k = signed
+    maria, friend = make_key(keys_dir, "maria"), make_key(keys_dir, "friend")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+    add_person(work, "friend", friend, "write", invited_by="maria",
+               invite=invite_for(maria, "test", "friend", "write"))
+    commit_signed(work, "friend joins", friend)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not signed by an admin" in r.stderr
+
+
+def test_a_join_must_be_signed_by_the_newcomers_own_key(signed, keys_dir):
+    """A valid invite for maria, committed by eve with eve's key: the entry says maria's
+    key, the commit does not. The person arriving must be the person invited."""
+    origin, work, k = signed
+    maria, eve = make_key(keys_dir, "maria"), make_key(keys_dir, "eve")
+    add_person(work, "maria", maria, "write", invited_by="seb",
+               invite=invite_for(k["seb"], "test", "maria", "write"))
+    commit_signed(work, "eve commits maria's join", eve)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not signed by maria" in r.stderr
+
+
+def test_a_join_may_add_only_itself(signed, keys_dir):
+    origin, work, k = signed
+    maria, friend = make_key(keys_dir, "maria"), make_key(keys_dir, "friend")
+    add_person(work, "maria", maria, "write", invited_by="seb",
+               invite=invite_for(k["seb"], "test", "maria", "write"))
+    add_person(work, "friend", friend, "write")
+    commit_signed(work, "maria joins with a plus one", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not signed by an admin" in r.stderr
+
+
+def test_deleting_contributors_yaml_needs_an_admin(signed, keys_dir):
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+    (work / "g" / C.FILE).unlink()
+    commit_signed(work, "maria removes the constitution", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not signed by an admin" in r.stderr
+
+
+def test_an_admin_may_promote_demote_and_revoke(signed, keys_dir):
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "read")
+    commit_signed(work, "seb adds maria as read", k["seb"])
+    c = C.load(work / "g"); c["maria"]["role"] = "admin"; C.dump(work / "g", c)
+    commit_signed(work, "seb promotes maria", k["seb"])
+    c = C.load(work / "g"); c["maria"]["revoked"] = "2026-09-05"; C.dump(work / "g", c)
+    commit_signed(work, "seb revokes maria", k["seb"])
+
+    assert push(work).returncode == 0
+
+
+def test_a_writer_may_not_become_admin_by_moving_the_graph(signed, keys_dir):
+    """Maria may push nodes at g. Moving g to h and writing a fresh contributors.yaml that
+    names only herself admin is the same escalation as editing contributors.yaml in
+    place: the removal at g (prev present, cur None) is a contributors change, and that
+    needs an admin of prev -- not the newcomer rules for a join, and not the writer rule
+    for an unrelated commit."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+    git("mv", "g", "h", cwd=work)
+    C.dump(work / "h", {"maria": {"key": pub_line(maria), "role": "admin"}})
+    commit_signed(work, "maria moves the graph and crowns herself", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not signed by an admin" in r.stderr
+    tree = git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
+    assert "g/contributors.yaml" in tree
