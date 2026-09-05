@@ -165,3 +165,188 @@ def test_git_gives_children_no_access_to_the_hooks_stdin(bare, monkeypatch):
     r = gate._git("hash-object", "--stdin")
 
     assert r.stdout.strip() == b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+
+
+# ---------------------------------------------------------------- signatures
+
+from conftest import commit_signed, make_key, pub_line
+from knoten import contributors as C
+
+
+@pytest.fixture
+def signed(bare, keys_dir):
+    """`bare` bootstrapped: contributors.yaml lists seb as admin, first commit signed by
+    seb, pushed. Returns (origin, work, {"seb": priv}). Later tests add people."""
+    origin, work = bare
+    seb = make_key(keys_dir, "seb")
+    C.dump(work / "g", {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb creates the graph", seb)
+    r = git("push", "-q", "origin", "master", cwd=work)
+    assert r.returncode == 0, r.stderr
+    return origin, work, {"seb": seb}
+
+
+def push(work):
+    return git("push", "origin", "master", cwd=work)
+
+
+def add_person(work, name, priv, role, **extra):
+    c = C.load(work / "g") or {}
+    c[name] = {"key": pub_line(priv), "role": role, **extra}
+    C.dump(work / "g", c)
+
+
+def test_a_graph_without_contributors_stays_unsigned(bare):
+    """Phase-1 graphs keep working: no contributors.yaml, no signature check."""
+    origin, work = bare
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "unsigned, and fine", cwd=work)
+    assert push(work).returncode == 0
+
+
+def test_bootstrap_must_be_signed_by_an_admin_the_file_lists(bare, keys_dir):
+    """The first contributors.yaml has nobody to vouch for it but itself: the commit that
+    introduces it must be signed by a key it names as admin. Anyone else could otherwise
+    install themselves as admin of a phase-1 graph."""
+    origin, work = bare
+    seb, eve = make_key(keys_dir, "seb"), make_key(keys_dir, "eve")
+    C.dump(work / "g", {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "eve pretends", eve)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not signed by an admin it lists" in r.stderr
+    git("reset", "-q", "--hard", "HEAD~1", cwd=work)
+
+
+def test_an_unsigned_commit_is_refused_once_the_graph_is_signed(signed):
+    origin, work, k = signed
+    commit_node(work / "g", "hyp-a.md", "---\nid: hyp-a\ntype: hypothesis\nstatus: open\n---\n\n# a\n")
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "unsigned" in r.stderr
+    assert "hyp-a" not in git("log", "--oneline", cwd=origin).stdout
+
+
+def test_a_commit_signed_by_a_listed_writer_lands(signed, keys_dir):
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    (work / "g" / "nodes" / "hyp-m.md").write_text(
+        "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n", encoding="utf-8")
+    commit_signed(work, "maria's claim", maria)
+
+    r = push(work)
+
+    assert r.returncode == 0, r.stderr
+
+
+def test_a_key_the_graph_does_not_list_is_refused(signed, keys_dir):
+    origin, work, k = signed
+    eve = make_key(keys_dir, "eve")
+    (work / "g" / "nodes" / "hyp-e.md").write_text(
+        "---\nid: hyp-e\ntype: hypothesis\nstatus: open\n---\n\n# e\n", encoding="utf-8")
+    commit_signed(work, "eve's claim", eve)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not listed" in r.stderr
+
+
+def test_a_reader_may_not_sign_a_commit(signed, keys_dir):
+    origin, work, k = signed
+    reader = make_key(keys_dir, "reader")
+    add_person(work, "reader", reader, "read")
+    commit_signed(work, "seb adds a reader", k["seb"])
+    assert push(work).returncode == 0
+    (work / "g" / "nodes" / "hyp-r.md").write_text(
+        "---\nid: hyp-r\ntype: hypothesis\nstatus: open\n---\n\n# r\n", encoding="utf-8")
+    commit_signed(work, "a reader writes", reader)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "not listed" in r.stderr
+
+
+def test_a_revoked_key_is_refused_but_its_history_stays(signed, keys_dir):
+    """Revocation is a mark. Everything maria signed before stays in history and stays
+    attributable; the next thing she signs does not get in."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    (work / "g" / "nodes" / "hyp-m.md").write_text(
+        "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n", encoding="utf-8")
+    commit_signed(work, "maria's claim", maria)
+    assert push(work).returncode == 0
+    c = C.load(work / "g")
+    c["maria"]["revoked"] = "2026-09-05"
+    C.dump(work / "g", c)
+    commit_signed(work, "seb revokes maria", k["seb"])
+    assert push(work).returncode == 0
+    (work / "g" / "nodes" / "hyp-m2.md").write_text(
+        "---\nid: hyp-m2\ntype: hypothesis\nstatus: open\n---\n\n# m2\n", encoding="utf-8")
+    commit_signed(work, "maria after revocation", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "hyp-m.md" in git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
+    assert "hyp-m2" not in git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
+
+
+def test_a_merge_commit_is_refused(signed, keys_dir):
+    """Which contributors were in force "before" a merge is not a single answer. knoten's
+    own pull is --ff-only; the gate says so rather than guessing."""
+    origin, work, k = signed
+    git("checkout", "-qb", "side", cwd=work)
+    (work / "g" / "nodes" / "hyp-s.md").write_text(
+        "---\nid: hyp-s\ntype: hypothesis\nstatus: open\n---\n\n# s\n", encoding="utf-8")
+    commit_signed(work, "side", k["seb"])
+    git("checkout", "-q", "master", cwd=work)
+    (work / "g" / "nodes" / "hyp-t.md").write_text(
+        "---\nid: hyp-t\ntype: hypothesis\nstatus: open\n---\n\n# t\n", encoding="utf-8")
+    commit_signed(work, "trunk", k["seb"])
+    r = git("-c", "gpg.format=ssh", "-c", f"user.signingkey={k['seb']}", "-c", "commit.gpgsign=true",
+            "merge", "--no-ff", "-q", "-m", "merge", "side", cwd=work)
+    assert r.returncode == 0, r.stderr
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "merge commits are not accepted" in r.stderr
+
+
+def test_every_commit_in_a_push_is_checked_not_just_the_tip(signed, keys_dir):
+    """An unsigned commit under a signed tip must not ride in on the tip's signature."""
+    origin, work, k = signed
+    commit_node(work / "g", "hyp-u.md", "---\nid: hyp-u\ntype: hypothesis\nstatus: open\n---\n\n# u\n")
+    (work / "g" / "nodes" / "hyp-v.md").write_text(
+        "---\nid: hyp-v\ntype: hypothesis\nstatus: open\n---\n\n# v\n", encoding="utf-8")
+    commit_signed(work, "signed tip", k["seb"])
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "unsigned" in r.stderr
+
+
+def test_a_malformed_ref_line_is_refused_without_a_traceback(bare, monkeypatch, capsys):
+    """`new` reaches `check_ref` and from there `git rev-list`/`git archive` as a revision.
+    A value like `--output=x` would be parsed by git as an option, not a sha; requiring
+    old/new to look like hex object ids before ever calling `check_ref` closes that off."""
+    origin, work = bare
+    monkeypatch.chdir(work)
+
+    rc = gate.main(io.StringIO(f"{'0' * 40} --output=x refs/heads/master\n"))
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "malformed ref line for refs/heads/master" in err
+    assert "Traceback" not in err

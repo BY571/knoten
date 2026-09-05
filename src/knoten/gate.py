@@ -19,10 +19,15 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+import yaml
+
+from . import contributors as C
 from . import ops
 from .core import GraphError, SERVER_GIT_ENV
+from .keys import allowed_signers
 
 ZERO = re.compile(r"^0+$")
+SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 
 
 def _git(*args: str, input: bytes | None = None) -> subprocess.CompletedProcess:
@@ -115,11 +120,94 @@ def validate_tree(rev: str, gdir: str, ref: str) -> bool:
         return bool(payload["valid"])
 
 
+def _show(rev: str, path: str) -> bytes | None:
+    r = _git("show", f"{rev}:{path}")
+    return r.stdout if r.returncode == 0 else None
+
+
+def contributors_at(rev: str, gdir: str) -> dict | None:
+    path = f"{gdir}/{C.FILE}" if gdir else C.FILE
+    raw = _show(rev, path)
+    if raw is None:
+        return None
+    return C.parse(raw.decode("utf-8", "replace"), f"{path} at {rev[:7]}")
+
+
+def graph_name_at(rev: str, gdir: str) -> str:
+    raw = _show(rev, f"{gdir}/graph.yaml" if gdir else "graph.yaml") or b""
+    try:
+        return str((yaml.safe_load(raw) or {}).get("name", ""))
+    except yaml.YAMLError:
+        return ""
+
+
+def signature(sha: str, keys: dict[str, str]) -> tuple[str, str]:
+    """git's own verdict on the commit's signature against exactly these keys:
+    (status, signer). G good; N none; U a key not listed; B bad; E unverifiable.
+    An empty key set means nobody may sign, and that is a U, not a crash."""
+    if not keys:
+        return "U", ""
+    with tempfile.NamedTemporaryFile("w", suffix=".signers", delete=False) as f:
+        f.write(allowed_signers(keys, ("git",)))
+        signers = f.name
+    try:
+        r = _git("-c", "gpg.format=ssh", "-c", f"gpg.ssh.allowedSignersFile={signers}",
+                 "log", "-1", "--format=%G?%n%GS", sha)
+    finally:
+        os.unlink(signers)
+    lines = r.stdout.decode("utf-8", "replace").splitlines()
+    status = lines[0].strip() if lines else "E"
+    signer = lines[1].strip() if len(lines) > 1 else ""
+    return status, signer
+
+
+WHY = {"N": "unsigned", "U": "signed by a key not listed by the graph for that",
+       "B": "bad signature", "E": "signature could not be checked"}
+
+
+def check_commit(sha: str, gdir: str, ref: str) -> bool:
+    """One commit against the contributors in force BEFORE it. Task 5 adds the rule for
+    commits that change contributors.yaml itself."""
+    has_parent = _git("rev-parse", "--verify", "-q", f"{sha}^").returncode == 0
+    prev = contributors_at(f"{sha}^", gdir) if has_parent else None
+    cur = contributors_at(sha, gdir)
+    where = f"{ref}: {sha[:7]}"
+    if prev is None and cur is None:
+        return True                     # a phase-1 graph: unsigned by design
+    if prev is None:
+        # Bootstrap. Nobody can vouch for the first contributors.yaml but itself, so the
+        # commit introducing it must be signed by a key it names as admin; otherwise
+        # anyone could install themselves as admin of a phase-1 graph.
+        status, _ = signature(sha, C.admins(cur))
+        if status == "G":
+            return True
+        say(f"{where} introduces {C.FILE} but is not signed by an admin it lists "
+            f"({WHY.get(status, status)})")
+        return False
+    status, _ = signature(sha, C.keys(prev))
+    if status == "G":
+        return True
+    say(f"{where} is not signed by a contributor who may write here ({WHY.get(status, status)})")
+    return False
+
+
 def check_ref(old: str, new: str, ref: str) -> bool:
-    """Task 4 puts the signature walk in front of the validation."""
     if ZERO.match(new):                 # a deletion carries no tree to check
         return True
+    rng = [new] if ZERO.match(old) else [f"{old}..{new}"]
+    if _git("rev-list", "--merges", *rng).stdout.strip():
+        # "The contributors before this commit" has two answers at a merge. knoten's
+        # own pull is --ff-only; say so instead of picking a parent.
+        say(f"{ref}: merge commits are not accepted here; rebase onto the remote and push again")
+        return False
+    commits = _git("rev-list", "--reverse", *rng).stdout.decode().split()
     ok = True
+    for sha in commits:
+        for gdir in graph_dirs(sha):
+            if not check_commit(sha, gdir, ref):
+                ok = False
+    if not ok:
+        return False
     for gdir in graph_dirs(new):
         if not validate_tree(new, gdir, ref):
             ok = False
@@ -133,6 +221,13 @@ def main(stdin=None) -> int:
         if len(parts) != 3:
             continue
         old, new, ref = parts
+        if not (SHA_RE.match(old) and SHA_RE.match(new)):
+            # old/new reach `check_ref` and from there `rev-list`/`archive` as revisions;
+            # anything not shaped like an object id would be parsed there as an option
+            # (`--output=x`) instead of refused as garbage input.
+            say(f"malformed ref line for {ref}")
+            ok = False
+            continue
         try:
             if not check_ref(old, new, ref):
                 ok = False

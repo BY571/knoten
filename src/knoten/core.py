@@ -44,7 +44,11 @@ MAX_PUSH_BYTES = 100 * 1024 * 1024
 # Dropping global config also drops `init.templateDir` and `init.defaultBranch` for
 # hosted repos, deliberately: a template directory is one more place a hook can arrive
 # from, which is one more place the gate can be replaced without anyone editing the repo.
-SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                  # A graph directory named "*" once widened `git archive`'s pathspec to
+                  # the whole repo; literal pathspecs make every name a plain path, glob
+                  # metacharacters included.
+                  "GIT_LITERAL_PATHSPECS": "1"}
 
 
 class GraphError(Exception):
