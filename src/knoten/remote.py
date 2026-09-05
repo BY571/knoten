@@ -43,13 +43,12 @@ def _key(url: str) -> str:
     return f"{u.scheme}://{u.netloc}{u.path}".rstrip("/")
 
 
-def cred_store(url: str, user: str, secret: str) -> None:
-    p = cred_path()
+def _cred_lines(p: Path) -> list[str]:
+    return p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+
+
+def _cred_write(p: Path, lines: list[str]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
-    key = _key(url)
-    lines = [l for l in (p.read_text(encoding="utf-8").splitlines() if p.exists() else [])
-             if not l.startswith(key + " ")]
-    lines.append(f"{key} {user} {secret}")
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         # os.open's mode applies only when the file is created; existing files keep their bits.
@@ -63,15 +62,41 @@ def cred_store(url: str, user: str, secret: str) -> None:
         fh.write("\n".join(lines) + "\n")
 
 
-def cred_lookup(url: str) -> tuple[str, str] | None:
+def cred_store(url: str, user: str, secret: str) -> None:
     p = cred_path()
-    if not p.exists():
-        return None
     key = _key(url)
-    for line in p.read_text(encoding="utf-8").splitlines():
+    lines = [l for l in _cred_lines(p) if not l.startswith(key + " ")]
+    lines.append(f"{key} {user} {secret}")
+    _cred_write(p, lines)
+
+
+def _match(lines: list[str], key: str) -> tuple[str, str] | None:
+    for line in lines:
         parts = line.split(" ", 2)
         if len(parts) == 3 and parts[0] == key:
             return parts[1], parts[2]
+    return None
+
+
+def cred_lookup(url: str) -> tuple[str, str] | None:
+    p = cred_path()
+    lines = _cred_lines(p)
+    key = _key(url)
+    if found := _match(lines, key):
+        return found
+
+    # Keys used to be `<netloc><path>`, with no scheme. Every token stored before that
+    # change stopped matching the moment the scheme was added, and the only symptom was
+    # git prompting for a password nobody has. So the old key is tried once and rewritten
+    # under the new one, which makes the migration happen on first use rather than by
+    # asking everybody to re-join. The scheme comes from the URL being looked up: a
+    # schemeless key is no evidence of one, and the caller's is the only evidence there is.
+    u = urlsplit(url)
+    if legacy := _match(lines, f"{u.netloc}{u.path}".rstrip("/")):
+        cred_store(url, *legacy)
+        _cred_write(p, [l for l in _cred_lines(p)
+                        if not l.startswith(f"{u.netloc}{u.path}".rstrip("/") + " ")])
+        return legacy
     return None
 
 

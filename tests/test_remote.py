@@ -60,6 +60,21 @@ def test_the_store_is_made_private_again_if_it_was_not():
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
 
 
+def test_a_key_from_before_the_scheme_was_added_still_works_and_is_migrated():
+    """Keys used to be host plus path. Every token stored before the scheme was added
+    stopped matching, and the only symptom was git prompting for a password nobody has.
+    The old key is honoured once and rewritten, so the migration happens on first use."""
+    p = cred_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("h.example/trading.git maria tok\n", encoding="utf-8")
+
+    assert cred_lookup("https://h.example/trading.git") == ("maria", "tok")
+
+    assert p.read_text(encoding="utf-8").splitlines() == [
+        "https://h.example/trading.git maria tok"]
+    assert cred_lookup("https://h.example/trading.git") == ("maria", "tok")
+
+
 def test_lookup_with_no_store_is_none_not_an_error():
     assert cred_lookup("https://h.example/trading.git") is None
 
