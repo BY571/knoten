@@ -12,6 +12,7 @@ from knoten.contributors import (FILE, ROLES, active, admins, check_blob, diff, 
 from knoten.keys import INVITE_NS, sign
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxYm3v0R3f7pWJ2cQ5lD8Rk9x6ZQ7pMd2eS8rT1uV2w"
+KEY2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHF3ZaMh1uWn5V0oGZ9rT2pQ8cX6yLdN4wK1sB3jR7t"
 
 
 def test_absent_file_is_none_not_an_error(tmp_path):
@@ -20,7 +21,7 @@ def test_absent_file_is_none_not_an_error(tmp_path):
 
 
 def test_parse_accepts_the_documented_shape():
-    c = parse(f"seb:\n  key: {KEY}\n  role: admin\nmaria:\n  key: {KEY}\n  role: write\n"
+    c = parse(f"seb:\n  key: {KEY}\n  role: admin\nmaria:\n  key: {KEY2}\n  role: write\n"
               f"  invited_by: seb\n")
     assert set(c) == {"seb", "maria"}
     assert c["seb"]["role"] == "admin"
@@ -42,7 +43,7 @@ def test_parse_refuses_malformed_entries(text, msg):
 
 
 def test_dump_and_load_round_trip_sorted_and_atomic(tmp_path):
-    c = {"maria": {"key": KEY, "role": "write"}, "seb": {"key": KEY, "role": "admin"}}
+    c = {"maria": {"key": KEY2, "role": "write"}, "seb": {"key": KEY, "role": "admin"}}
     dump(tmp_path, c)
 
     text = (tmp_path / FILE).read_text(encoding="utf-8")
@@ -120,6 +121,14 @@ def test_an_unquoted_revoked_date_loads_as_the_string_it_was_written_as(tmp_path
     assert diff(c, {"seb": {"key": KEY, "role": "admin", "revoked": "2026-09-01"}}) == ({}, {}, set())
     dump(tmp_path, c)
     assert load(tmp_path) == c
+
+
+def test_two_names_may_not_share_one_key():
+    """%GS reports the signer's NAME, and allowed_signers sorts by name -- so two entries
+    sharing a key let the alphabetically-first name silently vouch for commits the other
+    one signed. One key must map to exactly one name."""
+    with pytest.raises(GraphError, match="the same key is listed under 'eve' and 'seb'"):
+        parse(f"eve:\n  key: {KEY}\n  role: write\nseb:\n  key: {KEY}\n  role: admin\n")
 
 
 def test_the_name_cap_is_one_constant():

@@ -69,6 +69,18 @@ def parse(text: str, label: str = FILE) -> dict:
                 else:
                     clean[opt] = entry[opt]
         out[name] = clean
+    seen: dict[str, str] = {}
+    for name in sorted(out):
+        # The constitution authorises writes by NAME ("maria may write"), not by key --
+        # `%GS` reports the signer's git-config name, and a key shared between two entries
+        # lets one contributor sign a commit that is attributed, and authorised, as the
+        # other. One key must map to exactly one name.
+        key = out[name]["key"]
+        if key in seen:
+            a, b = seen[key], name
+            raise GraphError(f"{label}: the same key is listed under '{a}' and '{b}'; "
+                             f"one key, one name")
+        seen[key] = name
     return out
 
 

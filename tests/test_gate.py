@@ -350,3 +350,120 @@ def test_a_malformed_ref_line_is_refused_without_a_traceback(bare, monkeypatch, 
     assert rc == 1
     assert "malformed ref line for refs/heads/master" in err
     assert "Traceback" not in err
+
+
+# ------------------------------------------------------- moved and deleted graph dirs
+
+def test_a_renamed_graph_is_still_checked_against_its_old_contributors(signed, keys_dir):
+    """Eve, unlisted at g, renamed g to h and wrote a fresh contributors.yaml naming
+    herself sole admin. `contributors_at(parent, "h")` is None -- h did not exist a
+    moment ago -- so checking graph_dirs(sha) alone let the bootstrap branch (nobody to
+    vouch for the first contributors.yaml but itself) accept her, since she signed with
+    her own key and her own new file names her admin. Checking graph_dirs at the parent
+    too means g's disappearance is judged against g's own contributors: seb, not eve."""
+    origin, work, k = signed
+    eve = make_key(keys_dir, "eve")
+    git("mv", "g", "h", cwd=work)
+    C.dump(work / "h", {"eve": {"key": pub_line(eve), "role": "admin"}})
+    commit_signed(work, "eve takes over", eve)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    tree = git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
+    assert "g/contributors.yaml" in tree
+
+
+def test_an_unsigned_removal_of_a_graph_is_refused(signed):
+    """An unsigned commit that deletes g outright must not land just because the per-
+    commit loop, walking only graph_dirs(sha), finds no graph directory left to check."""
+    origin, work, k = signed
+    git("rm", "-rq", "g", cwd=work)
+    git("commit", "-qm", "remove g", cwd=work)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "unsigned" in r.stderr
+    assert "g/contributors.yaml" in git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
+
+
+def test_an_admin_may_rename_the_graph_they_administer(signed):
+    """The fix for the two tests above must not refuse a legitimate rename: seb, admin of
+    g, renaming it to h and signing that commit himself is exactly what should land."""
+    origin, work, k = signed
+    git("mv", "g", "h", cwd=work)
+    commit_signed(work, "seb renames g to h", k["seb"])
+
+    r = push(work)
+
+    assert r.returncode == 0, r.stderr
+
+
+# --------------------------------------------------------------- rev-list return codes
+
+def test_check_ref_raises_instead_of_treating_a_rev_list_failure_as_nothing_to_check(
+        bare, monkeypatch):
+    """rev-list's own exit code was ignored at both call sites: a failure returns empty
+    stdout, indistinguishable from "no merges" and "no commits", which let a push through
+    on a git error instead of refusing it. An old-ref that isn't a real object makes
+    rev-list fail immediately."""
+    origin, work = bare
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "seed", cwd=work)
+    sha = git("rev-parse", "HEAD", cwd=work).stdout.strip()
+    monkeypatch.chdir(work)
+
+    with pytest.raises(gate.GraphError, match="cannot list commits"):
+        gate.check_ref("a" * 40, sha, "refs/heads/master")
+
+
+# ------------------------------------------------------------------- misc review fixes
+
+def test_signature_unlinks_its_temp_file_even_when_allowed_signers_raises(monkeypatch):
+    """The temp allowed-signers file used to be written outside the try/finally that
+    unlinks it: a raise from allowed_signers (malformed key data) before the git call
+    would leak the file instead of cleaning it up."""
+    import tempfile
+    from pathlib import Path
+
+    def _boom(keys, namespaces):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(gate, "allowed_signers", _boom)
+    before = set(Path(tempfile.gettempdir()).glob("*.signers"))
+
+    with pytest.raises(RuntimeError):
+        gate.signature("deadbeef", {"seb": "ssh-ed25519 AAAA"})
+
+    after = set(Path(tempfile.gettempdir()).glob("*.signers"))
+    assert after == before
+
+
+def test_a_new_branch_is_not_rewalked_through_already_accepted_history(bare, monkeypatch):
+    """Once a merge commit sits in already-accepted history (as it could from before
+    knoten managed this repo, since a direct write to the bare repo's ref never runs the
+    hook), a brand-new branch pointing past it must not be refused forever: only commits
+    not already reachable from an existing ref -- `new --not --all` -- get walked."""
+    origin, work = bare
+    git("checkout", "-qb", "side", cwd=work)
+    (work / "g" / "nodes" / "hyp-side.md").write_text(
+        "---\nid: hyp-side\ntype: hypothesis\nstatus: open\n---\n\n# side\n", encoding="utf-8")
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "side", cwd=work)
+    git("checkout", "-q", "master", cwd=work)
+    git("merge", "--no-ff", "-q", "-m", "merge", "side", cwd=work)
+    merge_sha = git("rev-parse", "HEAD", cwd=work).stdout.strip()
+    # Written straight into the bare repo's ref, bypassing the hook entirely -- as if this
+    # history predates knoten managing this repo.
+    git("update-ref", "refs/heads/master", merge_sha, cwd=origin)
+
+    git("checkout", "-qb", "feature", cwd=work)
+    (work / "g" / "nodes" / "hyp-feat.md").write_text(
+        "---\nid: hyp-feat\ntype: hypothesis\nstatus: open\n---\n\n# feat\n", encoding="utf-8")
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "feature", cwd=work)
+
+    r = git("push", "-q", "origin", "feature", cwd=work)
+
+    assert r.returncode == 0, r.stderr

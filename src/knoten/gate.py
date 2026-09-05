@@ -148,9 +148,13 @@ def signature(sha: str, keys: dict[str, str]) -> tuple[str, str]:
     if not keys:
         return "U", ""
     with tempfile.NamedTemporaryFile("w", suffix=".signers", delete=False) as f:
-        f.write(allowed_signers(keys, ("git",)))
         signers = f.name
     try:
+        # allowed_signers() runs INSIDE the try: the temp file above already exists on
+        # disk the moment NamedTemporaryFile made it, so a raise from a malformed key
+        # before the git call must still reach the unlink below, not leak the file.
+        with open(signers, "w", encoding="utf-8") as f:
+            f.write(allowed_signers(keys, ("git",)))
         r = _git("-c", "gpg.format=ssh", "-c", f"gpg.ssh.allowedSignersFile={signers}",
                  "log", "-1", "--format=%G?%n%GS", sha)
     finally:
@@ -161,14 +165,15 @@ def signature(sha: str, keys: dict[str, str]) -> tuple[str, str]:
     return status, signer
 
 
-WHY = {"N": "unsigned", "U": "signed by a key not listed by the graph for that",
+WHY = {"N": "unsigned", "U": "signed by a key not listed here",
        "B": "bad signature", "E": "signature could not be checked"}
 
 
-def check_commit(sha: str, gdir: str, ref: str) -> bool:
+def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
     """One commit against the contributors in force BEFORE it. Task 5 adds the rule for
-    commits that change contributors.yaml itself."""
-    has_parent = _git("rev-parse", "--verify", "-q", f"{sha}^").returncode == 0
+    commits that change contributors.yaml itself. `has_parent` is the caller's own answer
+    to "does this commit have a parent", asked once per commit rather than once per
+    (commit, gdir) pair -- check_ref may call this for several directories on one sha."""
     prev = contributors_at(f"{sha}^", gdir) if has_parent else None
     cur = contributors_at(sha, gdir)
     where = f"{ref}: {sha[:7]}"
@@ -184,6 +189,9 @@ def check_commit(sha: str, gdir: str, ref: str) -> bool:
         say(f"{where} introduces {C.FILE} but is not signed by an admin it lists "
             f"({WHY.get(status, status)})")
         return False
+    # cur is None here means this commit moved gdir away or deleted it outright: there is
+    # nothing left at gdir to vouch for itself, so the commit is judged against who could
+    # write here a moment ago (prev), not skipped for having nothing to check against.
     status, _ = signature(sha, C.keys(prev))
     if status == "G":
         return True
@@ -194,17 +202,44 @@ def check_commit(sha: str, gdir: str, ref: str) -> bool:
 def check_ref(old: str, new: str, ref: str) -> bool:
     if ZERO.match(new):                 # a deletion carries no tree to check
         return True
-    rng = [new] if ZERO.match(old) else [f"{old}..{new}"]
-    if _git("rev-list", "--merges", *rng).stdout.strip():
+    if ZERO.match(old):
+        # A brand-new branch or tag. Walking every ancestor of `new` re-checks history
+        # already accepted on some other ref every time anyone branches from it -- and if
+        # that history ever carries a merge commit (this repo's history from before
+        # knoten managed it, say), a brand-new branch off of it would be refused forever.
+        # `--not --all` limits the walk to commits not already reachable from an existing
+        # ref, so only what's actually new here gets checked.
+        rng = [new, "--not", "--all"]
+    else:
+        rng = [f"{old}..{new}"]
+    r = _git("rev-list", "--merges", *rng)
+    if r.returncode != 0:
+        # A failed rev-list returns empty stdout, same as "no merges here" -- silently
+        # treating that as "nothing to check" would let a push through on a git error
+        # instead of refusing it.
+        raise GraphError(f"cannot list commits for {ref}")
+    if r.stdout.strip():
         # "The contributors before this commit" has two answers at a merge. knoten's
         # own pull is --ff-only; say so instead of picking a parent.
         say(f"{ref}: merge commits are not accepted here; rebase onto the remote and push again")
         return False
-    commits = _git("rev-list", "--reverse", *rng).stdout.decode().split()
+    r = _git("rev-list", "--reverse", *rng)
+    if r.returncode != 0:
+        raise GraphError(f"cannot list commits for {ref}")
+    commits = r.stdout.decode().split()
     ok = True
     for sha in commits:
-        for gdir in graph_dirs(sha):
-            if not check_commit(sha, gdir, ref):
+        has_parent = _git("rev-parse", "--verify", "-q", f"{sha}^").returncode == 0
+        # A gdir can vanish between a commit and its parent -- moved elsewhere, or deleted
+        # outright. Checking only graph_dirs(sha) let a commit do either to g and skip the
+        # per-commit signature check entirely, since g was gone from the tree being
+        # examined. Union in graph_dirs at the parent too, so "g disappeared here" is
+        # still checked against who could write to g a moment before this commit.
+        gdirs = set(graph_dirs(sha))
+        if has_parent:
+            gdirs |= set(graph_dirs(f"{sha}^"))
+        for gdir in sorted(gdirs):
+            if not check_commit(sha, gdir, ref, has_parent):
                 ok = False
     if not ok:
         return False
