@@ -126,22 +126,27 @@ class _Handler(BaseHTTPRequestHandler):
         r = subprocess.run(["git", "http-backend"], input=self._body(),
                            capture_output=True, env=env)
         head, _, out = r.stdout.partition(b"\r\n\r\n")
-        status, headers = 200, []
+        status, headers, saw_status = 200, [], False
         for line in head.decode(errors="replace").splitlines():
             key, _, value = line.partition(":")
             if key.strip().lower() == "status":
-                status = int(value.strip().split()[0])
+                status, saw_status = int(value.strip().split()[0]), True
             elif key.strip():
                 headers.append((key.strip(), value.strip()))
+        if r.returncode != 0:
+            print(f"knoten serve: git http-backend: {r.stderr.decode(errors='replace').strip()}",
+                  file=sys.stderr)
+            if not saw_status:
+                # A pre-receive refusal travels the sideband with exit 0, so a non-zero
+                # exit with no Status line can only be the backend itself dying — a
+                # crashed backend used to relay to the client as a silent 200.
+                return self._refuse(500, "knoten: git http-backend failed on the server; see its log")
         self.send_response(status)
         for key, value in headers:
             self.send_header(key, value)
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
-        if r.returncode != 0:
-            print(f"knoten serve: git http-backend: {r.stderr.decode(errors='replace').strip()}",
-                  file=sys.stderr)
 
     # ---------------------------------------------------------------- api (Task 4)
 

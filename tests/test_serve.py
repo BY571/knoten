@@ -3,6 +3,7 @@ then hand the request to `git http-backend`, which ships with git and speaks the
 HTTP protocol. Everything hard (packfiles, refs, negotiation, hooks) is git's. These
 tests therefore drive real git clients at a real server.
 """
+import base64
 import json
 import os
 import subprocess
@@ -127,3 +128,26 @@ def test_a_second_clone_sees_what_the_first_pushed(hub, trading, tmp_path):
     git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(dest), cwd=tmp_path)
 
     assert (dest / "nodes" / "hyp-ok.md").exists()
+
+
+def test_a_crashed_backend_is_a_500_not_a_silent_200(hub, trading, monkeypatch):
+    """A refusal by the gate arrives in the sideband with exit 0, so a non-zero exit
+    with no Status line can only be the backend dying. That used to relay as 200 with
+    an empty body. Real git cannot be made to crash headerless on demand, which is why
+    this one test fakes the subprocess: it is testing the relay, not git."""
+    import subprocess as sp
+    from knoten import serve as serve_mod
+
+    def dead(*args, **kwargs):
+        return sp.CompletedProcess(args, 128, stdout=b"", stderr=b"fatal: boom")
+    monkeypatch.setattr(serve_mod.subprocess, "run", dead)
+
+    req = urllib.request.Request(
+        f"{hub.url}/trading.git/info/refs?service=git-upload-pack",
+        headers={"Authorization": "Basic " + base64.b64encode(
+            f"seb:{trading['admin']}".encode()).decode()})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+
+    assert e.value.code == 500
+    assert "http-backend failed" in json.loads(e.value.read())["error"]
