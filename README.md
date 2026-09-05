@@ -16,14 +16,16 @@ It exists because research loops forget, whether they are run by a human or an a
 They re-propose an idea that was settled last month under a different name, and they file
 the wins while the failures evaporate. knoten makes the failure the artifact: a claim
 cannot be marked alive unless it cites a test it survived, and a dead end has to say what
-would reopen it. One graph can be shared by a team, humans and agents alike, with those
-rules enforced on the server rather than on trust. Your graph declares its own rules in `graph.yaml`; the tool enforces them
+would reopen it. Your graph declares its own rules in `graph.yaml`; the tool enforces them
 and knows nothing else about your field.
 
 The point is to run it **before** the work, not after. `knoten frontier` says what is worth
 doing next, `knoten index` says whether it has been tried in different words, and
 `knoten gates` says what the result will have to survive. Used the other way round, as a
 place to file results once they exist, it is a tidy record that changes no decision.
+
+One graph can be shared by a team, humans and agents alike. The rules are enforced on the
+server, for everyone, rather than on trust.
 
 ## A node
 
@@ -72,8 +74,8 @@ GSM8K is not that task.
 ## The loop
 
 ```bash
-pip install -e .
-knoten init my-topic          # a graph is a folder
+pip install git+https://github.com/BY571/knoten   # or `pip install -e .` from a clone
+knoten init my-topic                                # a graph is a folder
 ```
 
 ```bash
@@ -90,9 +92,12 @@ knoten attach hyp-idea run.py accuracy.png       # the code and the plot
 
 knoten validate               # enforce this graph's rules
 knoten hook                   # make `git commit` refuse a broken graph
-knoten remote create g --on https://graphs.example   # share it
-knoten invite maria --role write                     # let someone in
 knoten viz --open             # the whole graph as one HTML file
+
+knoten remote create my-topic --on https://graphs.example   # share it
+knoten invite maria --role write                            # let someone in
+knoten pull                   # what they added
+knoten push                   # what you added, through the gate
 ```
 
 Every read command takes `--json`. Exit `0` succeeded, `1` refused, and a refusal is the
@@ -140,7 +145,7 @@ tags:       [decoding, reasoning, prompting, evaluation]
 
 One graph, several people, one set of rules enforced for all of them. A remote is a
 `knoten serve` process on any machine you can reach over HTTPS: a box you own behind a
-reverse proxy or a tunnel, a small VPS, or a hosted knoten.
+reverse proxy or a tunnel, a small VPS, or, later, a hosted knoten.
 
 ```bash
 # you, once, in your graph
@@ -151,6 +156,11 @@ knoten invite maria --role write        # prints a one-time code
 knoten join https://graphs.example/trading --invite 7f3a9c...
 knoten frontier                         # her clone; the loop is unchanged from here
 knoten push                             # over HTTPS, through the gate
+
+# you, whenever
+knoten pull                             # her nodes, into yours
+knoten invites                          # who was invited and has not arrived
+knoten revoke maria                     # ends her access; what she pushed stays
 ```
 
 Every push runs `knoten validate` on the server before the ref moves, so a node that
@@ -161,6 +171,10 @@ node is your problem and on a shared one it would be everybody's.
 
 `read` can clone and pull. `write` can push. `admin` can invite and revoke. Tokens say
 who is connecting and nothing else; what a token can do is the role the admin gave it.
+The server holds only hashed tokens and open invites. Everything that means anything,
+the nodes, the rules, the history, lives in the graph, so losing the server loses
+availability and not the answer to who said what. The hosted repo refuses force pushes
+and branch deletion: nothing is deleted there either.
 
 Reading needs nothing installed. Nodes are markdown, and `knoten viz` writes the graph as
 one self-contained HTML file you can hand to someone who has never heard of knoten.
@@ -170,6 +184,9 @@ To run the server:
 ```bash
 knoten serve --data ~/knoten-remotes       # prints the owner secret once; keep it
 ```
+
+The owner secret creates graphs and nothing else. `knoten remote create` reads it from
+`KNOTEN_OWNER_SECRET`, or asks once and remembers it.
 
 It binds localhost and speaks plain HTTP. Put TLS in front before anyone outside the
 machine connects. For a graph that lives in a bare repo you administer yourself, without
@@ -187,4 +204,5 @@ and which way an edge points.
 See [`examples/llm-research/`](examples/llm-research) for a worked graph and
 [SPEC.md](SPEC.md) for the design and the evidence behind it.
 
-MIT. One dependency: PyYAML. No framework, no database, no build step.
+MIT. One dependency: PyYAML. No framework, no database, no build step, and no server until
+you share a graph.
