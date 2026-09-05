@@ -225,6 +225,16 @@ def test_joining_twice_with_one_code_fails_the_second_time(hub, trading):
     assert "not valid" in body["error"]
 
 
+def test_join_on_an_unknown_graph_looks_like_a_wrong_code(hub, trading):
+    """/join needs no credentials, so it must not confirm which graphs exist: a
+    nonexistent graph and a wrong code get byte-identical 400 bodies."""
+    status_unknown, body_unknown = api(hub, "/biology/join", {"code": "x"}, None)
+    status_known, body_known = api(hub, "/trading/join", {"code": "x"}, None)
+
+    assert status_unknown == 400 and status_known == 400
+    assert body_unknown == body_known
+
+
 def test_revoke_ends_a_contributors_access(hub, trading, tmp_path):
     tok = hub.registry.mint("trading", "maria", "write")
 

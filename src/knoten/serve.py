@@ -165,6 +165,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _join(self, name: str) -> None:
         body = self._json_body()
+        if not self.registry.exists(name):
+            # /join needs no credentials, so it must not become a name oracle: an
+            # unknown graph gets the same 400 a wrong code gets, not "no graph 'x'".
+            return self._refuse(400, "knoten: that invite code is not valid for this graph")
         user, role, token = self.registry.redeem(name, body.get("code", ""))
         self._json(200, {"name": user, "role": role, "token": token})
 
