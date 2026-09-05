@@ -325,3 +325,21 @@ def test_a_spent_or_wrong_code_is_one_readable_line(hub, shared, tmp_path, monke
     assert "not valid" in err and "Traceback" not in err
     assert not (tmp_path / "trading").exists()
 
+
+def test_a_clone_failure_after_redemption_says_the_invite_is_spent(hub, shared, tmp_path, monkeypatch, capsys):
+    """The server consumes the code before git clone runs. When the clone then failed,
+    the user saw only git's error, retried the same code, and was refused for a reason
+    that looked unrelated. Now the message says the credentials are saved and how to
+    finish by hand."""
+    main(["invite", "maria"])
+    code = capsys.readouterr().out.strip().split()[-1]
+    blocker = tmp_path / "taken"
+    (blocker / "not-empty").mkdir(parents=True)          # git refuses a non-empty dest
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["join", f"{hub.url}/trading", "--invite", code, "--dest", "taken"]) == 1
+    err = capsys.readouterr().err
+    assert "invite is spent" in err and "credentials are saved" in err
+    assert "Traceback" not in err
+    assert cred_lookup(f"{hub.url}/trading.git")[0] == "maria"
+

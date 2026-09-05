@@ -241,6 +241,12 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
                         "-c", "credential.useHttpPath=true",
                         "clone", "-q", git_url, str(target)], capture_output=True, text=True)
     if r.returncode != 0:
-        raise GraphError(_explain(r.stderr))
+        # The server already consumed the code in the _api call above, one line up. git's
+        # own error alone reads like the code is still good and worth retrying — it is
+        # not, so say what actually happened and how to finish without it.
+        raise GraphError(
+            f"clone failed: {_explain(r.stderr)}. The invite is spent but your credentials "
+            f"are saved, so finish by hand: git clone {git_url} <dir> && cd <dir> && "
+            f"knoten remote add {url}")
     _wire(target, git_url)
     return target, got["name"], got["role"]
