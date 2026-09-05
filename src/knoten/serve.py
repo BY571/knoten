@@ -75,7 +75,7 @@ class _Handler(BaseHTTPRequestHandler):
     log_error = log_request                    # send_error's own line, the same noise
 
     def log_message(self, action: str, graph: str = "-", user: str = "-",
-                    status: int = 200) -> None:
+                    status: int | str = 200) -> None:
         """The access log, and only the events an owner would want to answer "who changed
         this graph, and when" with: creation, joins, invites, revocations and every push.
         Reads stay silent, or the log is a `git fetch` poll loop and nothing else.
@@ -234,7 +234,13 @@ class _Handler(BaseHTTPRequestHandler):
                 # crashed backend used to relay to the client as a silent 200.
                 return self._refuse(500, "knoten: git http-backend failed on the server; see its log")
         if push:
-            self.log_message(WRITE, name, user, status)
+            # http-backend exits 0 and answers 200 when the gate refuses: the refusal
+            # travels in the sideband, not in the status line. A log that reads 200 for a
+            # rejected push cannot answer the one question it is kept for, which is
+            # whether that push landed. git puts these two phrases in the sideband, one
+            # for the hook and one for the deny* config.
+            refused = b"pre-receive hook declined" in out or b"denying " in out
+            self.log_message(WRITE, name, user, "refused" if refused else status)
         self.send_response(status)
         for key, value in headers:
             self.send_header(key, value)

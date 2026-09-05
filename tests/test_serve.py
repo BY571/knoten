@@ -763,3 +763,19 @@ def test_join_on_an_over_long_name_is_byte_identical_to_a_wrong_code(hub, tradin
 
     assert status_long == status_wrong == 400
     assert body_long == body_wrong
+
+
+def test_a_push_the_gate_refused_is_not_logged_as_a_200(hub, trading, capfd):
+    """http-backend exits 0 and answers 200 when the gate refuses; the refusal is in the
+    sideband. Logged by status alone, every rejected push read as a successful one, which
+    is exactly the question the log is kept for."""
+    work = trading["work"]
+    commit_node(work, "hyp-x.md", ALIVE_NO_GATE)
+    capfd.readouterr()
+
+    r = git("push", "origin", "master", cwd=work)
+
+    assert r.returncode != 0
+    err = capfd.readouterr().err
+    pushes = [l for l in err.splitlines() if "git-receive-pack" in l]
+    assert pushes and pushes[-1].endswith(" refused"), err
