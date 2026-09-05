@@ -79,25 +79,18 @@ def _match(lines: list[str], key: str) -> tuple[str, str] | None:
 
 
 def cred_lookup(url: str) -> tuple[str, str] | None:
-    p = cred_path()
-    lines = _cred_lines(p)
-    key = _key(url)
-    if found := _match(lines, key):
-        return found
+    """The exact key or nothing. There is deliberately no fallback to the schemeless
+    `<netloc><path>` key this file used before the scheme was added.
 
-    # Keys used to be `<netloc><path>`, with no scheme. Every token stored before that
-    # change stopped matching the moment the scheme was added, and the only symptom was
-    # git prompting for a password nobody has. So the old key is tried once and rewritten
-    # under the new one, which makes the migration happen on first use rather than by
-    # asking everybody to re-join. The scheme comes from the URL being looked up: a
-    # schemeless key is no evidence of one, and the caller's is the only evidence there is.
-    u = urlsplit(url)
-    if legacy := _match(lines, f"{u.netloc}{u.path}".rstrip("/")):
-        cred_store(url, *legacy)
-        _cred_write(p, [l for l in _cred_lines(p)
-                        if not l.startswith(f"{u.netloc}{u.path}".rstrip("/") + " ")])
-        return legacy
-    return None
+    That fallback existed for one release-less week and it leaked the owner secret. Old
+    keys carried no scheme, so `owner://h:8899` and `https://h:8899` both collapse to
+    `h:8899`: a plain `git fetch` against the bare host (any repo without
+    credential.useHttpPath) matched the owner line, and the migration then rewrote it as
+    `https://h:8899`, reachable by ordinary git from then on. The whole point of the
+    `owner://` namespace is that no git request can name it, and a lookup that strips the
+    scheme is exactly a lookup that can. Nothing is released, so nothing is stranded.
+    """
+    return _match(_cred_lines(cred_path()), _key(url))
 
 
 def credential_helper(request: str) -> str:

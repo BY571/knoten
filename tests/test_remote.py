@@ -60,19 +60,23 @@ def test_the_store_is_made_private_again_if_it_was_not():
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
 
 
-def test_a_key_from_before_the_scheme_was_added_still_works_and_is_migrated():
-    """Keys used to be host plus path. Every token stored before the scheme was added
-    stopped matching, and the only symptom was git prompting for a password nobody has.
-    The old key is honoured once and rewritten, so the migration happens on first use."""
+def test_a_schemeless_key_is_never_matched_by_stripping_the_scheme():
+    """A fallback to the old `<netloc><path>` key leaked the owner secret. Without a
+    scheme, `owner://h:8899` and `https://h:8899` are the same string, so a plain
+    `git fetch` against the bare host matched the owner line and got the key to every
+    graph on the server. The lookup is exact, and nothing rewrites keys."""
     p = cred_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("h.example/trading.git maria tok\n", encoding="utf-8")
+    p.write_text("h.example:8899 owner SERVER-WIDE-SECRET\n"
+                 "h.example:8899/trading.git maria tok\n", encoding="utf-8")
 
-    assert cred_lookup("https://h.example/trading.git") == ("maria", "tok")
+    assert cred_lookup("https://h.example:8899/") is None
+    assert cred_lookup("https://h.example:8899") is None
+    assert cred_lookup("https://h.example:8899/x.git") is None
+    assert cred_lookup("https://h.example:8899/trading.git") is None
+    assert credential_helper("protocol=https\nhost=h.example:8899\n") == ""
 
-    assert p.read_text(encoding="utf-8").splitlines() == [
-        "https://h.example/trading.git maria tok"]
-    assert cred_lookup("https://h.example/trading.git") == ("maria", "tok")
+    assert p.read_text(encoding="utf-8").splitlines()[0].startswith("h.example:8899 owner")
 
 
 def test_lookup_with_no_store_is_none_not_an_error():
