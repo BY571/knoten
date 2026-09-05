@@ -4,6 +4,7 @@ HTTP protocol. Everything hard (packfiles, refs, negotiation, hooks) is git's. T
 tests therefore drive real git clients at a real server.
 """
 import base64
+import http.client
 import json
 import os
 import subprocess
@@ -261,6 +262,26 @@ def test_a_json_body_that_is_not_an_object_is_a_400(hub, trading):
     status, body = api(hub, "/trading/invite", [1, 2, 3], ("seb", trading["admin"]))
     assert status == 400
     assert "JSON object" in body["error"]
+
+
+def test_a_malformed_or_negative_content_length_is_a_400_not_a_hang(hub, trading):
+    """"Content-Length: abc" used to raise ValueError inside _body, unguarded, killing
+    the thread with no response. "Content-Length: -1" used to reach rfile.read(-1),
+    which reads until the socket closes -- on a connection the client never closes,
+    a thread parked forever with no credentials required to trigger it."""
+    host, port = hub.url.removeprefix("http://").rsplit(":", 1)
+    for bad in ("abc", "-1"):
+        conn = http.client.HTTPConnection(host, int(port), timeout=5)
+        conn.putrequest("POST", "/trading/join")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", bad)
+        conn.endheaders()
+        r = conn.getresponse()
+        body = json.loads(r.read())
+        conn.close()
+
+        assert r.status == 400, (bad, body)
+        assert "invalid" in body["error"]
 
 
 def test_a_non_numeric_days_is_a_400(hub, trading):

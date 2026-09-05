@@ -55,7 +55,20 @@ class _Handler(BaseHTTPRequestHandler):
         return user, secret
 
     def _body(self) -> bytes:
-        return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        raw = self.headers.get("Content-Length")
+        try:
+            length = int(raw) if raw else 0
+        except ValueError:
+            # "Content-Length: abc" raised here unguarded, escaping _route's except
+            # GraphError: the thread died with no response and a traceback on the
+            # server's stderr. GraphError instead turns into an ordinary 400.
+            raise GraphError("request body length is invalid") from None
+        if not (0 <= length <= 104857600):     # matches receive.maxInputSize (100 MB)
+            # A negative length reaches rfile.read(-1), which reads until EOF -- on a
+            # socket the client never closes, that parks the thread forever: an
+            # unauthenticated way to exhaust the server's thread pool one request at a time.
+            raise GraphError("request body length is invalid")
+        return self.rfile.read(length)
 
     def _json_body(self) -> dict:
         try:
