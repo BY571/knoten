@@ -93,10 +93,15 @@ def hub(tmp_path, monkeypatch):
 @pytest.fixture
 def local_graph(tmp_path, rules_yaml):
     """A git repo whose root is a graph with one committed node: what a user has on disk
-    the moment they decide to share it."""
+    the moment they decide to share it.
+
+    Nested under "admin/", not directly in tmp_path: a friend joining a graph named
+    "trading" clones to tmp_path/"trading" by default, and that must never collide with
+    the admin's own on-disk checkout of the same graph, which happens to share this
+    tmp_path in tests."""
     import subprocess
 
-    root = tmp_path / "trading"
+    root = tmp_path / "admin" / "trading"
     (root / "nodes").mkdir(parents=True)
     (root / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
     (root / "nodes" / "hyp-ok.md").write_text(

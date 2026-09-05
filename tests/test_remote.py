@@ -235,3 +235,93 @@ def test_remote_add_points_an_existing_clone_at_a_remote(hub, local_graph, monke
 
     assert git("remote", "get-url", "origin", cwd=local_graph).stdout.strip() == f"{hub.url}/trading.git"
     assert git("config", "credential.useHttpPath", cwd=local_graph).stdout.strip() == "true"
+
+
+# ---------------------------------------------------------------- the friend's journey
+
+def test_the_whole_journey(hub, shared, tmp_path, monkeypatch, capsys):
+    """You create a remote and invite Maria. Maria joins, adds a node, pushes. You pull
+    and it is there. She pushes a broken one and it is not. Every step through the CLI."""
+    assert main(["invite", "maria", "--role", "write"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    clone = tmp_path / "trading"
+    assert (clone / "nodes" / "hyp-ok.md").exists()
+    assert "maria" in capsys.readouterr().out
+
+    git("config", "user.email", "m@m.m", cwd=clone); git("config", "user.name", "maria", cwd=clone)
+    commit_node(clone, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
+    monkeypatch.chdir(clone)
+    assert main(["push"]) == 0
+
+    monkeypatch.chdir(shared)
+    assert main(["pull"]) == 0
+    assert (shared / "nodes" / "hyp-m.md").exists()
+
+    commit_node(clone, "hyp-bad.md", "---\nid: hyp-bad\ntype: hypothesis\nstatus: alive\n---\n\n# b\n")
+    monkeypatch.chdir(clone)
+    assert main(["push"]) == 1
+    assert "live-claims-must-cite-their-gates" in capsys.readouterr().err
+
+
+def test_join_with_a_read_invite_can_pull_but_not_push(hub, shared, tmp_path, monkeypatch, capsys):
+    main(["invite", "reader", "--role", "read"])
+    code = capsys.readouterr().out.strip().split()[-1]
+    monkeypatch.chdir(tmp_path)
+    main(["join", f"{hub.url}/trading", "--invite", code, "--dest", "r"])
+    clone = tmp_path / "r"
+    git("config", "user.email", "r@r.r", cwd=clone); git("config", "user.name", "r", cwd=clone)
+    commit_node(clone, "hyp-r.md", "---\nid: hyp-r\ntype: hypothesis\nstatus: open\n---\n\n# r\n")
+    monkeypatch.chdir(clone)
+
+    assert main(["push"]) == 1
+    assert "read access, not write" in capsys.readouterr().err
+    assert main(["pull"]) == 0
+
+
+def test_revoke_locks_a_contributor_out_on_their_next_push(hub, shared, tmp_path, monkeypatch, capsys):
+    main(["invite", "maria"])
+    code = capsys.readouterr().out.strip().split()[-1]
+    admin = cred_lookup(f"{hub.url}/trading.git")  # admin's own token, before maria's join overwrites it
+
+    monkeypatch.chdir(tmp_path)
+    main(["join", f"{hub.url}/trading", "--invite", code])
+    clone = tmp_path / "trading"
+    git("config", "user.email", "m@m.m", cwd=clone); git("config", "user.name", "maria", cwd=clone)
+    maria = cred_lookup(f"{hub.url}/trading.git")
+
+    # The credential store is one machine's, keyed by remote URL: admin and maria are on
+    # separate machines in reality, each with their own store for this same URL. Restore
+    # each in turn to simulate that, since the test runs both in one shared file.
+    cred_store(f"{hub.url}/trading.git", *admin)
+    monkeypatch.chdir(shared)
+    assert main(["revoke", "maria"]) == 0
+
+    cred_store(f"{hub.url}/trading.git", *maria)
+    commit_node(clone, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
+    monkeypatch.chdir(clone)
+    assert main(["push"]) == 1
+    assert "credentials refused" in capsys.readouterr().err
+
+
+def test_only_an_admin_can_invite(hub, shared, tmp_path, monkeypatch, capsys):
+    main(["invite", "maria"])
+    code = capsys.readouterr().out.strip().split()[-1]
+    monkeypatch.chdir(tmp_path)
+    main(["join", f"{hub.url}/trading", "--invite", code])
+    monkeypatch.chdir(tmp_path / "trading")
+
+    assert main(["invite", "friend-of-maria"]) == 1
+    assert "only an admin" in capsys.readouterr().err
+
+
+def test_a_spent_or_wrong_code_is_one_readable_line(hub, shared, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["join", f"{hub.url}/trading", "--invite", "nope"]) == 1
+    err = capsys.readouterr().err
+    assert "not valid" in err and "Traceback" not in err
+    assert not (tmp_path / "trading").exists()
+

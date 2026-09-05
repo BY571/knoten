@@ -241,6 +241,19 @@ def remote_cmd(root, args) -> int:
     return 0
 
 
+def invite_cmd(root, name, role, days) -> int:
+    code = remote.invite(root, name, role, days)
+    print(f"  ✓ {name} may join as {role} for {days} day(s). Send them this code, once:")
+    print(f"    {code}")
+    return 0
+
+
+def revoke_cmd(root, name) -> int:
+    remote.revoke(root, name)
+    print(f"  ✓ {name} can no longer connect. What they already pushed stays.")
+    return 0
+
+
 def serve_cmd(data, bind) -> int:
     """Run on the server. Prints the owner secret the first time a data directory is
     used, because that is the one moment the owner is certainly at the keyboard."""
@@ -665,6 +678,19 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("push", help="push this graph to its remote, through the gate")
     sub.add_parser("pull", help="fetch what collaborators pushed")
 
+    s = sub.add_parser("invite", help="admin: let someone in (prints a one-time code)")
+    s.add_argument("name", help="their contributor name, kebab-case")
+    s.add_argument("--role", default="write", choices=ROLES)
+    s.add_argument("--expires", type=int, default=7, metavar="DAYS")
+
+    s = sub.add_parser("join", help="redeem an invite and clone the graph")
+    s.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
+    s.add_argument("--invite", required=True, metavar="CODE")
+    s.add_argument("--dest", metavar="DIR", help="where to clone (default: the graph's name)")
+
+    s = sub.add_parser("revoke", help="admin: remove a contributor's access")
+    s.add_argument("name")
+
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
@@ -724,6 +750,12 @@ def main(argv=None) -> int:
                 sys.stdout.write(remote.credential_helper(sys.stdin.read()))
             return 0           # store/erase: git manages nothing here; knoten does
 
+        if args.cmd == "join":
+            clone, name, role = remote.join(args.url, args.invite, args.dest)
+            print(f"  ✓ joined as {name} ({role}), cloned to {clone}/")
+            print(f"    cd {clone} && knoten frontier")
+            return 0
+
         root = find_root()
         return {
             "query":  lambda: query(root, args.term, args.json),
@@ -748,6 +780,8 @@ def main(argv=None) -> int:
             "remote": lambda: remote_cmd(root, args),
             "push":   lambda: remote.push(root),
             "pull":   lambda: remote.pull(root),
+            "invite": lambda: invite_cmd(root, args.name, args.role, args.expires),
+            "revoke": lambda: revoke_cmd(root, args.name),
         }[args.cmd]()
     except (GraphError, OSError) as e:
         # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error,

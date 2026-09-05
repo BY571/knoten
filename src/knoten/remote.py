@@ -207,3 +207,40 @@ def pull(root: Path) -> int:
         raise GraphError(_explain(r.stderr))
     print("  ✓ up to date")
     return 0
+
+
+def _graph_api(root: Path) -> tuple[str, tuple[str, str]]:
+    """The graph's API base URL and the caller's credentials for it."""
+    repo = _toplevel(root)
+    git_url = _origin(repo)
+    auth = cred_lookup(git_url)
+    if not auth:
+        raise GraphError("no credentials stored for this remote; are you a contributor here?")
+    return git_url.removesuffix(".git"), auth
+
+
+def invite(root: Path, name: str, role: str = "write", days: int = 7) -> str:
+    base, auth = _graph_api(root)
+    return _api(f"{base}/invite", {"name": name, "role": role, "days": days}, auth)["code"]
+
+
+def revoke(root: Path, name: str) -> None:
+    base, auth = _graph_api(root)
+    _api(f"{base}/revoke", {"name": name}, auth)
+
+
+def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
+    """Redeem the code, remember the token, clone. Nothing is written to disk until the
+    server has accepted the code, so a wrong code leaves no half-made clone behind."""
+    url = url.rstrip("/")
+    git_url = url + ".git"
+    got = _api(f"{url}/join", {"code": code})
+    cred_store(git_url, got["name"], got["token"])
+    target = Path(dest or url.rsplit("/", 1)[-1])
+    r = subprocess.run(["git", "-c", "credential.helper=!knoten credential",
+                        "-c", "credential.useHttpPath=true",
+                        "clone", "-q", git_url, str(target)], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise GraphError(_explain(r.stderr))
+    _wire(target, git_url)
+    return target, got["name"], got["role"]
