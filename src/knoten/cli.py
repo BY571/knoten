@@ -231,12 +231,19 @@ def server_hook(repo, force) -> int:
 def serve_cmd(data, bind) -> int:
     """Run on the server. Prints the owner secret the first time a data directory is
     used, because that is the one moment the owner is certainly at the keyboard."""
-    host, _, port = bind.rpartition(":")
+    host, _, port_str = bind.rpartition(":")
     host = host or "127.0.0.1"
+    # Parse and validate the port before any file is written; a crash after the owner
+    # secret exists orphans it, shown to nobody, forever.
+    try:
+        port = int(port_str)
+    except ValueError:
+        raise GraphError(f"--bind wants HOST:PORT with a numeric port, got '{bind}'") from None
     reg = Registry(Path(data))
+    srv = make_server(reg, host, port)
+    # Only now, after the server socket is open, check and display the owner secret.
     first = not (reg.data / "owner").exists()
     secret = reg.owner_secret()
-    srv = make_server(reg, host, int(port))
     if first:
         print(f"  owner secret (shown once, keep it somewhere safe): {secret}")
     if host not in ("127.0.0.1", "localhost"):
@@ -248,6 +255,8 @@ def serve_cmd(data, bind) -> int:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        srv.server_close()
     return 0
 
 

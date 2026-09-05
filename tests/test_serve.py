@@ -294,3 +294,29 @@ def test_serve_warns_when_bound_to_a_non_local_address(tmp_path, monkeypatch, ca
     main(["serve", "--data", str(tmp_path / "d"), "--bind", "0.0.0.0:0"])
 
     assert "plain HTTP" in capsys.readouterr().err
+
+
+def test_serve_refuses_a_non_numeric_port_before_creating_the_owner_secret(tmp_path, capsys):
+    """The secret used to be written before the bind was parsed, so a typo in --bind
+    created it, crashed, and never showed it; every later run then saw an existing
+    file and stayed silent. Fail before writing anything."""
+    from knoten.cli import main
+
+    assert main(["serve", "--data", str(tmp_path / "d"), "--bind", "127.0.0.1:abc"]) == 1
+    err = capsys.readouterr().err
+    assert "numeric port" in err and "Traceback" not in err
+    assert not (tmp_path / "d" / "owner").exists()
+
+
+def test_serve_closes_its_socket_when_it_stops(tmp_path, monkeypatch):
+    """`serve_forever` returning is not the socket closing. Left open, the port stays
+    bound until the interpreter exits."""
+    import warnings
+    from http.server import ThreadingHTTPServer
+    from knoten.cli import main
+
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", lambda self: None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ResourceWarning)
+        assert main(["serve", "--data", str(tmp_path / "d"), "--bind", "127.0.0.1:0"]) == 0
+        import gc; gc.collect()
