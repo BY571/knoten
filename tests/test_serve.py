@@ -154,6 +154,27 @@ def test_a_crashed_backend_is_a_500_not_a_silent_200(hub, trading, monkeypatch):
     assert "http-backend failed" in json.loads(e.value.read())["error"]
 
 
+def test_a_chunked_push_is_refused_not_dumped_as_a_bare_500(hub, trading):
+    """_body only ever reads Content-Length bytes. A chunked push (git goes chunked
+    above http.postBuffer, default 1 MiB) used to hand http-backend an empty stdin,
+    which died, leaving the client with an inscrutable 500 and no idea why."""
+    host, port = hub.url.removeprefix("http://").rsplit(":", 1)
+    cred = base64.b64encode(f"seb:{trading['admin']}".encode()).decode()
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    conn.putrequest("POST", "/trading.git/git-receive-pack")
+    conn.putheader("Content-Type", "application/x-git-receive-pack-request")
+    conn.putheader("Authorization", "Basic " + cred)
+    conn.putheader("Transfer-Encoding", "chunked")
+    conn.endheaders()
+    conn.send(b"0\r\n\r\n")
+    r = conn.getresponse()
+    body = json.loads(r.read())
+    conn.close()
+
+    assert r.status == 411, body
+    assert "http.postBuffer" in body["error"]
+
+
 # ---------------------------------------------------------------- the api
 
 def api(hub, path, body, auth=None):

@@ -126,6 +126,13 @@ class _Handler(BaseHTTPRequestHandler):
                                 else "knoten: that token is not valid here")
         if role == "read" and (WRITE in query or sub.endswith("/" + WRITE)):
             return self._refuse(403, f"knoten: {user} has read access to {name}, not write")
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            # _body only ever reads Content-Length bytes, so a chunked push (git goes
+            # chunked above http.postBuffer, default 1 MiB) hands http-backend an empty
+            # stdin; http-backend dies and the client sees a bare, unexplained 500.
+            return self._refuse(411, "knoten: chunked uploads are not supported; set "
+                                "http.postBuffer to at least the push size (knoten remote "
+                                "add does this) and push again")
 
         env = {
             **os.environ,
