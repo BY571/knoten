@@ -46,6 +46,20 @@ def test_the_store_is_private_to_the_user():
     assert stat.S_IMODE(cred_path().stat().st_mode) == 0o600
 
 
+def test_the_store_is_made_private_again_if_it_was_not():
+    """os.open's mode applies only when the file is created. A credentials file that
+    already existed with looser bits (a manual copy, a bad umask) kept them on every
+    later write, leaking every token to other local users."""
+    p = cred_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("h.example/old.git seb tok\n", encoding="utf-8")
+    os.chmod(p, 0o644)
+
+    cred_store("https://h.example/trading.git", "seb", "tok")
+
+    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+
+
 def test_lookup_with_no_store_is_none_not_an_error():
     assert cred_lookup("https://h.example/trading.git") is None
 

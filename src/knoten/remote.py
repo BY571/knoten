@@ -44,6 +44,8 @@ def cred_store(url: str, user: str, secret: str) -> None:
              if not l.startswith(key + " ")]
     lines.append(f"{key} {user} {secret}")
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # os.open's mode applies only when the file is created; existing files keep their bits.
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
