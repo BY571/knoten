@@ -59,9 +59,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _json_body(self) -> dict:
         try:
-            return json.loads(self._body() or b"{}")
+            result = json.loads(self._body() or b"{}")
         except json.JSONDecodeError as e:
             raise GraphError(f"request body is not JSON: {e}") from None
+        # A list like [1, 2, 3] parses fine but then crashes the thread on .get().
+        if not isinstance(result, dict):
+            raise GraphError("request body must be a JSON object")
+        return result
 
     def _json(self, status: int, obj: dict) -> None:
         data = json.dumps(obj).encode()
@@ -152,6 +156,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _create(self) -> None:
         user, secret = self._basic()
+        # Distinguishing "wrong username" from "wrong secret" would tell an attacker which half they got right.
         if user != "owner" or not self.registry.check_owner(secret):
             return self._refuse(401, "knoten: the owner secret is required to create a graph")
         body = self._json_body()
@@ -164,7 +169,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"name": user, "role": role, "token": token})
 
     def _admin(self, name: str) -> str | None:
-        """The calling admin's name, or None after having refused the request."""
+        """The calling admin's name, or None after having refused the request.
+
+        If auth fails, _admin writes the 403 response itself. Callers check the return
+        value and must return without writing anything, or the client gets two responses
+        on one connection."""
         user, token = self._basic()
         if self.registry.authenticate(name, user, token) != "admin":
             self._refuse(403, f"knoten: only an admin of {name} can do that")
@@ -175,8 +184,11 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._admin(name):
             return
         body = self._json_body()
-        code = self.registry.invite(name, body.get("name", ""), body.get("role", "write"),
-                                    int(body.get("days", 7)))
+        try:
+            days = int(body.get("days", 7))
+        except (TypeError, ValueError):
+            raise GraphError("days must be a whole number") from None
+        code = self.registry.invite(name, body.get("name", ""), body.get("role", "write"), days)
         self._json(200, {"code": code})
 
     def _revoke(self, name: str) -> None:

@@ -245,6 +245,21 @@ def test_malformed_json_is_a_400_not_a_traceback(hub, trading):
     assert "not JSON" in json.loads(e.value.read())["error"]
 
 
+def test_a_json_body_that_is_not_an_object_is_a_400(hub, trading):
+    """`[1, 2, 3]` parses as JSON and then crashed the thread on `.get`. The client saw
+    a closed connection, not a refusal."""
+    status, body = api(hub, "/trading/invite", [1, 2, 3], ("seb", trading["admin"]))
+    assert status == 400
+    assert "JSON object" in body["error"]
+
+
+def test_a_non_numeric_days_is_a_400(hub, trading):
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "days": "banana"}, ("seb", trading["admin"]))
+    assert status == 400
+    assert "whole number" in body["error"]
+
+
 def test_unknown_paths_are_404(hub):
     status, _ = api(hub, "/trading/steal", {})
     assert status == 404
