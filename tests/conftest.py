@@ -140,3 +140,49 @@ def local_graph(tmp_path, rules_yaml):
                 ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "seed"]):
         assert git(*cmd, cwd=root).returncode == 0, cmd
     return root
+
+
+# ---------------------------------------------------------------- phase 2: signing
+
+@pytest.fixture(autouse=True)
+def keys_dir(tmp_path, monkeypatch):
+    """Every signing key a test makes lands under tmp_path. Without this, `ensure_key`
+    would write into the developer's real ~/.config/knoten/keys, and a test that ran
+    twice would sign with a key the first run left behind."""
+    d = tmp_path / "keys"
+    monkeypatch.setenv("KNOTEN_KEYS", str(d))
+    return d
+
+
+def make_key(directory, name):
+    """A real ed25519 keypair at directory/name, via ssh-keygen, no passphrase."""
+    import subprocess
+    directory.mkdir(parents=True, exist_ok=True)
+    priv = directory / name
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", str(priv)],
+                   check=True, capture_output=True)
+    return priv
+
+
+@pytest.fixture
+def keypair(keys_dir):
+    """The admin's key, where `knoten` itself would put it."""
+    return make_key(keys_dir, "seb")
+
+
+def pub_line(priv):
+    """`ssh-ed25519 AAAA...`: the two fields git and allowed_signers use."""
+    return " ".join(priv.with_suffix(".pub").read_text(encoding="utf-8").split()[:2])
+
+
+def commit_signed(repo, message, priv):
+    """Commit everything staged plus the working tree, signed with `priv`, and return the
+    sha. Signing config is passed per call so a fixture never has to persist it."""
+    import subprocess
+    env = {**os.environ, **GIT_ISOLATION}
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "gpg.format=ssh",
+                    "-c", f"user.signingkey={priv}", "-c", "commit.gpgsign=true",
+                    "commit", "-q", "-m", message], check=True, env=env, capture_output=True)
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, env=env,
+                          capture_output=True, text=True).stdout.strip()
