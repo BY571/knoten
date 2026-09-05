@@ -632,6 +632,7 @@ def test_the_whole_journey_signed(hub, shared_signed, tmp_path, monkeypatch, cap
 
     monkeypatch.chdir(tmp_path)
     assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    assert "signing key was made" in capsys.readouterr().out
     clone = tmp_path / "trading"
     c = C.load(clone)
     assert c["maria"]["role"] == "write" and c["maria"]["invited_by"] == "seb"
@@ -650,25 +651,87 @@ def test_the_whole_journey_signed(hub, shared_signed, tmp_path, monkeypatch, cap
 
 def test_invite_refuses_when_your_key_is_not_the_one_the_graph_lists(hub, shared_signed, keys_dir, capsys, monkeypatch):
     """Seb's token on a machine without seb's key: the token gets in, the invite cannot
-    be signed, and the server would refuse it anyway."""
+    be signed, and the server would refuse it anyway. The refusal itself must not mint a
+    fresh, mismatched keypair under seb's name -- `ensure_key` never regenerates an
+    existing key, so a wrong one made here would be wrong forever."""
     (key_dir() / "seb").unlink(); (key_dir() / "seb.pub").unlink()
     monkeypatch.chdir(shared_signed)
 
     assert main(["invite", "maria"]) == 1
     assert "different key" in capsys.readouterr().err
+    assert not (key_dir() / "seb").exists()
+    assert not (key_dir() / "seb.pub").exists()
 
 
 def test_a_joiner_whose_push_is_refused_is_told_why(hub, shared_signed, tmp_path, monkeypatch, capsys):
-    """Force the gate to refuse the join commit (seb revokes himself between invite and
-    join, so the invite's signer is no longer an active admin) and check the message is
-    the gate's, not git's."""
+    """The admin renames the graph between the invite and the join. `/join` only
+    re-verifies the SIGNER (still seb, still an active admin), so redemption succeeds --
+    the mismatch is caught only by the gate, on the join commit itself, checking the
+    blob's graph name against the PARENT commit's `graph.yaml`. The message must be the
+    gate's own reason, not git's generic refusal, and must say the clone and credentials
+    are already in place."""
     assert main(["invite", "maria"]) == 0
     code = capsys.readouterr().out.strip().split()[-1]
-    c = C.load(shared_signed); c["seb"]["revoked"] = "2026-09-05"; C.dump(shared_signed, c)
-    git("add", "-A", cwd=shared_signed); git("commit", "-qm", "seb steps down", cwd=shared_signed)
+
+    text = (shared_signed / "graph.yaml").read_text(encoding="utf-8")
+    (shared_signed / "graph.yaml").write_text(text.replace("name: test", "name: renamed"),
+                                              encoding="utf-8")
+    git("add", "-A", cwd=shared_signed); git("commit", "-qm", "rename the graph", cwd=shared_signed)
     assert main(["push"]) == 0
     monkeypatch.chdir(tmp_path)
 
     assert main(["join", f"{hub.url}/trading", "--invite", code]) == 1
     err = capsys.readouterr().err
-    assert "not signed by an admin" in err and "Traceback" not in err
+    assert "different name, role or graph" in err
+    assert "clone and credentials are in place" in err
+    assert "Traceback" not in err
+
+
+def test_invite_refuses_an_absurd_expires_before_it_can_overflow(hub, shared_signed, capsys):
+    """`datetime.timedelta(days=...)` raises a raw `OverflowError` for a large enough
+    number -- long before the server ever gets a chance to enforce the very same bound
+    itself. The client must catch it first, in the server's own words."""
+    assert main(["invite", "maria", "--expires", "999999999999"]) == 1
+    err = capsys.readouterr().err
+    assert "days must be between 1 and 365" in err and "Traceback" not in err
+
+
+@pytest.fixture
+def nested_local_graph(tmp_path, rules_yaml):
+    """Like `local_graph`, but the graph lives one directory down inside its own repo, at
+    `g/` -- the monorepo layout `_bootstrap`, `Registry.head_graph` and the gate already
+    all support (see `tests/test_gate.py`'s `bare` fixture for the same shape)."""
+    repo = tmp_path / "admin" / "repo"
+    root = repo / "g"
+    (root / "nodes").mkdir(parents=True)
+    (root / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (root / "nodes" / "hyp-ok.md").write_text(
+        "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# a claim\n", encoding="utf-8")
+    for cmd in (["init", "-q", "-b", "master"], ["config", "user.email", "t@t.t"],
+                ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "seed"]):
+        assert git(*cmd, cwd=repo).returncode == 0, cmd
+    return root
+
+
+def test_join_finds_the_graph_in_a_monorepo_subdirectory(hub, nested_local_graph, tmp_path,
+                                                          monkeypatch, capsys):
+    """The hosted graph lives at `g/`, not the clone's root. `join` has to find it there
+    the same way the gate does, add the newcomer to `g/contributors.yaml`, and stage
+    exactly that path -- not `contributors.yaml` at the (nonexistent) clone root."""
+    monkeypatch.chdir(nested_local_graph)
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 0
+
+    assert main(["invite", "maria", "--role", "write"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    clone = tmp_path / "trading"
+    c = C.load(clone / "g")
+    assert c is not None and c["maria"]["role"] == "write" and c["maria"]["invited_by"] == "seb"
+
+    hosted = hub.registry.repo("trading")
+    assert "joins as write" in git("log", "-1", "--format=%s", cwd=hosted).stdout
+    files = git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD", cwd=hosted).stdout
+    assert files.strip() == "g/contributors.yaml"

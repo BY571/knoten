@@ -3,8 +3,11 @@
 A remote is a git URL plus a token. git already knows how to push, pull and clone over
 HTTP and how to ask a helper program for credentials, so this module is that helper plus
 a handful of commands that wrap git and make four JSON calls. It imports nothing from the
-server: a client and a server never share code paths, so a bug in one cannot hide in the
-other.
+server itself (`serve.py`, `registry.py`): a client and a server never share THOSE code
+paths, so a bug in one cannot hide in the other. The one exception is `gate.graph_dirs`,
+a read-only tree walk with no server state behind it, reused here to find where a freshly
+cloned graph lives (root or a monorepo subdirectory) -- the same question the gate itself
+answers on every push.
 
 Tokens live in one file, mode 0600, one line per remote: `<url> <user> <token>`. The key
 carries the scheme, because `https://h/x.git` and `http://h/x.git` are not the same
@@ -29,9 +32,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import contributors as C
-from .core import GraphError, ID_RE
-from .keys import INVITE_NS, configure_signing, ensure_key, public_line, sign
-from .validate import load_config
+from . import gate
+from .core import GraphError, ID_RE, _yaml
+from .keys import INVITE_NS, configure_signing, ensure_key, key_dir, public_line, sign
 
 
 # ---------------------------------------------------------------- credentials
@@ -200,6 +203,47 @@ def _relay(stderr: str) -> None:
 
 # ---------------------------------------------------------------- commands
 
+def _my_key(contribs: dict, name: str) -> Path:
+    """The private key already on THIS machine for `name`, checked against what
+    contributors.yaml lists for them -- checked BEFORE anything (`ensure_key` included)
+    can generate a fresh, mismatched keypair under that name. `ensure_key` never
+    regenerates an existing key, so a wrong key made here would be wrong forever."""
+    priv = key_dir() / name
+    if not priv.exists() or (contribs.get(name) or {}).get("key") != public_line(priv):
+        raise GraphError(f"{C.FILE} lists a different key for '{name}' than {priv}; "
+                         "use the machine that holds the listed key")
+    return priv
+
+
+def _graph_name(root: Path) -> str:
+    """The graph's own `name:`, read straight from `graph.yaml` -- not through
+    `validate.load_config`, whose full schema check would refuse an invite over a
+    problem (an unknown key, a bad `node_types` entry) that has nothing to do with
+    inviting anyone."""
+    f = Path(root) / "graph.yaml"
+    if not f.exists():
+        raise GraphError(f"{f} is missing; is this a graph directory?")
+    cfg = _yaml(f.read_text(encoding="utf-8"), "graph.yaml")
+    name = cfg.get("name")
+    if not isinstance(name, str) or not name:
+        raise GraphError("graph.yaml has no 'name'")
+    return name
+
+
+def _graph_dir(repo: Path) -> str | None:
+    """Which directory inside `repo` holds ITS graph, at HEAD: `''` for the root, a
+    subpath in a monorepo layout. `None` when there is no graph at all. More than one is
+    refused here in one line -- exactly the ambiguity the gate itself would face, and
+    `join` cannot guess which one a newcomer means to join."""
+    dirs = gate.graph_dirs("HEAD", repo=repo)
+    if len(dirs) > 1:
+        raise GraphError(
+            f"{repo} hosts more than one graph; join does not know which one you mean. "
+            f"Your clone and credentials are in place; add yourself to the right "
+            f"{C.FILE} by hand.")
+    return dirs[0] if dirs else None
+
+
 def _bootstrap(root: Path, repo: Path, admin: str) -> None:
     """Make this clone sign as `admin`, and make the graph list `admin` as its admin.
 
@@ -208,29 +252,27 @@ def _bootstrap(root: Path, repo: Path, admin: str) -> None:
     the first push, and the file and the signature must agree."""
     contribs = C.load(root)
     if contribs is not None and admin not in contribs:
-        # Checked before ensure_key: a typo'd but kebab-valid --as must not leave a
-        # stray keypair on disk after this exact refusal.
+        # Checked before ensure_key (never even reached below): a typo'd but kebab-valid
+        # --as must not leave a stray keypair on disk after this exact refusal.
         raise GraphError(f"'{admin}' is not listed in {C.FILE}; an admin has to invite you, "
                          "or delete that file if you are starting this graph")
+    if contribs is not None:
+        # Not the genesis: the graph already names an admin, so the key on this machine
+        # must be the one it lists, checked before anything could mint a fresh one.
+        configure_signing(repo, _my_key(contribs, admin))
+        return
     priv = ensure_key(admin)
     configure_signing(repo, priv)
-    mine = public_line(priv)
-    if contribs is None:
-        C.dump(root, {admin: {"key": mine, "role": "admin"}})
-        # Only contributors.yaml: `add -A` in the enclosing repo would also stage every
-        # unrelated untracked file the monorepo layout allows next to this graph, and
-        # remote_create would then push it with no listing or confirmation.
-        _git(repo, "add", "--", str(root / C.FILE))
-        r = _git(repo, "commit", "-q", "-m", f"{admin} creates the graph as admin")
-        if r.returncode != 0:
-            first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
-            raise GraphError(f"could not commit {C.FILE}: {first_line}. Set user.name and "
-                             "user.email in this repo and run the command again")
-        return
-    entry = contribs[admin]
-    if entry["key"] != mine:
-        raise GraphError(f"{C.FILE} lists a different key for '{admin}' than the one in "
-                         f"{priv}; the graph's key wins, so use the machine that holds it")
+    C.dump(root, {admin: {"key": public_line(priv), "role": "admin"}})
+    # Only contributors.yaml: `add -A` in the enclosing repo would also stage every
+    # unrelated untracked file the monorepo layout allows next to this graph, and
+    # remote_create would then push it with no listing or confirmation.
+    _git(repo, "add", "--", str(root / C.FILE))
+    r = _git(repo, "commit", "-q", "-m", f"{admin} creates the graph as admin")
+    if r.returncode != 0:
+        first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
+        raise GraphError(f"could not commit {C.FILE}: {first_line}. Set user.name and "
+                         "user.email in this repo and run the command again")
 
 
 def remote_create(root: Path, name: str, on: str, admin: str | None = None,
@@ -321,12 +363,13 @@ def invite(root: Path, name: str, role: str = "write", days: int = 7) -> str:
     body = {"name": name, "role": role, "days": days}
     contribs = C.load(root)
     if contribs is not None:
-        me = auth[0]
-        priv = ensure_key(me)
-        if (contribs.get(me) or {}).get("key") != public_line(priv):
-            raise GraphError(f"{C.FILE} lists a different key for '{me}' than {priv}; "
-                             "invite from the machine that holds the listed key")
-        graph = str((load_config(root) or {}).get("name", ""))
+        # Bounded before it ever reaches timedelta: unbounded, a huge --expires overflows
+        # timedelta with a raw OverflowError, well before the server gets a chance to
+        # enforce the very same bound itself.
+        if not 1 <= int(days) <= 365:
+            raise GraphError("days must be between 1 and 365")
+        priv = _my_key(contribs, auth[0])
+        graph = _graph_name(root)
         expires = (datetime.now(timezone.utc) + timedelta(days=int(days))).date().isoformat()
         blob = C.invite_blob(graph, name, role, expires, secrets.token_hex(8))
         body.update(blob=blob.decode(), sig=sign(priv, blob, INVITE_NS))
@@ -371,17 +414,25 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
             f"are saved, so finish by hand: git clone {git_url} <dir> && cd <dir> && "
             f"knoten remote add {url}")
     _wire(target, git_url)
-    if C.load(target) is not None:
+    # A hosted graph may sit at the clone's root or, in a monorepo layout, a subdirectory
+    # of it -- the gate itself has to answer this same question on every push, so it is
+    # asked here rather than assumed to be the root.
+    gname = _graph_dir(target)
+    gdir = target / gname if gname is not None else None
+    contribs = C.load(gdir) if gdir is not None else None
+    if contribs is not None:
         # A signed graph: the server handed back the admin's signed invite. The newcomer
         # adds themself with it, in a commit signed by their own new key, and the gate
         # accepts exactly that shape and nothing else.
+        blob, sig = got.get("blob", ""), got.get("sig", "")
+        if not isinstance(blob, str) or not isinstance(sig, str) or not blob or not sig:
+            raise GraphError("the server's reply was malformed")
         priv = ensure_key(user)
         configure_signing(target, priv)
-        contribs = C.load(target)
         contribs[user] = {"key": public_line(priv), "role": role,
                           "invited_by": got.get("by", ""),
-                          "invite": {"blob": got.get("blob", ""), "sig": got.get("sig", "")}}
-        C.dump(target, contribs)
+                          "invite": {"blob": blob, "sig": sig}}
+        C.dump(gdir, contribs)
         # git refuses to commit without an identity, and a fresh clone under
         # GIT_ISOLATION (or on a bare new machine) has none configured yet.
         for k, v in (("user.name", user), ("user.email", f"{user}@knoten")):
@@ -390,10 +441,15 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
         # `-C target` already anchors the command there, so the pathspec must be
         # relative to it -- `target / C.FILE` looked right but resolved against the
         # PROCESS's cwd first, one directory too deep, and silently added nothing.
-        _git(target, "add", "--", C.FILE)
+        pathspec = f"{gname}/{C.FILE}" if gname else C.FILE
+        _git(target, "add", "--", pathspec)
         r = _git(target, "commit", "-q", "-m", f"{user} joins as {role}")
         if r.returncode != 0:
-            raise GraphError(f"could not commit your entry: {r.stderr.strip()}")
+            first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
+            raise GraphError(
+                f"could not commit your entry: {first_line}. Your clone and credentials "
+                f"are in place at {target}; fix the problem and commit {C.FILE} yourself, "
+                f"or run `knoten join` again with --dest pointing at a new directory.")
         r = _git(target, "push", "origin", "HEAD")
         _relay(r.stderr)
         if r.returncode != 0:

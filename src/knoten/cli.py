@@ -12,6 +12,7 @@ import webbrowser
 from pathlib import Path
 
 from . import attachments, ops, viz
+from . import contributors as C
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook, install_server
@@ -799,6 +800,10 @@ def main(argv=None) -> int:
         if args.cmd == "join":
             clone, name, role = remote.join(args.url, args.invite, args.dest)
             print(f"  ✓ joined as {name} ({role}), cloned to {clone}/")
+            gname = remote._graph_dir(clone)
+            gdir = clone / gname if gname is not None else None
+            if gdir is not None and C.load(gdir) is not None:
+                print(f"    a signing key was made for {name}; this clone signs its own commits")
             print(f"    cd {clone} && knoten frontier")
             return 0
 
