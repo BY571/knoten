@@ -120,17 +120,25 @@ def test_a_repo_with_no_graph_pushes_freely(server):
     assert push(work).returncode == 0
 
 
-def test_deleting_a_branch_is_not_treated_as_a_push(server):
-    """A deletion arrives as an all-zeros new sha. `git archive` on it fails, and a gate
-    that explodes on a routine branch delete is one people disable."""
+def test_a_second_branch_and_a_deletion_are_both_refused(server):
+    """One hosted graph, one line of history. A second branch is a tree nobody pulls and
+    a place to hide a second contributors.yaml; a deletion takes history away. Both are
+    refused by the gate itself, not only by the hosted repo's `receive.*` config, which a
+    repo gated by hand with `knoten hook --server` does not have."""
     bare, work = server
     commit(work, "a clean graph")
     push(work)
-    git("push", "-q", "origin", "master:scratch", cwd=work)
 
-    r = git("push", "origin", "--delete", "scratch", cwd=work)
+    second = git("push", "origin", "master:scratch", cwd=work)
+    assert second.returncode != 0
+    assert "new branches and tags are refused" in second.stderr
+    assert "scratch" not in git("branch", cwd=bare).stdout
 
-    assert r.returncode == 0, r.stdout + r.stderr
+    r = git("push", "origin", "--delete", "master", cwd=work)
+
+    assert r.returncode != 0
+    assert "refs are not deleted" in r.stderr
+    assert "master" in git("branch", cwd=bare).stdout
 
 
 def test_it_fails_closed_when_knoten_is_not_on_the_server_path(server):
@@ -274,19 +282,21 @@ def test_an_unparseable_node_is_refused(server):
 
 def test_it_checks_every_ref_in_one_push(server):
     """`git push --all` hands the hook several refs on stdin. Checking only the first
-    leaves a broken branch on the server, and it is the branch someone will merge."""
+    leaves a broken branch on the server, and it is the branch someone will merge. The
+    refs go up together, into a repo with no branch yet, so nothing else refuses them
+    first."""
     bare, work = server
     commit(work, "a clean graph")
-    push(work)
     git("checkout", "-qb", "side", cwd=work)
     (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
     commit(work, "broken, on a side branch")
+    git("checkout", "-q", "master", cwd=work)
 
     r = git("push", "--all", "origin", cwd=work)
 
     assert r.returncode != 0
     assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
-    assert "side" not in git("branch", cwd=bare).stdout
+    assert git("branch", cwd=bare).stdout.strip() == "", "a ref landed anyway"
 
 
 def test_it_gates_a_branch_that_is_not_master(server):
@@ -302,7 +312,8 @@ def test_it_gates_a_branch_that_is_not_master(server):
 
 
 def test_it_gates_a_force_push(server):
-    """Rewriting history is the other way to get a bad tree onto the server."""
+    """Rewriting history is the other way to get a bad tree onto the server. It never
+    gets as far as the tree: dropping accepted commits is refused on its own."""
     bare, work = server
     commit(work, "a clean graph")
     push(work)
@@ -313,18 +324,26 @@ def test_it_gates_a_force_push(server):
     r = git("push", "-f", "origin", "master", cwd=work)
 
     assert r.returncode != 0
+    assert "not a fast-forward" in r.stderr
     assert "rewritten" not in history(bare)
 
 
 def test_it_gates_a_tag(server):
-    """A tag carries a tree like any other ref. Skipping tags leaves a published, broken
-    snapshot on the server."""
+    """A tag is a second ref on a graph that has one line of history: a published
+    snapshot nobody pulls, whose tree no later push ever revisits. Refused as a ref,
+    whatever it carries."""
     bare, work = server
+    commit(work, "a clean graph")
+    push(work)
     (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
     commit(work, "broken")
     git("tag", "v1", cwd=work)
 
-    assert git("push", "origin", "v1", cwd=work).returncode != 0
+    r = git("push", "origin", "v1", cwd=work)
+
+    assert r.returncode != 0
+    assert "new branches and tags are refused" in r.stderr
+    assert "v1" not in git("tag", cwd=bare).stdout
 
 
 # ---------------------------------------------------------------- hostile trees

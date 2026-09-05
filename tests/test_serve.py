@@ -99,21 +99,26 @@ def test_a_force_push_is_refused_by_the_shared_repo(hub, trading, tmp_path):
     r = git("push", "-f", "origin", "master", cwd=dest)
 
     assert r.returncode != 0
+    assert "not a fast-forward" in r.stderr
     assert git("rev-parse", "master", cwd=repo).stdout.strip() == before
 
 
-def test_deleting_a_branch_on_the_server_is_refused(hub, trading):
-    """A shared graph is append-only. This is deliberately the opposite of
-    `test_deleting_a_branch_is_not_treated_as_a_push`, which drives the raw hook on a
-    bare repo with none of this config: the HOOK must still tolerate an all-zero oid, and
-    the REPO must still refuse the deletion that carries it."""
+def test_a_second_branch_and_a_deletion_are_refused_over_http(hub, trading):
+    """A shared graph is append-only and has one line of history. Both halves reach the
+    client as the gate's own `remote:` line, through http-backend, rather than as
+    receive-pack's terse `denyDeletes`."""
     work = trading["work"]
-    assert git("push", "-q", "origin", "master:scratch", cwd=work).returncode == 0
 
-    r = git("push", "origin", "--delete", "scratch", cwd=work)
+    second = git("push", "origin", "master:scratch", cwd=work)
+    assert second.returncode != 0
+    assert "new branches and tags are refused" in second.stderr
+    assert "scratch" not in git("branch", cwd=hub.registry.repo("trading")).stdout
+
+    r = git("push", "origin", "--delete", "master", cwd=work)
 
     assert r.returncode != 0
-    assert "scratch" in git("branch", cwd=hub.registry.repo("trading")).stdout
+    assert "refs are not deleted" in r.stderr
+    assert "master" in git("branch", cwd=hub.registry.repo("trading")).stdout
 
 
 # ---------------------------------------------------------------- the gate, over HTTP
@@ -751,10 +756,10 @@ def test_a_token_revoked_between_the_advertisement_and_the_push_is_refused(hub, 
     assert "hyp-m" not in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
 
 
-def test_an_annotated_tag_carrying_a_broken_tree_is_refused(hub, trading):
+def test_an_annotated_tag_is_refused_as_a_second_ref(hub, trading):
     """An annotated tag is its own object, not a commit, and it reaches the hook as the
-    new oid. A gate that only knows how to read a commit would let a published, broken
-    snapshot onto the server."""
+    new oid. It is also a second ref on a graph with one line of history: refused for
+    being one, before anything reads the tree it points at."""
     work = trading["work"]
     commit_node(work, "hyp-x.md", ALIVE_NO_GATE)
     git("tag", "-a", "v1", "-m", "a broken release", cwd=work)
@@ -762,7 +767,7 @@ def test_an_annotated_tag_carrying_a_broken_tree_is_refused(hub, trading):
     r = git("push", "origin", "v1", cwd=work)
 
     assert r.returncode != 0
-    assert "live-claims-must-cite-their-gates" in r.stderr
+    assert "new branches and tags are refused" in r.stderr
     assert "v1" not in git("tag", cwd=hub.registry.repo("trading")).stdout
 
 

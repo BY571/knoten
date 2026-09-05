@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .core import GraphError, ID_RE
+from .core import GraphError, ID_RE, MAX_NAME
 
 INVITE_NS = "knoten-invite"        # commits use git's own namespace, "git"
 
@@ -36,6 +36,10 @@ def ensure_key(name: str) -> Path:
     refuse this person's commits, with a message that blames their signature."""
     if not ID_RE.match(name or ""):
         raise GraphError(f"'{name}' is not a valid contributor name (use kebab-case)")
+    if len(name) > MAX_NAME:
+        # The name becomes a filename under the key dir, exactly like a graph name becomes
+        # a directory under the data dir: bounded in the same place, for the same reason.
+        raise GraphError(f"contributor name is too long (max {MAX_NAME} characters)")
     d = key_dir()
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
@@ -95,5 +99,10 @@ def configure_signing(repo: Path, priv: Path) -> None:
     remember `-S`. The PRIVATE path: that is git's form for ssh signing without an agent."""
     for key, value in (("gpg.format", "ssh"), ("user.signingkey", str(priv)),
                        ("commit.gpgsign", "true")):
-        subprocess.run(["git", "-C", str(repo), "config", key, value], check=True,
-                       capture_output=True)
+        r = subprocess.run(["git", "-C", str(repo), "config", key, value], capture_output=True)
+        if r.returncode != 0:
+            # check=True raised CalledProcessError, which escapes the CLI's GraphError
+            # handler as a traceback. A read-only .git/config is ordinary user trouble
+            # and owes them one line.
+            raise GraphError(f"could not configure signing in {repo}: "
+                             f"{r.stderr.decode(errors='replace').strip() or f'git config {key} failed'}")

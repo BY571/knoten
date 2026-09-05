@@ -82,13 +82,23 @@ def test_extract_writes_regular_files_only(bare, monkeypatch, tmp_path):
     assert not (root / "nodes" / "link.md").exists()
 
 
+def seeded(work):
+    """The clean graph committed, and its sha: the `old` half of every ref line below.
+    A hosted graph's branch is created once and moves forward after that, so a check
+    driven from an all-zero `old` is testing the one push that can never happen twice."""
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "seed", cwd=work)
+    return git("rev-parse", "HEAD", cwd=work).stdout.strip()
+
+
 def test_main_reads_refs_from_stdin_and_refuses_a_broken_graph(bare, monkeypatch, capsys):
     origin, work = bare
+    old = seeded(work)
     commit_node(work / "g", "hyp-x.md", "---\nid: hyp-x\ntype: hypothesis\nstatus: alive\n---\n\n# x\n")
     sha = git("rev-parse", "HEAD", cwd=work).stdout.strip()
     monkeypatch.chdir(work)
 
-    rc = gate.main(io.StringIO(f"{'0' * 40} {sha} refs/heads/master\n"))
+    rc = gate.main(io.StringIO(f"{old} {sha} refs/heads/master\n"))
 
     err = capsys.readouterr().err
     assert rc == 1
@@ -96,11 +106,19 @@ def test_main_reads_refs_from_stdin_and_refuses_a_broken_graph(bare, monkeypatch
     assert "Traceback" not in err
 
 
-def test_a_deletion_line_is_skipped(bare, monkeypatch, capsys):
+def test_a_deletion_is_refused_and_says_why(bare, monkeypatch, capsys):
+    """A deletion arrives as an all-zero new sha. It used to be waved through as "no tree
+    to check", which left `receive.denyDeletes` as the only thing standing between a
+    shared graph and `git push --delete master` -- one config edit away, and absent
+    entirely from a repo somebody gated with `knoten hook --server`."""
     origin, work = bare
     monkeypatch.chdir(work)
-    assert gate.main(io.StringIO(f"{'a' * 40} {'0' * 40} refs/heads/x\n")) == 0
-    assert capsys.readouterr().err == ""
+
+    rc = gate.main(io.StringIO(f"{'a' * 40} {'0' * 40} refs/heads/x\n"))
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "refs are not deleted" in err
 
 
 def test_extract_and_graph_dirs_refuse_a_directory_name_git_would_parse_as_an_option(
@@ -115,12 +133,13 @@ def test_extract_and_graph_dirs_refuse_a_directory_name_git_would_parse_as_an_op
     (d / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
     (d / "nodes" / "hyp-ok2.md").write_text(
         "---\nid: hyp-ok2\ntype: hypothesis\nstatus: open\n---\n\n# ok\n", encoding="utf-8")
+    old = seeded(work)
     git("add", "-A", cwd=work)
     git("commit", "-qm", "evil dirname", cwd=work)
     sha = git("rev-parse", "HEAD", cwd=work).stdout.strip()
     monkeypatch.chdir(work)
 
-    rc = gate.main(io.StringIO(f"{'0' * 40} {sha} refs/heads/master\n"))
+    rc = gate.main(io.StringIO(f"{old} {sha} refs/heads/master\n"))
     err = capsys.readouterr().err
 
     assert rc == 1
@@ -135,8 +154,8 @@ def test_main_fails_closed_on_a_non_graph_error_bug_instead_of_leaking_a_traceba
     """A bug anywhere under `check_ref` must still refuse the push in one line, not leak a
     server-side traceback (module names, paths) to whoever is pushing on band 2."""
     origin, work = bare
-    git("add", "-A", cwd=work)
-    git("commit", "-qm", "seed", cwd=work)
+    old = seeded(work)
+    commit_node(work / "g", "hyp-y.md", "---\nid: hyp-y\ntype: hypothesis\nstatus: open\n---\n\n# y\n")
     sha = git("rev-parse", "HEAD", cwd=work).stdout.strip()
     monkeypatch.chdir(work)
 
@@ -145,7 +164,7 @@ def test_main_fails_closed_on_a_non_graph_error_bug_instead_of_leaking_a_traceba
 
     monkeypatch.setattr(gate.ops, "validate", _boom)
 
-    rc = gate.main(io.StringIO(f"{'0' * 40} {sha} refs/heads/master\n"))
+    rc = gate.main(io.StringIO(f"{old} {sha} refs/heads/master\n"))
     err = capsys.readouterr().err
 
     assert rc == 1
@@ -406,16 +425,14 @@ def test_check_ref_raises_instead_of_treating_a_rev_list_failure_as_nothing_to_c
         bare, monkeypatch):
     """rev-list's own exit code was ignored at both call sites: a failure returns empty
     stdout, indistinguishable from "no merges" and "no commits", which let a push through
-    on a git error instead of refusing it. An old-ref that isn't a real object makes
-    rev-list fail immediately."""
+    on a git error instead of refusing it. Driven from the hosted repo before its first
+    branch, which is the one state where a brand-new ref still gets as far as rev-list;
+    a `new` that is not a real object makes it fail immediately."""
     origin, work = bare
-    git("add", "-A", cwd=work)
-    git("commit", "-qm", "seed", cwd=work)
-    sha = git("rev-parse", "HEAD", cwd=work).stdout.strip()
-    monkeypatch.chdir(work)
+    monkeypatch.chdir(origin)
 
     with pytest.raises(gate.GraphError, match="cannot list commits"):
-        gate.check_ref("a" * 40, sha, "refs/heads/master")
+        gate.check_ref("0" * 40, "a" * 40, "refs/heads/master")
 
 
 # ------------------------------------------------------------------- misc review fixes
@@ -440,33 +457,51 @@ def test_signature_unlinks_its_temp_file_even_when_allowed_signers_raises(monkey
     assert after == before
 
 
-def test_a_new_branch_is_not_rewalked_through_already_accepted_history(bare, monkeypatch):
-    """Once a merge commit sits in already-accepted history (as it could from before
-    knoten managed this repo, since a direct write to the bare repo's ref never runs the
-    hook), a brand-new branch pointing past it must not be refused forever: only commits
-    not already reachable from an existing ref -- `new --not --all` -- get walked."""
+# ------------------------------------------------------------ one line of history
+
+def test_the_first_push_creates_the_only_branch(bare):
+    """The repo has no branch yet, so this ref is the graph's line of history. Nothing
+    about that push changes."""
     origin, work = bare
-    git("checkout", "-qb", "side", cwd=work)
-    (work / "g" / "nodes" / "hyp-side.md").write_text(
-        "---\nid: hyp-side\ntype: hypothesis\nstatus: open\n---\n\n# side\n", encoding="utf-8")
-    git("add", "-A", cwd=work)
-    git("commit", "-qm", "side", cwd=work)
-    git("checkout", "-q", "master", cwd=work)
-    git("merge", "--no-ff", "-q", "-m", "merge", "side", cwd=work)
-    merge_sha = git("rev-parse", "HEAD", cwd=work).stdout.strip()
-    # Written straight into the bare repo's ref, bypassing the hook entirely -- as if this
-    # history predates knoten managing this repo.
-    git("update-ref", "refs/heads/master", merge_sha, cwd=origin)
+    seeded(work)
 
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+    assert "master" in git("branch", cwd=origin).stdout
+
+
+def test_a_second_branch_is_refused_even_when_its_tree_is_clean(bare):
+    """A hosted graph has ONE line of history. A clean side branch is still a tree the
+    next `knoten pull` never looks at, and a place to hide a second contributors.yaml, so
+    the ref itself is refused rather than its contents judged."""
+    origin, work = bare
+    seeded(work)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
     git("checkout", "-qb", "feature", cwd=work)
-    (work / "g" / "nodes" / "hyp-feat.md").write_text(
-        "---\nid: hyp-feat\ntype: hypothesis\nstatus: open\n---\n\n# feat\n", encoding="utf-8")
-    git("add", "-A", cwd=work)
-    git("commit", "-qm", "feature", cwd=work)
+    commit_node(work / "g", "hyp-f.md",
+                "---\nid: hyp-f\ntype: hypothesis\nstatus: open\n---\n\n# f\n")
 
-    r = git("push", "-q", "origin", "feature", cwd=work)
+    r = git("push", "origin", "feature", cwd=work)
 
-    assert r.returncode == 0, r.stderr
+    assert r.returncode != 0
+    assert "one branch" in r.stderr
+    assert "feature" not in git("branch", cwd=origin).stdout
+
+
+def test_a_rewrite_of_accepted_history_is_refused_as_a_non_fast_forward(bare):
+    """A force push drops commits the gate already accepted and everyone else already
+    pulled. `receive.denyNonFastForwards` says so in the hosted repo's config; the gate
+    says it everywhere the gate runs."""
+    origin, work = bare
+    seeded(work)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+    before = git("rev-parse", "master", cwd=origin).stdout.strip()
+    git("commit", "-q", "--amend", "-m", "rewritten", cwd=work)
+
+    r = git("push", "-f", "origin", "master", cwd=work)
+
+    assert r.returncode != 0
+    assert "not a fast-forward" in r.stderr
+    assert git("rev-parse", "master", cwd=origin).stdout.strip() == before
 
 
 # ---------------------------------------------------------------- the constitution

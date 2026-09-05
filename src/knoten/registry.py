@@ -23,14 +23,11 @@ from pathlib import Path
 
 from . import contributors as C
 from . import gate
-from .core import (GraphError, ID_RE, MAX_NAME, MAX_PUSH_BYTES, graph_lock,
+from .core import (GraphError, ID_RE, MAX_DAYS, MAX_NAME, MAX_PUSH_BYTES, graph_lock,
                    server_git_env, write_atomic)
 from .hook import install_server
 
 ROLES = ("read", "write", "admin")
-
-# An invite is a bearer secret. A year is already generous for one.
-MAX_DAYS = 365
 
 
 def _hash(secret: str) -> str:
@@ -150,16 +147,28 @@ class Registry:
             if not branches:
                 return None, ""
             if len(branches) > 1:
+                # No path and no command line in the message: this reaches an ordinary
+                # contributor through /invite's 400 body, and the server's data directory
+                # is not theirs to know. The operator has the repo in front of them.
                 raise GraphError(
                     f"graph '{name}' has several branches and no HEAD; a signed remote "
-                    f"needs one line of history -- fix it with: "
-                    f"git --git-dir={repo} symbolic-ref HEAD refs/heads/<branch>")
+                    f"needs one line of history, and its operator must point HEAD at the "
+                    f"branch it should follow")
             tip = branches[0]
             gate._git("symbolic-ref", "HEAD", tip, repo=repo)
         dirs = gate.graph_dirs(tip, repo=repo)
         if len(dirs) > 1:
             raise GraphError(f"graph '{name}' holds {len(dirs)} graphs; a signed remote holds one")
         if not dirs:
+            # "No graph here" is not "nobody signed here". A writer who runs `git rm -r
+            # nodes` passes the gate (contributors unchanged, their own signature) and
+            # this used to read the result as phase-1: signed invites refused, UNSIGNED
+            # invites accepted for any role, and /join skipping the signature re-check
+            # entirely. A constitution with no graph under it is a broken graph, not an
+            # unsigned one.
+            if gate.contributors_dirs(tip, repo=repo):
+                raise GraphError(f"graph '{name}' holds a {C.FILE} but no graph; "
+                                 f"an admin must restore it")
             return None, ""
         return gate.contributors_at(tip, dirs[0], repo=repo), gate.graph_name_at(tip, dirs[0], repo=repo)
 

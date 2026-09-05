@@ -106,7 +106,14 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
 # the graph: an id authored by a model is not a path, and only one entry point
 # checked that — not the one people used.
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# `\\Z`, not `$`: `$` also matches just before a trailing newline, so `"maria\\n"` passed
+# every id check in the codebase -- and that name goes on to be a filename, a
+# directory, a URL segment and a line in the credentials file.
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
+
+# An invite is a bearer secret. A year is already generous for one. Here rather than in
+# the registry so the client's own bound and the server's cannot drift apart.
+MAX_DAYS = 365
 
 # A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
 # bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an

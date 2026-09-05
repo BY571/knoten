@@ -96,6 +96,26 @@ def graph_dirs(rev: str, repo: Path | None = None) -> list[str]:
     return safe
 
 
+def contributors_dirs(rev: str, repo: Path | None = None) -> list[str]:
+    """Directories at `rev` holding a `contributors.yaml` blob, graph or not.
+
+    `graph_dirs` answers "where are the graphs". This answers "where did somebody sign",
+    and the two disagree exactly when a graph's own files are gone while its constitution
+    stays -- a tree that must never be read as a phase-1 (unsigned) graph."""
+    r = _git("ls-tree", "-r", "--name-only", "-z", rev, repo=repo)
+    if r.returncode != 0:
+        raise GraphError(f"cannot read the tree at {rev[:7]}")
+    found = set()
+    for entry in r.stdout.split(b"\0"):
+        if not entry:
+            continue
+        p = entry.decode("utf-8", "surrogateescape")
+        parent, _, leaf = p.rpartition("/")
+        if leaf == C.FILE:
+            found.add(parent)
+    return sorted(found)
+
+
 def extract(rev: str, gdir: str, dest: Path) -> Path:
     """The graph's files at `rev`, regular files only. A symlink in a pushed tree would
     resolve against the SERVER's filesystem; here it never reaches disk at all."""
@@ -170,7 +190,12 @@ def signature(sha: str, keys: dict[str, str]) -> tuple[str, str]:
         # before the git call must still reach the unlink below, not leak the file.
         with open(signers, "w", encoding="utf-8") as f:
             f.write(allowed_signers(keys, ("git",)))
-        r = _git("-c", "gpg.format=ssh", "-c", f"gpg.ssh.allowedSignersFile={signers}",
+        # gpg.ssh.program is pinned alongside gpg.format: git otherwise takes the
+        # verifier's path from config, and the server-side global config is /dev/null
+        # only for the gits knoten runs itself. Naming ssh-keygen here means one program
+        # verifies every signature, whatever the box is configured to prefer.
+        r = _git("-c", "gpg.format=ssh", "-c", "gpg.ssh.program=ssh-keygen",
+                 "-c", f"gpg.ssh.allowedSignersFile={signers}",
                  "log", "-1", "--format=%G?%n%GS", sha)
     finally:
         os.unlink(signers)
@@ -184,7 +209,17 @@ WHY = {"N": "unsigned", "U": "signed by a key not listed here",
        "B": "bad signature", "E": "signature could not be checked"}
 
 
-def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
+def _touches_only(sha: str, target: str) -> bool:
+    """Did this commit change `target` and nothing else? Fails closed on a git error."""
+    r = _git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", f"{sha}^", sha)
+    if r.returncode != 0:
+        raise GraphError(f"cannot diff {sha[:7]}")
+    paths = {p for p in r.stdout.decode("utf-8", "surrogateescape").split("\0") if p}
+    return paths == {target}
+
+
+def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
+                 is_graph: bool = True, parent_dirs: frozenset[str] = frozenset()) -> bool:
     """One commit against the contributors in force BEFORE it.
 
     Three shapes. A commit that leaves contributors.yaml alone needs any listed writer's
@@ -194,7 +229,9 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
 
     `has_parent` is the caller's own answer to "does this commit have a parent", asked
     once per commit rather than once per (commit, gdir) pair -- check_ref may call this
-    for several directories on one sha."""
+    for several directories on one sha. `is_graph` and `parent_dirs` say whether `gdir`
+    holds a graph AT this commit and which directories held one at its parent; both are
+    read once per commit for the same reason."""
     prev = contributors_at(f"{sha}^", gdir) if has_parent else None
     cur = contributors_at(sha, gdir)
     where = f"{ref}: {sha[:7]}"
@@ -204,15 +241,68 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
         # Bootstrap. Nobody can vouch for the first contributors.yaml but itself, so the
         # commit introducing it must be signed by a key it names as admin; otherwise
         # anyone could install themselves as admin of a phase-1 graph.
-        status, _ = signature(sha, C.admins(cur))
-        if status == "G":
-            return True
-        say(f"{where} introduces {C.FILE} but is not signed by an admin it lists "
-            f"({WHY.get(status, status)})")
-        return False
+        status, signer = signature(sha, C.admins(cur))
+        if status != "G":
+            say(f"{where} introduces {C.FILE} but is not signed by an admin it lists "
+                f"({WHY.get(status, status)})")
+            return False
+        # A second constitution beside an existing one is not a genesis. Without this, a
+        # writer planted a graph in a fresh directory naming themselves its sole admin,
+        # and the server's head_graph then died with "holds 2 graphs" for everyone.
+        elders = {}
+        for d in sorted(parent_dirs):
+            other = contributors_at(f"{sha}^", d)
+            if other is not None:
+                elders.update(C.admins(other))
+        if elders:
+            status, _ = signature(sha, elders)
+            if status != "G":
+                say(f"{where} starts a second {C.FILE} at {gdir or '.'} and is not signed "
+                    f"by an admin of the graph already here ({WHY.get(status, status)})")
+                return False
+        # `KNOTEN_ROLE` is set by `knoten serve` for the token it authenticated, so its
+        # presence means this push came through a knoten server. There the graph's own
+        # admin token is the only one that may lay down the first constitution: a `write`
+        # collaborator could otherwise bootstrap a phase-1 hosted graph and be its admin.
+        # Absent (a `knoten hook --server` repo, which has no tokens at all), nothing here
+        # applies and the genesis rule above stands alone.
+        if os.environ.get("KNOTEN_ROLE") is not None:
+            if (os.environ["KNOTEN_ROLE"] != "admin"
+                    or signer != os.environ.get("KNOTEN_PUSHER", "")):
+                say(f"{where}: only the graph's admin token may bootstrap {C.FILE}")
+                return False
+            # Same restriction a join carries, for the same reason: the signature proves
+            # who wrote the constitution, not that the rest of the tree was reviewed.
+            target = f"{gdir}/{C.FILE}" if gdir else C.FILE
+            if has_parent and not _touches_only(sha, target):
+                say(f"{where}: a commit that introduces {C.FILE} may change nothing else")
+                return False
+        return True
 
-    added, changed, removed = C.diff(prev, cur) if cur is not None else ({}, {}, set(prev))
+    if cur is None:
+        # The file itself is gone. Not names removed one by one but the end of the
+        # constitution, and only an admin of what it said may end it.
+        added, changed, removed = {}, {}, set(prev)
+    else:
+        added, changed, removed = C.diff(prev, cur)
+        if removed:
+            # Revocation is a mark, so history stays attributable. Dropping the entry
+            # instead erases who could write, and an admin is no more entitled to that
+            # than anyone else.
+            say(f"{where}: contributors are revoked, never removed")
+            return False
     if not added and not changed and not removed:
+        if gdir in parent_dirs and not is_graph:
+            # contributors.yaml untouched, but graph.yaml or nodes/ went away: the
+            # directory stops being a graph while still holding a constitution. That is
+            # what the server's head_graph can no longer find, so it is an admin's call,
+            # not a writer's.
+            status, _ = signature(sha, C.admins(prev))
+            if status == "G":
+                return True
+            say(f"{where} stops {gdir or '.'} being a graph and is not signed by an admin "
+                f"({WHY.get(status, status)})")
+            return False
         status, _ = signature(sha, C.keys(prev))
         if status == "G":
             return True
@@ -245,11 +335,7 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
             # bought its holder one unrestricted write to the entire graph (any node,
             # graph.yaml, anything else bundled into the same commit).
             target = f"{gdir}/{C.FILE}" if gdir else C.FILE
-            r = _git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", f"{sha}^", sha)
-            if r.returncode != 0:
-                raise GraphError(f"cannot diff {sha[:7]}")
-            paths = {p for p in r.stdout.decode("utf-8", "surrogateescape").split("\0") if p}
-            if paths != {target}:
+            if not _touches_only(sha, target):
                 say(f"{where}: a join may change nothing but {C.FILE}")
                 return False
             # The invite is the admin's half: it authorises this name and role. This is
@@ -274,17 +360,37 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
 
 
 def check_ref(old: str, new: str, ref: str) -> bool:
-    if ZERO.match(new):                 # a deletion carries no tree to check
-        return True
+    """One hosted graph, one line of history.
+
+    Branches, tags, deletions and rewrites are all ways to put a tree on the server that
+    the next `knoten pull` will never look at, or to take one away. `receive.denyDeletes`
+    and `receive.denyNonFastForwards` say the same thing in the hosted repo's config, but
+    only there: a graph in a bare repo somebody gated with `knoten hook --server` has
+    whatever config its operator set. The rule belongs with the gate, which every hosted
+    graph runs, and it is checked BEFORE any signature so a refusal names the real
+    reason.
+    """
+    if ZERO.match(new):
+        say(f"{ref}: hosted graphs keep their history; refs are not deleted")
+        return False
     if ZERO.match(old):
-        # A brand-new branch or tag. Walking every ancestor of `new` re-checks history
-        # already accepted on some other ref every time anyone branches from it -- and if
-        # that history ever carries a merge commit (this repo's history from before
-        # knoten managed it, say), a brand-new branch off of it would be refused forever.
-        # `--not --all` limits the walk to commits not already reachable from an existing
-        # ref, so only what's actually new here gets checked.
+        r = _git("for-each-ref", "--format=%(refname)", "refs/heads/")
+        if r.returncode != 0:
+            raise GraphError(f"cannot list the branches already here, for {ref}")
+        if r.stdout.strip():
+            say(f"{ref}: a hosted graph has one branch; new branches and tags are refused")
+            return False
+        # The first push, into a repo with no branch yet: this ref becomes the only one.
+        # `--not --all` still earns its place -- a tag can reach a branchless repo before
+        # the branch does -- and it keeps the walk to what is actually new here.
         rng = [new, "--not", "--all"]
     else:
+        if _git("merge-base", "--is-ancestor", old, new).returncode != 0:
+            # A force push drops commits the gate already accepted and everyone else
+            # already pulled. Refused here rather than left to receive.denyNonFastForwards,
+            # which is one config edit away from gone.
+            say(f"{ref}: not a fast-forward; pull first")
+            return False
         rng = [f"{old}..{new}"]
     r = _git("rev-list", "--merges", *rng)
     if r.returncode != 0:
@@ -309,11 +415,11 @@ def check_ref(old: str, new: str, ref: str) -> bool:
         # per-commit signature check entirely, since g was gone from the tree being
         # examined. Union in graph_dirs at the parent too, so "g disappeared here" is
         # still checked against who could write to g a moment before this commit.
-        gdirs = set(graph_dirs(sha))
-        if has_parent:
-            gdirs |= set(graph_dirs(f"{sha}^"))
-        for gdir in sorted(gdirs):
-            if not check_commit(sha, gdir, ref, has_parent):
+        now = frozenset(graph_dirs(sha))
+        before = frozenset(graph_dirs(f"{sha}^")) if has_parent else frozenset()
+        for gdir in sorted(now | before):
+            if not check_commit(sha, gdir, ref, has_parent,
+                                is_graph=gdir in now, parent_dirs=before):
                 ok = False
     if not ok:
         return False

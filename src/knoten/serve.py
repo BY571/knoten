@@ -278,6 +278,14 @@ class _Handler(BaseHTTPRequestHandler):
             **SERVER_GIT_ENV,
             "GIT_PROJECT_ROOT": str(self.server.registry.graph_dir(name)),
             "GIT_HTTP_EXPORT_ALL": "1",
+            # The gate runs as a pre-receive hook under http-backend and inherits this
+            # env. It is the only place that knows who the token belongs to: a signature
+            # says which KEY wrote a commit, never which token pushed it, and the first
+            # contributors.yaml in a hosted graph has to be laid down by its admin's own
+            # token. Not in KEEP_ENV, and not GIT_*: set here, per request, from what the
+            # server itself authenticated a moment ago.
+            "KNOTEN_PUSHER": user,
+            "KNOTEN_ROLE": role,
             "PATH_INFO": "/repo.git" + sub,          # the URL says <name>.git; disk says repo.git
             "QUERY_STRING": query,
             "REQUEST_METHOD": self.command,
