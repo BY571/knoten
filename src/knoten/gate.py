@@ -23,7 +23,7 @@ import yaml
 
 from . import contributors as C
 from . import ops
-from .core import GraphError, SERVER_GIT_ENV
+from .core import GraphError, SERVER_GIT_ENV, server_git_env
 from .keys import allowed_signers
 
 ZERO = re.compile(r"^0+$")
@@ -39,8 +39,21 @@ def _git(*args: str, input: bytes | None = None,
     # in main() still needs to read.
     kw = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
     cmd = ["git", *(["-C", str(repo)] if repo else []), *args]
-    return subprocess.run(cmd, capture_output=True,
-                          env={**os.environ, **SERVER_GIT_ENV}, **kw)
+    if repo:
+        # server_git_env(), not {**os.environ, **SERVER_GIT_ENV}: an absolute GIT_DIR left
+        # in the operator's shell outranks `-C` and points git at a repo nobody asked for
+        # -- Registry.head_graph() reads a HOSTED repo from outside its own process,
+        # exactly the case a stray GIT_DIR silently redirects.
+        env = server_git_env()
+    else:
+        # No `repo`: this IS the hook, running inside the bare repo git itself invoked it
+        # in. git sets GIT_DIR and, mid-push, the quarantine object-directory variables
+        # (GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_QUARANTINE_PATH) in
+        # THIS process's own environment so the hook can see objects not yet migrated
+        # into the main odb. Stripping every GIT_* var here (as server_git_env() does)
+        # made the hook blind to the very commits it was asked to check.
+        env = {**os.environ, **SERVER_GIT_ENV}
+    return subprocess.run(cmd, capture_output=True, env=env, **kw)
 
 
 def say(msg: str) -> None:

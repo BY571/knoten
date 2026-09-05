@@ -51,6 +51,17 @@ SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
                   "GIT_LITERAL_PATHSPECS": "1"}
 
 
+def server_git_env() -> dict:
+    """The environment every server-side git subprocess must run under: the operator's
+    shell, minus every GIT_* variable it might carry, with SERVER_GIT_ENV then reapplied
+    on top. `-C <repo>` is not enough on its own -- an absolute GIT_DIR left in the
+    environment (the operator's shell, a stray export) outranks `-C` and points git at a
+    repo nobody asked for, silently: a `-C` flag was verified to lose that race. Every
+    site that reads a HOSTED repo from outside its own process (gate._git, Registry.create)
+    must build its env from this, never from `{**os.environ, **SERVER_GIT_ENV}` alone."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | SERVER_GIT_ENV
+
+
 class GraphError(Exception):
     """The graph on disk is malformed. Always name the file."""
 

@@ -21,9 +21,10 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import contributors as C
 from . import gate
 from .core import (GraphError, ID_RE, MAX_NAME, MAX_PUSH_BYTES, SERVER_GIT_ENV, graph_lock,
-                   write_atomic)
+                   server_git_env, write_atomic)
 from .hook import install_server
 
 ROLES = ("read", "write", "admin")
@@ -125,18 +126,36 @@ class Registry:
         return r
 
     def head_graph(self, name: str) -> tuple[dict | None, str]:
-        """The hosted repo's contributors.yaml at HEAD and its graph name. None for a
+        """The hosted repo's contributors.yaml at its tip and its graph name. None for a
         phase-1 graph or an empty repo. A signed remote holds one graph: the server has
-        to know WHICH contributors.yaml an invite is checked against."""
+        to know WHICH contributors.yaml an invite is checked against.
+
+        The tip is `HEAD` when that resolves, but `knoten remote create` runs `git push
+        -u origin HEAD` -- whatever branch the user happens to be on, `main` as often as
+        `master` -- so a bare repo freshly made by `git init --bare` has an UNBORN HEAD
+        (it still points at refs/heads/master, which a push to `main` never creates).
+        Reading only `HEAD` there returned "no contributors, no name" for a graph that is
+        fully bootstrapped and signed, and every invite for it minted unsigned. When HEAD
+        does not resolve, fall back to whatever branch actually exists: exactly one, use
+        it; none, an empty repo; more than one with no valid HEAD, refuse -- there is no
+        single line of history left to check an invite against."""
         repo = self.repo(name)
+        tip = "HEAD"
         if gate._git("rev-parse", "--verify", "-q", "HEAD", repo=repo).returncode != 0:
-            return None, ""
-        dirs = gate.graph_dirs("HEAD", repo=repo)
+            r = gate._git("for-each-ref", "--format=%(refname)", "refs/heads/", repo=repo)
+            branches = [b for b in r.stdout.decode().splitlines() if b]
+            if not branches:
+                return None, ""
+            if len(branches) > 1:
+                raise GraphError(f"graph '{name}' has several branches and no HEAD; "
+                                 f"a signed remote needs one line of history")
+            tip = branches[0]
+        dirs = gate.graph_dirs(tip, repo=repo)
         if len(dirs) > 1:
             raise GraphError(f"graph '{name}' holds {len(dirs)} graphs; a signed remote holds one")
         if not dirs:
             return None, ""
-        return gate.contributors_at("HEAD", dirs[0], repo=repo), gate.graph_name_at("HEAD", dirs[0], repo=repo)
+        return gate.contributors_at(tip, dirs[0], repo=repo), gate.graph_name_at(tip, dirs[0], repo=repo)
 
     def create(self, name: str, admin: str) -> str:
         """A bare repo with the gate already installed. Returns the creating admin's
@@ -156,7 +175,10 @@ class Registry:
             # The same config every other git on this server runs under: a core.hooksPath
             # or an init.templateDir in the daemon account's ~/.gitconfig would otherwise
             # make the repo we create and the repo receive-pack sees two different repos.
-            env = {**os.environ, **SERVER_GIT_ENV}
+            # server_git_env(), not {**os.environ, **SERVER_GIT_ENV}: a stray GIT_DIR in
+            # the operator's shell outranks `-C` and would point `git init`/`git config`
+            # at a repo nobody asked to create or configure.
+            env = server_git_env()
             subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True, env=env)
             for key, value in (("http.receivepack", "true"),
                                ("receive.maxInputSize", str(MAX_PUSH_BYTES)),
@@ -283,11 +305,17 @@ class Registry:
                  "expires": e.get("expires", ""), "by": e.get("by", "")}
                 for e in self._read(name, "invites.json").values()]
 
-    def redeem(self, name: str, code: str) -> tuple[str, str, str, dict]:
+    def redeem(self, name: str, code: str, contribs: dict | None = None) -> tuple[str, str, str, dict]:
         """One use. Returns (user, role, token, extra) where extra is the admin's signed
         blob/sig and who issued it (empty strings on an unsigned invite). The code is
         removed on first try whether or not it was still live, so an expired code cannot
-        be retried."""
+        be retried.
+
+        `contribs`, when given (the caller's own fresh `head_graph(name)` read), re-checks
+        a signed invite's signature against it: the gate would refuse the eventual join
+        COMMIT anyway once an admin is revoked, but without this a revoked admin's
+        still-unexpired invite minted a live TOKEN here and now, which reads a private
+        graph long before that commit is ever attempted."""
         self.repo(name)
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")
@@ -304,8 +332,17 @@ class Registry:
             raise GraphError("that invite is malformed; ask for a new one") from None
         if expires < _now():
             raise GraphError("that invite has expired; ask the admin for a new one")
+        blob, sig = entry.get("blob", ""), entry.get("sig", "")
+        if contribs is not None and blob and sig:
+            try:
+                signer = C.verify_invite(contribs, blob.encode(), sig)
+            except GraphError:
+                signer = ""
+            if signer != entry.get("by"):
+                # The code is already popped above -- correctly: a code that no longer
+                # proves anything must not be retried into working just as dead.
+                raise GraphError("that invite is no longer valid; its signer is not an admin here any more")
         # Outside the lock: mint takes it again, and flock on a fresh handle would wait
         # on our own lock forever.
-        extra = {"blob": entry.get("blob", ""), "sig": entry.get("sig", ""),
-                 "by": entry.get("by", "")}
+        extra = {"blob": blob, "sig": sig, "by": entry.get("by", "")}
         return entry["name"], entry["role"], self.mint(name, entry["name"], entry["role"]), extra

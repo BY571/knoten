@@ -337,7 +337,11 @@ class _Handler(BaseHTTPRequestHandler):
             # /join needs no credentials, so it must not become a name oracle: an
             # unknown graph gets the same 400 a wrong code gets, not "no graph 'x'".
             return self._refuse(400, "knoten: that invite code is not valid for this graph")
-        user, role, token, extra = self.server.registry.redeem(name, body.get("code", ""))
+        # A fresh read, not whatever head_graph said when the invite was minted: an admin
+        # revoked between the invite and the join must be caught NOW, not only later when
+        # the gate refuses the join commit -- by then the holder already has a live token.
+        contribs, _ = self.server.registry.head_graph(name)
+        user, role, token, extra = self.server.registry.redeem(name, body.get("code", ""), contribs)
         self.log_message(f"join:{role}", name, user, 200)
         self._json(200, {"name": user, "role": role, "token": token, **extra})
 
@@ -363,24 +367,46 @@ class _Handler(BaseHTTPRequestHandler):
             raise GraphError("days must be a whole number") from None
         contribs, graph_name = self.server.registry.head_graph(name)
         blob, sig = str(body.get("blob", "")), str(body.get("sig", ""))
-        if contribs is not None:
+        # A bearer secret with no cap at all is one more thing for a hostile admin token
+        # to abuse; these are generous ceilings for a real signed blob and SSHSIG, not a
+        # size any legitimate invite comes close to.
+        if len(blob) > 4096 or len(sig) > 8192:
+            raise GraphError("invite fields are too large")
+        if contribs is None:
+            # An unsigned graph has no admin key to check a signature against; carrying
+            # one anyway is either a confused client or a probe, never something to store.
+            if blob or sig:
+                raise GraphError("this graph is not signed; an invite carries no signature here")
+        else:
             # A signed graph: the token opened the door, the key has to authorise. The
             # invite must be signed by the calling admin's OWN key, as listed at HEAD, so
             # a stolen admin token mints nothing without the admin's machine.
             if not blob or not sig:
                 raise GraphError("this graph is signed; invites must carry the admin's signature")
+            if admin not in C.admins(contribs):
+                # Distinct from a bad signature below: this admin's own token authenticates,
+                # but contributors.yaml never listed them, so there is no key of theirs to
+                # check anything against in the first place.
+                return self._refuse(403, "knoten: you are not a listed admin of this graph")
             try:
-                signer = C.verify_invite(contribs, blob.encode(), sig)
+                # A lone surrogate in `blob` (a crafted \udXXX escape in the JSON body)
+                # encodes fine through json.loads but not through .encode(): unguarded,
+                # that reached the catch-all as a bare 500 instead of a refusal.
+                blob_bytes, _ = blob.encode(), sig.encode()
+            except UnicodeEncodeError:
+                raise GraphError("that invite is malformed") from None
+            try:
+                signer = C.verify_invite(contribs, blob_bytes, sig)
             except GraphError:
                 signer = ""
             if signer != admin:
                 return self._refuse(403, "knoten: the invite must be signed with your own signing key")
-            C.check_blob(C.parse_blob(blob.encode()), graph_name, body.get("name", ""),
-                         body.get("role", "write"))
+            C.check_blob(C.parse_blob(blob_bytes), graph_name, body.get("name", ""),
+                        body.get("role", "write"))
         # `by`, so revoking this admin takes the invites they issued with them. The range
         # check on days lives in the registry, next to the timedelta that overflowed.
         code = self.server.registry.invite(name, body.get("name", ""), body.get("role", "write"),
-                                    days, by=admin, blob=blob, sig=sig)
+                                           days, by=admin, blob=blob, sig=sig)
         self.log_message(f"invite:{body.get('name', '')}", name, admin, 200)
         self._json(200, {"code": code})
 

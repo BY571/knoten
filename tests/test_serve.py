@@ -589,6 +589,74 @@ def test_a_phase_1_graph_still_invites_without_a_signature(hub, trading):
     assert status == 200 and joined["blob"] == "" and joined["sig"] == ""
 
 
+# ---------------------------------------------------------------- signed invites: review fixes
+
+def test_a_revoked_admins_earlier_invite_is_refused_at_join_not_only_at_the_gate(hub, signed_trading):
+    """The gate refuses the eventual join COMMIT once seb is revoked, but that is not
+    enough on its own: without re-checking at redeem, the holder already had a live
+    TOKEN the moment /join answered, and a token reads a private graph whether or not
+    its holder ever gets as far as committing."""
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+    status, got = api(hub, "/trading/invite", body, ("seb", signed_trading["admin"]))
+    assert status == 200, got
+
+    work, seb = signed_trading["work"], signed_trading["seb_key"]
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin", "revoked": "2020-01-01"}})
+    commit_signed(work, "seb steps down", seb)
+    r = git("push", "-q", "origin", "master", cwd=work)
+    assert r.returncode == 0, r.stderr
+
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+
+    assert status == 400
+    assert "no longer valid" in joined["error"]
+    assert hub.registry.authenticate("trading", "maria", joined.get("token", "")) is None
+
+
+def test_an_unsigned_graph_refuses_an_invite_carrying_a_signature(hub, trading):
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": "x", "sig": "y"},
+                       ("seb", trading["admin"]))
+    assert status == 400
+    assert "not signed" in body["error"]
+
+
+def test_invite_fields_over_the_size_cap_are_refused(hub, trading):
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": "x" * 4097, "sig": ""},
+                       ("seb", trading["admin"]))
+    assert status == 400
+    assert "too large" in body["error"]
+
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": "", "sig": "y" * 8193},
+                       ("seb", trading["admin"]))
+    assert status == 400
+    assert "too large" in body["error"]
+
+
+def test_a_lone_surrogate_in_an_invite_field_is_a_400_not_a_500(hub, signed_trading):
+    """A crafted \\ud800 escape in the JSON body decodes fine through json.loads but not
+    through .encode(): unguarded, that reached the catch-all as a bare 500."""
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": "\ud800", "sig": "x"},
+                       ("seb", signed_trading["admin"]))
+    assert status == 400
+
+
+def test_an_admin_token_not_listed_in_contributors_gets_a_clear_refusal(hub, signed_trading):
+    """A registry admin token and a listed admin in contributors.yaml are different
+    things: this admin's own token authenticates, but the graph never named them, so
+    there is no key of theirs to check a signature against at all."""
+    rogue = hub.registry.mint("trading", "rogue", "admin")
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+
+    status, got = api(hub, "/trading/invite", body, ("rogue", rogue))
+
+    assert status == 403
+    assert "not a listed admin" in got["error"]
+
+
 # ---------------------------------------------------------------- the invite list
 
 def test_an_admin_can_list_the_open_invites(hub, trading):

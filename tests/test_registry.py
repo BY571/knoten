@@ -415,3 +415,86 @@ def test_invites_listing_never_shows_the_signature_or_blob(reg):
     reg.invite("trading", "maria", "write", by="seb", blob='{"x":1}', sig="SIG")
     (entry,) = reg.invites("trading")
     assert set(entry) == {"name", "role", "expires", "by"}
+
+
+# ---------------------------------------------------------------- head_graph: review fixes
+
+def test_head_graph_resolves_a_repo_pushed_only_as_main(reg, tmp_path, keys_dir, rules_yaml):
+    """`remote create` runs `git push -u origin HEAD` -- whatever branch the user is on,
+    `main` as often as `master`. A bare repo made by `git init --bare` still has HEAD
+    pointing at refs/heads/master, which a push to `main` never creates: reading only
+    `HEAD` said "unsigned" for a graph that is fully bootstrapped and signed, just on a
+    differently named branch."""
+    reg.create("trading", admin="seb")
+    seb = make_key(keys_dir, "seb")
+    work = tmp_path / "w"
+    from conftest import git
+    git("clone", "-q", str(reg.repo("trading")), str(work), cwd=tmp_path)
+    for c in (["config", "user.email", "t@t.t"], ["config", "user.name", "t"]):
+        git(*c, cwd=work)
+    git("checkout", "-q", "-b", "main", cwd=work)
+    (work / "nodes").mkdir()
+    (work / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (work / "nodes" / "hyp-ok.md").write_text(
+        "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# ok\n", encoding="utf-8")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb creates the graph", seb)
+    assert git("push", "-q", "origin", "main", cwd=work).returncode == 0
+
+    contribs, name = reg.head_graph("trading")
+
+    assert contribs == {"seb": {"key": pub_line(seb), "role": "admin"}}
+    assert name == "test"
+
+
+def test_head_graph_refuses_a_repo_holding_two_graphs_at_the_tip(reg, tmp_path, rules_yaml):
+    """The brief specified this refusal but never exercised it: a signed remote holds
+    exactly one graph, because that is the one contributors.yaml an invite is checked
+    against."""
+    reg.create("trading", admin="seb")
+    work = tmp_path / "w"
+    from conftest import git
+    git("clone", "-q", str(reg.repo("trading")), str(work), cwd=tmp_path)
+    for c in (["config", "user.email", "t@t.t"], ["config", "user.name", "t"]):
+        git(*c, cwd=work)
+    for sub in ("a", "b"):
+        (work / sub / "nodes").mkdir(parents=True)
+        (work / sub / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+        (work / sub / "nodes" / "hyp-ok.md").write_text(
+            "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# ok\n", encoding="utf-8")
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "two graphs", cwd=work)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+
+    with pytest.raises(GraphError, match="holds 2 graphs"):
+        reg.head_graph("trading")
+
+
+def test_head_graph_ignores_a_stray_git_dir_in_the_environment(reg, tmp_path, keys_dir,
+                                                               rules_yaml, monkeypatch):
+    """An absolute GIT_DIR left in the operator's shell outranks `-C`; head_graph must
+    build its git env from server_git_env(), not `os.environ` wholesale, or a stray
+    GIT_DIR points every read at a repo nobody asked for."""
+    reg.create("trading", admin="seb")
+    seb = make_key(keys_dir, "seb")
+    work = tmp_path / "w"
+    from conftest import git
+    git("clone", "-q", str(reg.repo("trading")), str(work), cwd=tmp_path)
+    for c in (["config", "user.email", "t@t.t"], ["config", "user.name", "t"]):
+        git(*c, cwd=work)
+    (work / "nodes").mkdir()
+    (work / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (work / "nodes" / "hyp-ok.md").write_text(
+        "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# ok\n", encoding="utf-8")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb creates the graph", seb)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+
+    other = tmp_path / "somewhere-else"
+    git("init", "-q", "--bare", str(other), cwd=tmp_path)
+    monkeypatch.setenv("GIT_DIR", str(other))
+
+    contribs, name = reg.head_graph("trading")
+
+    assert contribs == {"seb": {"key": pub_line(seb), "role": "admin"}}
+    assert name == "test"
