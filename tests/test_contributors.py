@@ -5,6 +5,7 @@ import json
 import pytest
 
 from conftest import make_key, pub_line
+from knoten import core, contributors
 from knoten.core import GraphError
 from knoten.contributors import (FILE, ROLES, active, admins, check_blob, diff, dump,
                                  invite_blob, keys, load, parse, parse_blob, verify_invite)
@@ -33,6 +34,7 @@ def test_parse_accepts_the_documented_shape():
     (f"seb:\n  key: rsa-not-here\n  role: admin\n", "ssh-ed25519"),
     ("- seb\n", "mapping"),
     ("seb: [1\n", "YAML"),
+    (f"seb:\n  key: {KEY}\n  role: admin\n  revoked: soon\n", "YYYY-MM-DD"),
 ])
 def test_parse_refuses_malformed_entries(text, msg):
     with pytest.raises(GraphError, match=msg):
@@ -105,3 +107,24 @@ def test_a_revoked_admin_cannot_sign_invites(keys_dir):
     blob = invite_blob("trading", "maria", "write", "2026-09-12", "ab12")
     with pytest.raises(GraphError, match="not signed by an admin"):
         verify_invite(c, blob, sign(seb, blob, INVITE_NS))
+
+
+def test_an_unquoted_revoked_date_loads_as_the_string_it_was_written_as(tmp_path):
+    """YAML reads `revoked: 2026-09-01` as a date object. Left alone, an entry loaded
+    from disk compared unequal to the same entry built in code with today(), so diff()
+    reported a change that had not happened, and json.dumps crashed on it."""
+    (tmp_path / FILE).write_text(f"seb:\n  key: {KEY}\n  role: admin\n  revoked: 2026-09-01\n",
+                                 encoding="utf-8")
+    c = load(tmp_path)
+    assert c["seb"]["revoked"] == "2026-09-01"
+    assert diff(c, {"seb": {"key": KEY, "role": "admin", "revoked": "2026-09-01"}}) == ({}, {}, set())
+    dump(tmp_path, c)
+    assert load(tmp_path) == c
+
+
+def test_the_name_cap_is_one_constant():
+    """MAX_NAME must be the same in core, contributors, and registry so lengths are
+    consistently enforced across the system."""
+    assert contributors.MAX_NAME is core.MAX_NAME
+    from knoten import registry
+    assert registry.MAX_NAME is core.MAX_NAME

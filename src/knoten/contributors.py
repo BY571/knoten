@@ -12,16 +12,18 @@ deletion: history signed by that key stays attributable.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
 
-from .core import GraphError, ID_RE, write_atomic
+from .core import GraphError, ID_RE, MAX_NAME, write_atomic
 from .keys import INVITE_NS, allowed_signers, verify
 
 FILE = "contributors.yaml"
 ROLES = ("read", "write", "admin")
-MAX_NAME = 64
+
+_REVOKED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def load(root: Path) -> dict | None:
@@ -55,7 +57,17 @@ def parse(text: str, label: str = FILE) -> dict:
         clean = {"key": key, "role": role}
         for opt in ("invited_by", "invite", "revoked"):
             if opt in entry:
-                clean[opt] = entry[opt]
+                if opt == "revoked":
+                    # YAML 1.1 loader turns an unquoted date into a date object. Coerce to
+                    # string so two loads of the same file then compare equal to a string
+                    # written by today(), diff() reports no spurious changes, and json.dumps
+                    # does not crash.
+                    revoked = str(entry[opt])
+                    if not _REVOKED_RE.match(revoked):
+                        raise GraphError(f"{label}: '{name}' revoked must be a date YYYY-MM-DD")
+                    clean[opt] = revoked
+                else:
+                    clean[opt] = entry[opt]
         out[name] = clean
     return out
 

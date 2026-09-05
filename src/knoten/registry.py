@@ -21,16 +21,11 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .core import (GraphError, ID_RE, MAX_PUSH_BYTES, SERVER_GIT_ENV, graph_lock,
+from .core import (GraphError, ID_RE, MAX_NAME, MAX_PUSH_BYTES, SERVER_GIT_ENV, graph_lock,
                    write_atomic)
 from .hook import install_server
 
 ROLES = ("read", "write", "admin")
-
-# A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
-# bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an
-# opaque OSError after the data directory had already been touched.
-MAX_NAME = 64
 
 # An invite is a bearer secret. A year is already generous for one.
 MAX_DAYS = 365

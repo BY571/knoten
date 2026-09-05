@@ -93,6 +93,11 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 # checked that — not the one people used.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+# A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
+# bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an
+# opaque OSError after the data directory had already been touched.
+MAX_NAME = 64
+
 
 @contextmanager
 def graph_lock(root: Path):
