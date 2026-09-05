@@ -408,3 +408,16 @@ Micropublications, nanopublications, PROV-O and LinkML are all open and safe to 
    Defer until a second graph exists.
 4. ~~**A closed `cause` vocabulary (§5) as a rule primitive?**~~ **Answered: yes.**
    `require_field_one_of` shipped, and a second graph did want it.
+
+---
+
+## 12. Threat model for remote graphs
+
+Phase 1 is a token in front of `git http-backend` and a gate on the server. What follows
+is what that does NOT defend against, decided on purpose rather than overlooked. Each row
+says what phase 1 does and what phase 2 would have to answer.
+
+| concern | phase 1 | phase 2 |
+|---|---|---|
+| **One admin removes another, the creator included.** An admin can also re-invite a name that already exists, at a lower role, which demotes that person. | Allowed. Every admin is equal and the creator holds no protected status. This is deliberate: a graph whose creator cannot be removed is a graph nobody else can rescue when that person leaves, and the alternative (a permanent super-admin) puts one token beyond recovery. | Whether the creator is protected, and whether demoting an admin should need more than one admin, is a phase 2 question. It needs signed identity first: today a role is a row in a file on the server, not a claim anyone can verify. |
+| **A revoked token finishes what it started.** Tokens do not expire, and revocation is checked once per request. | A push already past authentication runs to completion; the next request from that token is refused. Revocation is therefore prompt, not instant, and it never interrupts work in flight. | Expiring tokens, and a revocation that also reaches a request already being served. Both need somewhere to keep session state, which phase 1 deliberately does not have. |
