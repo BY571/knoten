@@ -151,3 +151,100 @@ def test_a_crashed_backend_is_a_500_not_a_silent_200(hub, trading, monkeypatch):
 
     assert e.value.code == 500
     assert "http-backend failed" in json.loads(e.value.read())["error"]
+
+
+# ---------------------------------------------------------------- the api
+
+def api(hub, path, body, auth=None):
+    """Raw urllib, deliberately not the knoten client: the server is being tested."""
+    req = urllib.request.Request(hub.url + path, data=json.dumps(body).encode(),
+                                 method="POST", headers={"Content-Type": "application/json"})
+    if auth:
+        cred = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+        req.add_header("Authorization", "Basic " + cred)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def test_the_owner_secret_creates_a_graph_and_gets_the_admin_token(hub):
+    status, body = api(hub, "/graphs", {"name": "biology", "admin": "seb"}, ("owner", hub.secret))
+
+    assert status == 201
+    assert hub.registry.authenticate("biology", "seb", body["token"]) == "admin"
+    assert (hub.registry.repo("biology") / "hooks" / "pre-receive").exists()
+
+
+def test_creating_a_graph_without_the_owner_secret_is_refused(hub):
+    status, body = api(hub, "/graphs", {"name": "biology", "admin": "seb"}, ("owner", "nope"))
+    assert status == 401
+    assert not hub.registry.exists("biology")
+
+    status, _ = api(hub, "/graphs", {"name": "biology", "admin": "seb"})
+    assert status == 401
+
+
+def test_a_bad_graph_name_is_a_400_and_creates_nothing(hub):
+    status, body = api(hub, "/graphs", {"name": "../etc", "admin": "seb"}, ("owner", hub.secret))
+
+    assert status == 400
+    assert "not a valid graph name" in body["error"]
+    assert list((hub.data / "graphs").iterdir()) == []
+
+
+def test_an_admin_can_invite_and_the_invitee_can_join(hub, trading):
+    status, body = api(hub, "/trading/invite", {"name": "maria", "role": "write", "days": 7},
+                       ("seb", trading["admin"]))
+    assert status == 200, body
+
+    status, joined = api(hub, "/trading/join", {"code": body["code"]})
+
+    assert status == 200, joined
+    assert joined["name"] == "maria" and joined["role"] == "write"
+    assert hub.registry.authenticate("trading", "maria", joined["token"]) == "write"
+
+
+def test_a_write_token_cannot_invite(hub, trading):
+    tok = hub.registry.mint("trading", "maria", "write")
+
+    status, body = api(hub, "/trading/invite", {"name": "x", "role": "write"}, ("maria", tok))
+
+    assert status == 403
+    assert "only an admin" in body["error"]
+
+
+def test_joining_twice_with_one_code_fails_the_second_time(hub, trading):
+    _, inv = api(hub, "/trading/invite", {"name": "maria", "role": "read"}, ("seb", trading["admin"]))
+    api(hub, "/trading/join", {"code": inv["code"]})
+
+    status, body = api(hub, "/trading/join", {"code": inv["code"]})
+
+    assert status == 400
+    assert "not valid" in body["error"]
+
+
+def test_revoke_ends_a_contributors_access(hub, trading, tmp_path):
+    tok = hub.registry.mint("trading", "maria", "write")
+
+    status, _ = api(hub, "/trading/revoke", {"name": "maria"}, ("seb", trading["admin"]))
+    assert status == 200
+
+    r = git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(tmp_path / "x"), cwd=tmp_path)
+    assert auth_refused(r), r.stderr
+
+
+def test_malformed_json_is_a_400_not_a_traceback(hub, trading):
+    req = urllib.request.Request(hub.url + "/trading/join", data=b"{not json",
+                                 method="POST", headers={"Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+
+    assert e.value.code == 400
+    assert "not JSON" in json.loads(e.value.read())["error"]
+
+
+def test_unknown_paths_are_404(hub):
+    status, _ = api(hub, "/trading/steal", {})
+    assert status == 404

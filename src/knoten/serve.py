@@ -148,16 +148,40 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(out)
 
-    # ---------------------------------------------------------------- api (Task 4)
+    # ---------------------------------------------------------------- api
 
     def _create(self) -> None:
-        self._refuse(404, "knoten: not found")
+        user, secret = self._basic()
+        if user != "owner" or not self.registry.check_owner(secret):
+            return self._refuse(401, "knoten: the owner secret is required to create a graph")
+        body = self._json_body()
+        token = self.registry.create(body.get("name", ""), body.get("admin", ""))
+        self._json(201, {"token": token})
 
     def _join(self, name: str) -> None:
-        self._refuse(404, "knoten: not found")
+        body = self._json_body()
+        user, role, token = self.registry.redeem(name, body.get("code", ""))
+        self._json(200, {"name": user, "role": role, "token": token})
+
+    def _admin(self, name: str) -> str | None:
+        """The calling admin's name, or None after having refused the request."""
+        user, token = self._basic()
+        if self.registry.authenticate(name, user, token) != "admin":
+            self._refuse(403, f"knoten: only an admin of {name} can do that")
+            return None
+        return user
 
     def _invite(self, name: str) -> None:
-        self._refuse(404, "knoten: not found")
+        if not self._admin(name):
+            return
+        body = self._json_body()
+        code = self.registry.invite(name, body.get("name", ""), body.get("role", "write"),
+                                    int(body.get("days", 7)))
+        self._json(200, {"code": code})
 
     def _revoke(self, name: str) -> None:
-        self._refuse(404, "knoten: not found")
+        if not self._admin(name):
+            return
+        body = self._json_body()
+        self.registry.revoke(name, body.get("name", ""))
+        self._json(200, {"revoked": body.get("name", "")})
