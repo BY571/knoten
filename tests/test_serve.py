@@ -779,3 +779,32 @@ def test_a_push_the_gate_refused_is_not_logged_as_a_200(hub, trading, capfd):
     err = capfd.readouterr().err
     pushes = [l for l in err.splitlines() if "git-receive-pack" in l]
     assert pushes and pushes[-1].endswith(" refused"), err
+
+
+def test_a_failure_after_the_headers_are_sent_does_not_answer_twice(hub, trading, capfd,
+                                                                    monkeypatch):
+    """The catch-all turns anything unforeseen into a 500. Once a status line is on the
+    wire a second response is not a refusal, it is garbage appended to the body of the
+    first, and the client parses it as content."""
+    from knoten import serve as serve_mod
+
+    def half_answer(self, name, sub, query):
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"ok")
+        raise RuntimeError("boom, after the headers")
+    monkeypatch.setattr(serve_mod._Handler, "_git", half_answer)
+    capfd.readouterr()
+
+    req = urllib.request.Request(
+        f"{hub.url}/trading.git/info/refs?service=git-upload-pack",
+        headers={"Authorization": "Basic " + base64.b64encode(
+            f"seb:{trading['admin']}".encode()).decode()})
+    with urllib.request.urlopen(req) as r:
+        body = r.read()
+
+    assert r.status == 200
+    assert body == b"ok", "a second response was appended to the first"
+    err = capfd.readouterr().err
+    assert len([l for l in err.splitlines() if "knoten serve:" in l]) == 1, err

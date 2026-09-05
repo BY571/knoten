@@ -69,6 +69,13 @@ class _Handler(BaseHTTPRequestHandler):
     # forever: no credentials needed, one thread per connection, until there are none.
     timeout = 30
 
+    _answered = False                          # reset per request in _route
+
+    def send_response(self, *args, **kwargs) -> None:
+        # The catch-all below must know whether a status line is already on the wire.
+        self._answered = True
+        super().send_response(*args, **kwargs)
+
     def log_request(self, *args) -> None:      # one line per request is noise on a server
         pass
 
@@ -148,6 +155,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _route(self) -> None:
         path, _, query = self.path.partition("?")
+        self._answered = False                 # a connection serves more than one request
         try:
             if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
                 # _body only ever reads Content-Length bytes, so a chunked body arrives as
@@ -171,7 +179,11 @@ class _Handler(BaseHTTPRequestHandler):
             # connection that never answers, which reads to a user as a hung network.
             # One line on the server's stderr, one refusal on the wire.
             print(f"knoten serve: {self.command} {self.path}: {e!r}", file=sys.stderr)
-            self._refuse(500, "knoten: internal error")
+            if not self._answered:
+                self._refuse(500, "knoten: internal error")
+            # Otherwise the status line and headers are already sent, and a second
+            # response would be read as the body of the first: the client gets garbage
+            # where it would otherwise get a truncated but well-formed answer.
 
     # ---------------------------------------------------------------- git
 
