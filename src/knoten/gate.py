@@ -26,8 +26,14 @@ ZERO = re.compile(r"^0+$")
 
 
 def _git(*args: str, input: bytes | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], capture_output=True, input=input,
-                          env={**os.environ, **SERVER_GIT_ENV})
+    # subprocess.run() rejects stdin= together with input=, so the two are exclusive: an
+    # explicit input still pipes it in, but with no input the child gets /dev/null, never
+    # the hook's own stdin. That stdin IS git's ref list; a child that read from it instead
+    # of getting EOF (`git verify-commit`/gpg, Task 4) would consume lines the outer loop
+    # in main() still needs to read.
+    kw = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
+    return subprocess.run(["git", *args], capture_output=True,
+                          env={**os.environ, **SERVER_GIT_ENV}, **kw)
 
 
 def say(msg: str) -> None:
@@ -55,13 +61,27 @@ def graph_dirs(rev: str) -> list[str]:
             yamls.add(parent)
         elif leaf == "nodes" and kind == b"tree":
             nodes.add(parent)
-    return sorted(yamls & nodes)
+    safe = []
+    for d in sorted(yamls & nodes):
+        # A directory name is a path lifted from the PUSHED tree, never trusted input. A
+        # component starting with `-` reaches `git archive`/`git ls-tree` as an OPTION
+        # (`--output=x` made git write a file; `--remote=host:path` made it shell out to
+        # ssh), and one starting with `:` is pathspec magic (`:(top)`, `:(exclude)`). Ruling
+        # both out here means no name from a pushed tree ever reaches git as anything but
+        # a plain path -- `extract`'s `--` separator is defense in depth, not the only gate.
+        if d and any(part.startswith(("-", ":")) for part in d.split("/")):
+            say(f"refusing {d}: directory name would be parsed as a git option, not a path")
+            raise GraphError(f"unsafe directory name in pushed tree: {d}")
+        safe.append(d)
+    return safe
 
 
 def extract(rev: str, gdir: str, dest: Path) -> Path:
     """The graph's files at `rev`, regular files only. A symlink in a pushed tree would
     resolve against the SERVER's filesystem; here it never reaches disk at all."""
-    r = _git("archive", "--format=tar", rev, *([gdir] if gdir else []))
+    # `--` separates the tree-ish from the pathspec: without it, a pushed directory named
+    # like an option (`--output=...`) is parsed as one by `git archive`, not as a path.
+    r = _git("archive", "--format=tar", rev, "--", *([gdir] if gdir else []))
     if r.returncode != 0:
         raise GraphError(f"cannot read the tree at {rev[:7]}")
     # 3.12+ warns unless an extraction filter is named; older Pythons have no filter.
@@ -118,6 +138,12 @@ def main(stdin=None) -> int:
                 ok = False
         except GraphError as e:
             say(str(e))
+            ok = False
+        except Exception as e:
+            # A traceback here goes out on band 2, which git relays to the PUSHER -- a bug
+            # anywhere under check_ref must still fail closed with one line, not leak a
+            # server-side stack trace (module names, paths) to whoever pushed.
+            say(f"cannot check {ref}: {type(e).__name__}")
             ok = False
     if not ok:
         say("push REFUSED. Fix the graph, commit, push again.")
