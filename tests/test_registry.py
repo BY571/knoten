@@ -203,3 +203,13 @@ def test_a_wrong_code_and_a_wrong_graph_both_fail(reg):
         reg.redeem("trading", "guess")
     with pytest.raises(GraphError, match="no graph 'biology'"):
         reg.redeem("biology", "anything")
+
+
+def test_secrets_that_travel_on_a_command_line_never_start_with_a_dash(reg):
+    """`--owner-secret VALUE` and `--invite CODE` are argv. A value beginning with `-`
+    is a flag to argparse, and token_urlsafe produced one about one run in five."""
+    reg.create("trading", admin="seb")
+    for _ in range(64):
+        assert not reg.invite("trading", "maria", "write").startswith("-")
+    assert not reg.owner_secret().startswith("-")
+    assert all(c in "0123456789abcdef" for c in reg.owner_secret())

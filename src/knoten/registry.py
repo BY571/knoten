@@ -31,6 +31,14 @@ def _hash(secret: str) -> str:
     return hashlib.sha256((secret or "").encode()).hexdigest()
 
 
+# Every secret below that a human ever passes on a command line (owner_secret,
+# invite codes) is generated with token_hex, not token_urlsafe: token_urlsafe's
+# alphabet includes '-', and a secret that begins with '-' reads to argparse as
+# a flag, not a value — `knoten remote create ... --owner-secret <secret>` then
+# failed one run in five with a perfectly valid secret. mint()'s tokens travel
+# only as a git HTTP password, never argv, so they keep token_urlsafe.
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -48,7 +56,7 @@ class Registry:
         if not p.exists():
             fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as fh:
-                fh.write(secrets.token_urlsafe(32))
+                fh.write(secrets.token_hex(32))
         return p.read_text(encoding="utf-8").strip()
 
     def check_owner(self, secret: str) -> bool:
@@ -147,7 +155,7 @@ class Registry:
 
     def invite(self, name: str, user: str, role: str, days: int = 7) -> str:
         self._check(name, user, role)
-        code = secrets.token_urlsafe(16)
+        code = secrets.token_hex(16)
         expires = (_now() + timedelta(days=days)).isoformat()
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")
