@@ -15,6 +15,7 @@ from . import attachments, ops, viz
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook, install_server
+from .keys import ensure_key, public_line
 from .registry import ROLES, Registry
 from .serve import make_server
 from . import gate
@@ -691,6 +692,9 @@ def _parser() -> argparse.ArgumentParser:
     # git runs this from the pre-receive hook; nobody types it.
     sub.add_parser("gate", help=argparse.SUPPRESS)
 
+    s = sub.add_parser("key", help="your signing key (made on first use)")
+    s.add_argument("name", nargs="?", help="who you sign as (default: git user.name)")
+
     s = sub.add_parser("remote", help="connect this graph to a knoten server")
     rs = s.add_subparsers(dest="remote_cmd", required=True)
     c = rs.add_parser("create", help="create this graph on a server and push it")
@@ -784,6 +788,13 @@ def main(argv=None) -> int:
 
         if args.cmd == "gate":
             return gate.main()
+
+        if args.cmd == "key":
+            name = args.name or remote._git(Path.cwd(), "config", "user.name").stdout.strip().lower().replace(" ", "-")
+            priv = ensure_key(name)
+            print(f"  {public_line(priv)}")
+            print(f"    signs as {name}; private half at {priv}. Never share that file.")
+            return 0
 
         if args.cmd == "join":
             clone, name, role = remote.join(args.url, args.invite, args.dest)

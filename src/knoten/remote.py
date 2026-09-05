@@ -26,7 +26,9 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import contributors as C
 from .core import GraphError, ID_RE
+from .keys import configure_signing, ensure_key, public_line
 
 
 # ---------------------------------------------------------------- credentials
@@ -195,6 +197,32 @@ def _relay(stderr: str) -> None:
 
 # ---------------------------------------------------------------- commands
 
+def _bootstrap(root: Path, repo: Path, admin: str) -> None:
+    """Make this clone sign as `admin`, and make the graph list `admin` as its admin.
+
+    The first contributors.yaml is the constitution's genesis: the gate accepts it only
+    if the commit is signed by an admin it names, so the creator's key must exist before
+    the first push, and the file and the signature must agree."""
+    priv = ensure_key(admin)
+    configure_signing(repo, priv)
+    mine = public_line(priv)
+    contribs = C.load(root)
+    if contribs is None:
+        C.dump(root, {admin: {"key": mine, "role": "admin"}})
+        _git(repo, "add", "-A")
+        r = _git(repo, "commit", "-q", "-m", f"{admin} creates the graph as admin")
+        if r.returncode != 0:
+            raise GraphError(f"could not commit contributors.yaml: {r.stderr.strip()}")
+        return
+    entry = contribs.get(admin)
+    if entry is None:
+        raise GraphError(f"'{admin}' is not listed in {C.FILE}; an admin has to invite you, "
+                         "or delete that file if you are starting this graph")
+    if entry["key"] != mine:
+        raise GraphError(f"{C.FILE} lists a different key for '{admin}' than the one in "
+                         f"{priv}; the graph's key wins, so use the machine that holds it")
+
+
 def remote_create(root: Path, name: str, on: str, admin: str | None = None,
                   owner_secret: str | None = None) -> str:
     repo = _toplevel(root)
@@ -219,6 +247,11 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
         admin = _git(repo, "config", "user.name").stdout.strip().lower().replace(" ", "-")
     if not ID_RE.match(admin or ""):
         raise GraphError(f"'{admin}' is not a valid contributor name; pass --as NAME (kebab-case)")
+
+    # Local work, and idempotent: a refusal here creates nothing on the server, and a
+    # later failure (wrong owner secret) leaves a harmless bootstrap commit that a re-run
+    # accepts.
+    _bootstrap(root, repo, admin)
 
     token = _api(f"{on}/graphs", {"name": name, "admin": admin}, ("owner", secret))["token"]
     cred_store(owner_key, "owner", secret)

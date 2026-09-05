@@ -5,11 +5,13 @@ import os
 import stat
 
 import pytest
-from conftest import commit_node, git
+from conftest import commit_node, git, make_key, pub_line
 
 from knoten import remote
+from knoten import contributors as C
 from knoten.cli import main
 from knoten.core import GraphError
+from knoten.keys import key_dir, public_line
 from knoten.remote import _explain, cred_lookup, cred_path, cred_store, credential_helper
 
 
@@ -136,6 +138,15 @@ def test_the_cli_exposes_the_helper_on_stdin(monkeypatch, capsys):
 @pytest.fixture
 def shared(hub, local_graph, monkeypatch):
     """`local_graph` created on `hub` by its admin through the CLI, cwd inside it."""
+    monkeypatch.chdir(local_graph)
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 0
+    return local_graph
+
+
+@pytest.fixture
+def shared_signed(hub, local_graph, monkeypatch):
+    """`shared`, in phase 2: the graph was created with signing bootstrapped."""
     monkeypatch.chdir(local_graph)
     assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
                  "--owner-secret", hub.secret]) == 0
@@ -535,3 +546,47 @@ def test_only_an_admin_can_list_the_invites(hub, shared, tmp_path, monkeypatch, 
 
     assert main(["invites"]) == 1
     assert "only an admin" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- signed identity
+
+def test_remote_create_writes_the_admin_into_contributors_and_signs(hub, local_graph, monkeypatch):
+    """The first push is the bootstrap: contributors.yaml listing the creator as admin,
+    in a commit signed by the creator, which the gate accepts on that basis alone."""
+    monkeypatch.chdir(local_graph)
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 0
+
+    c = C.load(local_graph)
+    assert c == {"seb": {"key": public_line(key_dir() / "seb"), "role": "admin"}}
+    assert git("config", "commit.gpgsign", cwd=local_graph).stdout.strip() == "true"
+    contribs, name = hub.registry.head_graph("trading")
+    assert contribs == c
+
+
+def test_after_create_a_plain_push_is_signed_and_lands(hub, shared_signed, capsys):
+    """Nobody has to remember -S. The clone is configured to sign, and the gate checks."""
+    commit_node(shared_signed, "hyp-y.md", "---\nid: hyp-y\ntype: hypothesis\nstatus: open\n---\n\n# y\n")
+    assert main(["push"]) == 0
+    assert "hyp-y" in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
+
+
+def test_remote_create_refuses_when_you_are_not_in_an_existing_contributors_file(hub, local_graph, monkeypatch, keys_dir, capsys):
+    other = make_key(keys_dir, "other")
+    C.dump(local_graph, {"other": {"key": pub_line(other), "role": "admin"}})
+    git("add", "-A", cwd=local_graph); git("commit", "-qm", "someone else's constitution", cwd=local_graph)
+    monkeypatch.chdir(local_graph)
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 1
+    assert "not listed" in capsys.readouterr().err
+    assert not hub.registry.exists("trading")          # refused before the server was asked
+
+
+def test_knoten_key_prints_the_public_line(monkeypatch, capsys, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main(["key", "seb"]) == 0
+    out = capsys.readouterr().out
+    assert "ssh-ed25519 AAAA" in out and str(key_dir() / "seb") in out
+    assert main(["key", "seb"]) == 0
+    assert capsys.readouterr().out == out           # same key, second time
