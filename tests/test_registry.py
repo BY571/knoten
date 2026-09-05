@@ -66,3 +66,23 @@ def test_repo_of_an_unknown_graph_is_an_error_not_a_path(reg):
     with pytest.raises(GraphError, match="no graph 'nope'"):
         reg.repo("nope")
     assert not reg.exists("nope")
+
+
+def test_create_rolls_back_on_partial_failure(reg, monkeypatch):
+    """A half-made repo that exists() calls valid would accept pushes with no gate, forever.
+    Partial creation must be rolled back atomically so a retry can succeed."""
+    import knoten.registry
+    def failing_install(repo):
+        raise OSError("disk full")
+    monkeypatch.setattr(knoten.registry, "install_server", failing_install)
+
+    with pytest.raises(GraphError, match="could not create"):
+        reg.create("trading", admin="seb")
+
+    assert not reg.exists("trading")
+    assert sorted(p.name for p in (reg.data / "graphs").iterdir()) == []
+
+    # Restore monkeypatch and retry succeeds
+    monkeypatch.undo()
+    reg.create("trading", admin="seb")
+    assert reg.exists("trading")

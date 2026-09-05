@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -77,14 +78,23 @@ class Registry:
         d = self.graph_dir(name)
         if self.exists(name):
             raise GraphError(f"graph '{name}' already exists on this server")
-        d.mkdir(parents=True, exist_ok=True)
-        repo = d / "repo.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
-        for key, value in (("http.receivepack", "true"),
-                           ("receive.maxInputSize", "104857600")):   # 100 MB per push
-            subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
-        install_server(repo)
-        return self.mint(name, admin, "admin")
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            repo = d / "repo.git"
+            subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
+            for key, value in (("http.receivepack", "true"),
+                               ("receive.maxInputSize", "104857600")):   # 100 MB per push
+                subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+            install_server(repo)
+            return self.mint(name, admin, "admin")
+        except GraphError:
+            # A half-made repo that exists() calls valid would accept pushes with no gate, forever.
+            shutil.rmtree(d, ignore_errors=True)
+            raise
+        except Exception as e:
+            # A half-made repo that exists() calls valid would accept pushes with no gate, forever.
+            shutil.rmtree(d, ignore_errors=True)
+            raise GraphError(f"could not create graph '{name}': {e}") from e
 
     # ---------------------------------------------------------------- files
 
