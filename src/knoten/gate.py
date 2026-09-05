@@ -211,15 +211,40 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool) -> bool:
             blob = str(inv["blob"]).encode()
             try:
                 by = C.verify_invite(prev, blob, str(inv["sig"]))
-                C.check_blob(C.parse_blob(blob), graph_name_at(sha, gdir), name, entry["role"])
+                # The graph's name is read at the PARENT, not at sha: reading it at sha
+                # let a same-commit rename of graph.yaml's `name:` make an invite issued
+                # for one graph verify against whatever name the joiner picked for it in
+                # the very commit being judged. At the parent, the name is whatever it
+                # was a moment before this commit -- something the invite's signer could
+                # actually have seen and signed for.
+                C.check_blob(C.parse_blob(blob), graph_name_at(f"{sha}^", gdir), name, entry["role"])
             except GraphError as e:
                 say(f"{where}: {e}")
                 return False
             if entry.get("invited_by") not in (None, by):
                 say(f"{where}: {name}'s entry names a different inviter than the one who signed")
                 return False
-            # The invite is the admin's half. The commit must be the newcomer's: signed by
-            # the very key the entry publishes, or eve could arrive with maria's invite.
+            # An invite authorises adding exactly one name to contributors.yaml -- nothing
+            # about the rest of the tree. Without this, a join commit was accepted
+            # wholesale on the invite plus the newcomer's signature, so a `read` invite
+            # bought its holder one unrestricted write to the entire graph (any node,
+            # graph.yaml, anything else bundled into the same commit).
+            target = f"{gdir}/{C.FILE}" if gdir else C.FILE
+            r = _git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", f"{sha}^", sha)
+            if r.returncode != 0:
+                raise GraphError(f"cannot diff {sha[:7]}")
+            paths = {p for p in r.stdout.decode("utf-8", "surrogateescape").split("\0") if p}
+            if paths != {target}:
+                say(f"{where}: a join may change nothing but {C.FILE}")
+                return False
+            # The invite is the admin's half: it authorises this name and role. This is
+            # the other half -- the commit must be signed by the very key the entry
+            # publishes, so the person who committed the entry is the person who holds
+            # that key. The invite itself binds no key, so this does NOT stop someone else
+            # arriving with maria's invite under a key of their own: whoever holds the
+            # invite (the blob+sig pair) can join as the invited name with any key. That is
+            # the invite-by-code model for phase 2 -- an invite grants the invited role
+            # under the invited name to whoever holds it; the role cannot be escalated.
             status, _ = signature(sha, {name: entry["key"]})
             if status == "G":
                 return True

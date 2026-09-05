@@ -512,6 +512,9 @@ def test_a_join_with_a_valid_invite_lands_signed_by_the_newcomer(signed, keys_di
 @pytest.mark.parametrize("graph, name, role", [
     ("other", "maria", "write"), ("test", "eve", "write"), ("test", "maria", "admin")])
 def test_an_invite_for_something_else_is_refused(signed, keys_dir, graph, name, role):
+    """graph.yaml itself is untouched here, so this graph's name is `test` whether it is
+    read at sha or at the parent -- the `other` case below is what actually exercises
+    reading it at the parent."""
     origin, work, k = signed
     maria = make_key(keys_dir, "maria")
     add_person(work, "maria", maria, "write", invited_by="seb",
@@ -522,6 +525,62 @@ def test_an_invite_for_something_else_is_refused(signed, keys_dir, graph, name, 
 
     assert r.returncode != 0
     assert "different name, role or graph" in r.stderr
+
+
+def test_a_join_may_not_touch_anything_but_contributors_yaml(signed, keys_dir):
+    """A `read` invite must not buy its holder one unrestricted write to the graph: the
+    join branch used to approve the whole commit on the invite plus the newcomer's
+    signature alone, checking nothing about what else the commit touched."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "read", invited_by="seb",
+               invite=invite_for(k["seb"], "test", "maria", "read"))
+    (work / "g" / "nodes" / "hyp-ok.md").write_text(
+        "---\nid: hyp-ok\ntype: hypothesis\nstatus: alive\n---\n\n# rewritten by the joiner\n",
+        encoding="utf-8")
+    commit_signed(work, "maria joins and rewrites a node", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "a join may change nothing but" in r.stderr
+    tree = git("show", "master:g/nodes/hyp-ok.md", cwd=origin).stdout
+    assert "rewritten by the joiner" not in tree
+
+
+def test_an_invite_is_checked_against_the_graph_name_before_this_commit(signed, keys_dir):
+    """The invite's `graph` field would bind nothing if the joiner could pick the name in
+    the same commit: an invite signed for a graph named `other`, alongside a same-commit
+    rename of graph.yaml's `name:` to `other`, must still be refused -- the name is read
+    at the PARENT, before this commit's own rewrite. (With the previous fix in place this
+    is refused for touching graph.yaml at all, not reaching the name check; either way it
+    must not land.)"""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write", invited_by="seb",
+               invite=invite_for(k["seb"], "other", "maria", "write"))
+    (work / "g" / "graph.yaml").write_text(
+        (work / "g" / "graph.yaml").read_text(encoding="utf-8").replace("name: test", "name: other"),
+        encoding="utf-8")
+    commit_signed(work, "maria joins and renames the graph to match her invite", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "name: test" in git("show", "master:g/graph.yaml", cwd=origin).stdout
+
+
+def test_a_join_naming_a_different_inviter_is_refused(signed, keys_dir):
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write", invited_by="eve",
+               invite=invite_for(k["seb"], "test", "maria", "write"))
+    commit_signed(work, "maria joins claiming eve invited her", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "different inviter" in r.stderr
 
 
 def test_an_invite_signed_by_a_writer_is_refused(signed, keys_dir):
@@ -615,6 +674,8 @@ def test_a_writer_may_not_become_admin_by_moving_the_graph(signed, keys_dir):
     r = push(work)
 
     assert r.returncode != 0
-    assert "not signed by an admin" in r.stderr
+    # Discriminates the removal-at-g branch from the bootstrap branch a naive per-gdir
+    # check could have taken for the new h directory alone.
+    assert "changes contributors.yaml and is not signed by an admin" in r.stderr
     tree = git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
     assert "g/contributors.yaml" in tree
