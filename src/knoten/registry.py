@@ -135,6 +135,7 @@ class Registry:
         return entry["role"]
 
     def revoke(self, name: str, user: str) -> None:
+        self.repo(name)
         with graph_lock(self.graph_dir(name)):
             tokens = self._read(name, "tokens.json")
             if user not in tokens:

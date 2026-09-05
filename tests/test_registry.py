@@ -154,6 +154,14 @@ def test_revoking_a_stranger_is_an_error(reg):
         reg.revoke("trading", "ghost")
 
 
+def test_revoking_on_an_unknown_graph_is_a_graph_error(reg):
+    """graph_lock opens a file inside the graph directory. Without an existence check
+    first, a well-formed name for a graph that does not exist raised a raw
+    FileNotFoundError instead of the one-line refusal every other method gives."""
+    with pytest.raises(GraphError, match="no graph 'biology'"):
+        reg.revoke("biology", "maria")
+
+
 # ---------------------------------------------------------------- invites
 
 def test_an_invite_redeems_once_into_a_working_token(reg):
