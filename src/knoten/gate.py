@@ -30,14 +30,16 @@ ZERO = re.compile(r"^0+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 
 
-def _git(*args: str, input: bytes | None = None) -> subprocess.CompletedProcess:
+def _git(*args: str, input: bytes | None = None,
+         repo: Path | None = None) -> subprocess.CompletedProcess:
     # subprocess.run() rejects stdin= together with input=, so the two are exclusive: an
     # explicit input still pipes it in, but with no input the child gets /dev/null, never
     # the hook's own stdin. That stdin IS git's ref list; a child that read from it instead
     # of getting EOF (`git verify-commit`/gpg, Task 4) would consume lines the outer loop
     # in main() still needs to read.
     kw = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
-    return subprocess.run(["git", *args], capture_output=True,
+    cmd = ["git", *(["-C", str(repo)] if repo else []), *args]
+    return subprocess.run(cmd, capture_output=True,
                           env={**os.environ, **SERVER_GIT_ENV}, **kw)
 
 
@@ -45,13 +47,13 @@ def say(msg: str) -> None:
     print(f"knoten: {msg}", file=sys.stderr, flush=True)
 
 
-def graph_dirs(rev: str) -> list[str]:
+def graph_dirs(rev: str, repo: Path | None = None) -> list[str]:
     """Directories at `rev` that hold a graph: a `graph.yaml` blob and a `nodes` tree.
 
     Read from the tree listing, never from disk: a symlink is a 120000 blob in git, so it
     can never pass as the `nodes` tree, and no file has to touch the filesystem to be
     ruled out. '' names a graph at the repo root."""
-    r = _git("ls-tree", "-r", "-t", "-z", rev)
+    r = _git("ls-tree", "-r", "-t", "-z", rev, repo=repo)
     if r.returncode != 0:
         raise GraphError(f"cannot read the tree at {rev[:7]}")
     yamls, nodes = set(), set()
@@ -120,21 +122,21 @@ def validate_tree(rev: str, gdir: str, ref: str) -> bool:
         return bool(payload["valid"])
 
 
-def _show(rev: str, path: str) -> bytes | None:
-    r = _git("show", f"{rev}:{path}")
+def _show(rev: str, path: str, repo: Path | None = None) -> bytes | None:
+    r = _git("show", f"{rev}:{path}", repo=repo)
     return r.stdout if r.returncode == 0 else None
 
 
-def contributors_at(rev: str, gdir: str) -> dict | None:
+def contributors_at(rev: str, gdir: str, repo: Path | None = None) -> dict | None:
     path = f"{gdir}/{C.FILE}" if gdir else C.FILE
-    raw = _show(rev, path)
+    raw = _show(rev, path, repo=repo)
     if raw is None:
         return None
     return C.parse(raw.decode("utf-8", "replace"), f"{path} at {rev[:7]}")
 
 
-def graph_name_at(rev: str, gdir: str) -> str:
-    raw = _show(rev, f"{gdir}/graph.yaml" if gdir else "graph.yaml") or b""
+def graph_name_at(rev: str, gdir: str, repo: Path | None = None) -> str:
+    raw = _show(rev, f"{gdir}/graph.yaml" if gdir else "graph.yaml", repo=repo) or b""
     try:
         return str((yaml.safe_load(raw) or {}).get("name", ""))
     except yaml.YAMLError:

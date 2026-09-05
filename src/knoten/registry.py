@@ -21,6 +21,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import gate
 from .core import (GraphError, ID_RE, MAX_NAME, MAX_PUSH_BYTES, SERVER_GIT_ENV, graph_lock,
                    write_atomic)
 from .hook import install_server
@@ -122,6 +123,20 @@ class Registry:
         if not r.is_dir():
             raise GraphError(f"no graph '{name}' on this server")
         return r
+
+    def head_graph(self, name: str) -> tuple[dict | None, str]:
+        """The hosted repo's contributors.yaml at HEAD and its graph name. None for a
+        phase-1 graph or an empty repo. A signed remote holds one graph: the server has
+        to know WHICH contributors.yaml an invite is checked against."""
+        repo = self.repo(name)
+        if gate._git("rev-parse", "--verify", "-q", "HEAD", repo=repo).returncode != 0:
+            return None, ""
+        dirs = gate.graph_dirs("HEAD", repo=repo)
+        if len(dirs) > 1:
+            raise GraphError(f"graph '{name}' holds {len(dirs)} graphs; a signed remote holds one")
+        if not dirs:
+            return None, ""
+        return gate.contributors_at("HEAD", dirs[0], repo=repo), gate.graph_name_at("HEAD", dirs[0], repo=repo)
 
     def create(self, name: str, admin: str) -> str:
         """A bare repo with the gate already installed. Returns the creating admin's
@@ -235,7 +250,8 @@ class Registry:
 
     # ---------------------------------------------------------------- invites
 
-    def invite(self, name: str, user: str, role: str, days: int = 7, by: str = "") -> str:
+    def invite(self, name: str, user: str, role: str, days: int = 7, by: str = "",
+              blob: str = "", sig: str = "") -> str:
         self._check(name, user, role)
         try:
             days = int(days)
@@ -250,22 +266,28 @@ class Registry:
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")
             # `by` so revoking an admin can take their outstanding invites with them, and
-            # so the list an admin reads says who let each pending person in.
-            invites[_hash(code)] = {"name": user, "role": role, "expires": expires, "by": by}
+            # so the list an admin reads says who let each pending person in. `blob`/`sig`
+            # are the admin's signed authorisation on a signed graph, kept so the joiner
+            # can be handed the same proof they will need for their join commit.
+            invites[_hash(code)] = {"name": user, "role": role, "expires": expires, "by": by,
+                                    "blob": blob, "sig": sig}
             self._write(name, "invites.json", invites)
         return code
 
     def invites(self, name: str) -> list[dict]:
         """The open invites, without their hashes. An admin needs to see who is still
-        pending; the hash is the one thing in that file worth stealing."""
+        pending; the hash and the signed blob/sig are not for this listing -- it is for
+        humans deciding who to expect, not a place to keep the signature alive."""
         self.repo(name)
         return [{"name": e.get("name", ""), "role": e.get("role", ""),
                  "expires": e.get("expires", ""), "by": e.get("by", "")}
                 for e in self._read(name, "invites.json").values()]
 
-    def redeem(self, name: str, code: str) -> tuple[str, str, str]:
-        """One use. Returns (user, role, token). The code is removed on first try
-        whether or not it was still live, so an expired code cannot be retried."""
+    def redeem(self, name: str, code: str) -> tuple[str, str, str, dict]:
+        """One use. Returns (user, role, token, extra) where extra is the admin's signed
+        blob/sig and who issued it (empty strings on an unsigned invite). The code is
+        removed on first try whether or not it was still live, so an expired code cannot
+        be retried."""
         self.repo(name)
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")
@@ -284,4 +306,6 @@ class Registry:
             raise GraphError("that invite has expired; ask the admin for a new one")
         # Outside the lock: mint takes it again, and flock on a fresh handle would wait
         # on our own lock forever.
-        return entry["name"], entry["role"], self.mint(name, entry["name"], entry["role"])
+        extra = {"blob": entry.get("blob", ""), "sig": entry.get("sig", ""),
+                 "by": entry.get("by", "")}
+        return entry["name"], entry["role"], self.mint(name, entry["name"], entry["role"]), extra

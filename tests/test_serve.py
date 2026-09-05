@@ -516,6 +516,79 @@ def test_an_absurd_invite_lifetime_is_a_400_not_a_dropped_connection(hub, tradin
     assert "between 1 and 365" in body["error"]
 
 
+# ---------------------------------------------------------------- signed invites
+
+from conftest import commit_signed, make_key, pub_line
+from knoten import contributors as C
+from knoten.keys import INVITE_NS, sign
+
+
+@pytest.fixture
+def signed_trading(hub, trading, keys_dir):
+    """`trading` bootstrapped: contributors.yaml lists seb as admin, pushed signed.
+    Returns the fixture dict plus seb's private key under "seb_key"."""
+    work = trading["work"]
+    seb = make_key(keys_dir, "seb")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb creates the graph", seb)
+    r = git("push", "-q", "origin", "master", cwd=work)
+    assert r.returncode == 0, r.stderr
+    return {**trading, "seb_key": seb}
+
+
+def invite_body(priv, graph, name, role):
+    blob = C.invite_blob(graph, name, role, "2099-01-01", "n0nce")
+    return {"name": name, "role": role, "days": 7, "blob": blob.decode(),
+            "sig": sign(priv, blob, INVITE_NS)}
+
+
+def test_a_signed_graph_refuses_an_unsigned_invite(hub, signed_trading):
+    status, body = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                       ("seb", signed_trading["admin"]))
+    assert status == 400
+    assert "signed" in body["error"]
+
+
+def test_a_stolen_admin_token_cannot_mint_an_invite(hub, signed_trading, keys_dir):
+    """The token says who is connecting; the key says who is authorising. An invite
+    signed by any key but the admin's own is refused even with the admin's token."""
+    eve = make_key(keys_dir, "eve")
+    status, body = api(hub, "/trading/invite", invite_body(eve, "test", "maria", "write"),
+                       ("seb", signed_trading["admin"]))
+    assert status == 403
+    assert "your own signing key" in body["error"]
+
+
+def test_an_admin_signed_invite_is_stored_and_handed_to_the_joiner(hub, signed_trading):
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+    status, got = api(hub, "/trading/invite", body, ("seb", signed_trading["admin"]))
+    assert status == 200, got
+
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+
+    assert status == 200
+    assert joined["blob"] == body["blob"] and joined["sig"] == body["sig"] and joined["by"] == "seb"
+    assert hub.registry.authenticate("trading", "maria", joined["token"]) == "write"
+
+
+def test_an_invite_whose_blob_disagrees_with_the_request_is_refused(hub, signed_trading):
+    """The signed bytes say maria/write; the request says maria/admin. The signature is
+    real, the request is not what was signed."""
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+    body["role"] = "admin"
+    status, got = api(hub, "/trading/invite", body, ("seb", signed_trading["admin"]))
+    assert status == 400
+    assert "different name, role or graph" in got["error"]
+
+
+def test_a_phase_1_graph_still_invites_without_a_signature(hub, trading):
+    status, got = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                      ("seb", trading["admin"]))
+    assert status == 200
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+    assert status == 200 and joined["blob"] == "" and joined["sig"] == ""
+
+
 # ---------------------------------------------------------------- the invite list
 
 def test_an_admin_can_list_the_open_invites(hub, trading):

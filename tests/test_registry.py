@@ -173,7 +173,7 @@ def test_an_invite_redeems_once_into_a_working_token(reg):
     reg.create("trading", admin="seb")
     code = reg.invite("trading", "maria", "write")
 
-    user, role, tok = reg.redeem("trading", code)
+    user, role, tok, _ = reg.redeem("trading", code)
 
     assert (user, role) == ("maria", "write")
     assert reg.authenticate("trading", "maria", tok) == "write"
@@ -363,3 +363,55 @@ def test_revoking_an_admin_kills_the_invites_they_issued(reg):
     with pytest.raises(GraphError, match="not valid"):
         reg.redeem("trading", code)
     assert reg.invites("trading") == []
+
+
+# ---------------------------------------------------------------- signed invites
+
+from conftest import commit_signed, make_key, pub_line
+from knoten import contributors as C
+
+
+def test_head_graph_is_none_for_a_fresh_or_phase_1_repo(reg):
+    reg.create("trading", admin="seb")
+    assert reg.head_graph("trading") == (None, "")
+
+
+def test_head_graph_reads_contributors_and_the_graph_name(reg, tmp_path, keys_dir, rules_yaml):
+    reg.create("trading", admin="seb")
+    seb = make_key(keys_dir, "seb")
+    work = tmp_path / "w"
+    from conftest import git
+    git("clone", "-q", str(reg.repo("trading")), str(work), cwd=tmp_path)
+    for c in (["config", "user.email", "t@t.t"], ["config", "user.name", "t"]):
+        git(*c, cwd=work)
+    (work / "nodes").mkdir()
+    (work / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (work / "nodes" / "hyp-ok.md").write_text(
+        "---\nid: hyp-ok\ntype: hypothesis\nstatus: open\n---\n\n# ok\n", encoding="utf-8")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb creates the graph", seb)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+
+    contribs, name = reg.head_graph("trading")
+
+    assert contribs == {"seb": {"key": pub_line(seb), "role": "admin"}}
+    assert name == "test"
+
+
+def test_invite_stores_and_redeem_returns_the_signed_blob(reg):
+    reg.create("trading", admin="seb")
+    code = reg.invite("trading", "maria", "write", by="seb", blob='{"x":1}', sig="SIG")
+
+    user, role, token, extra = reg.redeem("trading", code)
+
+    assert (user, role) == ("maria", "write")
+    assert extra == {"blob": '{"x":1}', "sig": "SIG", "by": "seb"}
+    assert reg.authenticate("trading", "maria", token) == "write"
+
+
+def test_invites_listing_never_shows_the_signature_or_blob(reg):
+    """The blob is harmless but the listing is for humans; keep it to who and when."""
+    reg.create("trading", admin="seb")
+    reg.invite("trading", "maria", "write", by="seb", blob='{"x":1}', sig="SIG")
+    (entry,) = reg.invites("trading")
+    assert set(entry) == {"name", "role", "expires", "by"}

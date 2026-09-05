@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+from . import contributors as C
 from .core import GraphError, MAX_PUSH_BYTES, SERVER_GIT_ENV
 from .registry import Registry
 
@@ -336,9 +337,9 @@ class _Handler(BaseHTTPRequestHandler):
             # /join needs no credentials, so it must not become a name oracle: an
             # unknown graph gets the same 400 a wrong code gets, not "no graph 'x'".
             return self._refuse(400, "knoten: that invite code is not valid for this graph")
-        user, role, token = self.server.registry.redeem(name, body.get("code", ""))
+        user, role, token, extra = self.server.registry.redeem(name, body.get("code", ""))
         self.log_message(f"join:{role}", name, user, 200)
-        self._json(200, {"name": user, "role": role, "token": token})
+        self._json(200, {"name": user, "role": role, "token": token, **extra})
 
     def _admin(self, name: str) -> str | None:
         """The calling admin's name, or None after having refused the request.
@@ -360,10 +361,26 @@ class _Handler(BaseHTTPRequestHandler):
             days = int(body.get("days", 7))
         except (TypeError, ValueError):
             raise GraphError("days must be a whole number") from None
+        contribs, graph_name = self.server.registry.head_graph(name)
+        blob, sig = str(body.get("blob", "")), str(body.get("sig", ""))
+        if contribs is not None:
+            # A signed graph: the token opened the door, the key has to authorise. The
+            # invite must be signed by the calling admin's OWN key, as listed at HEAD, so
+            # a stolen admin token mints nothing without the admin's machine.
+            if not blob or not sig:
+                raise GraphError("this graph is signed; invites must carry the admin's signature")
+            try:
+                signer = C.verify_invite(contribs, blob.encode(), sig)
+            except GraphError:
+                signer = ""
+            if signer != admin:
+                return self._refuse(403, "knoten: the invite must be signed with your own signing key")
+            C.check_blob(C.parse_blob(blob.encode()), graph_name, body.get("name", ""),
+                         body.get("role", "write"))
         # `by`, so revoking this admin takes the invites they issued with them. The range
         # check on days lives in the registry, next to the timedelta that overflowed.
         code = self.server.registry.invite(name, body.get("name", ""), body.get("role", "write"),
-                                    days, by=admin)
+                                    days, by=admin, blob=blob, sig=sig)
         self.log_message(f"invite:{body.get('name', '')}", name, admin, 200)
         self._json(200, {"code": code})
 
