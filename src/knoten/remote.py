@@ -15,6 +15,7 @@ import base64
 import getpass
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -128,14 +129,22 @@ def _api(url: str, body: dict, auth: tuple[str, str] | None = None) -> dict:
 
 
 def _explain(stderr: str) -> str:
-    """git prints only a status code for an HTTP refusal. Say what it means."""
+    """git prints only a status code for an HTTP refusal. Say what it means.
+
+    A bare substring search for "401"/"403" also matched git's own URL line
+    (`fatal: unable to access 'http://127.0.0.1:36605/trading.git/': The requested
+    URL returned error: 403`), so any host, port or graph name that happened to
+    contain those three digits flipped the verdict — the `hub` fixture binds
+    port 0, and plenty of ephemeral ports contain "401". Match git's phrasing,
+    not the digits.
+    """
     # A relayed `remote:` line can itself contain "401" or "403" (a node id, a rule
     # message) — match only git's own lines, or a rule violation reads as a credential
     # problem.
     own = "\n".join(l for l in stderr.splitlines() if not l.startswith("remote:"))
-    if any(m in own for m in ("401", "Authentication failed", "terminal prompts disabled")):
+    if re.search(r"returned error: 401\b|HTTP 401\b|Authentication failed|terminal prompts disabled", own):
         return "credentials refused; the token may have been revoked. Ask for a new invite."
-    if "403" in own:
+    if re.search(r"returned error: 403\b|HTTP 403\b", own):
         return "this token has read access, not write"
     if "pre-receive hook declined" in stderr:
         return "the server refused the push; fix the violations above and push again"

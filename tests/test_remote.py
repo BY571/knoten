@@ -8,7 +8,7 @@ import pytest
 
 from knoten.cli import main
 from knoten.core import GraphError
-from knoten.remote import cred_lookup, cred_path, cred_store, credential_helper
+from knoten.remote import _explain, cred_lookup, cred_path, cred_store, credential_helper
 
 
 def git(*args, cwd, env=None):
@@ -221,6 +221,25 @@ def test_a_rule_message_containing_401_is_not_mistaken_for_a_credential_problem(
     assert "live-claims-must-cite-their-gates" in err
     assert "credentials refused" not in err
     assert "refused the push" in err
+
+
+def test_explain_is_not_fooled_by_digits_in_gits_own_url_line():
+    """`_explain` used to bare-substring-search for "401"/"403", which also matched
+    git's own `fatal: unable to access '...'` line whenever the port or graph name in
+    the URL happened to contain those three digits. A port of 34012 turned a real 403
+    into "credentials refused"; a port of 35403 turned a real 401 into "read access,
+    not write". Neither port carries the phrase git actually uses for the error."""
+    read_only = (
+        "fatal: unable to access 'http://127.0.0.1:34012/trading.git/': "
+        "The requested URL returned error: 403"
+    )
+    assert "read access, not write" in _explain(read_only)
+
+    bad_token = (
+        "fatal: unable to access 'http://127.0.0.1:35403/trading.git/': "
+        "The requested URL returned error: 401"
+    )
+    assert "credentials refused" in _explain(bad_token)
 
 
 def test_push_without_a_remote_says_so(local_graph, monkeypatch, capsys):
