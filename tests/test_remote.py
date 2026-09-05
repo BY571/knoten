@@ -1,5 +1,6 @@
 """The client side of a remote graph: a credential store git calls through its own
 credential-helper protocol, and commands that wrap git plus four JSON calls."""
+import json
 import os
 import stat
 
@@ -473,3 +474,45 @@ def test_a_push_that_fails_after_creation_says_the_graph_already_exists(hub, loc
     err = capsys.readouterr().err
     assert "EXISTS" in err and "knoten remote add" in err
     assert hub.registry.exists("trading"), "the message would be a lie"
+
+
+# ---------------------------------------------------------------- the invite list
+
+def test_invites_lists_who_has_not_arrived_yet(hub, shared, capsys):
+    """An invite is a bearer secret sitting on the server until it is used. An admin who
+    cannot list them cannot tell a forgotten one from a revoked one."""
+    assert main(["invite", "maria", "--role", "read", "--expires", "3"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+
+    assert main(["invites"]) == 0
+    out = capsys.readouterr().out
+    assert "maria" in out and "read" in out
+    assert code not in out, "the list handed the invite code back out"
+
+    assert main(["invites", "--json"]) == 0
+    listed = json.loads(capsys.readouterr().out)["invites"]
+    assert listed[0]["name"] == "maria" and listed[0]["by"] == "seb"
+
+
+def test_invites_is_empty_once_they_are_all_redeemed(hub, shared, capsys):
+    """Redeemed straight through the registry, not `knoten join`: joining rewrites this
+    machine's one credentials file for this URL, and the admin needs their own token back
+    to ask the question."""
+    main(["invite", "maria"])
+    code = capsys.readouterr().out.strip().split()[-1]
+    hub.registry.redeem("trading", code)
+
+    assert main(["invites"]) == 0
+    assert "no open invites" in capsys.readouterr().out
+
+
+def test_only_an_admin_can_list_the_invites(hub, shared, tmp_path, monkeypatch, capsys):
+    main(["invite", "maria"])
+    code = capsys.readouterr().out.strip().split()[-1]
+    monkeypatch.chdir(tmp_path)
+    main(["join", f"{hub.url}/trading", "--invite", code])
+    monkeypatch.chdir(tmp_path / "trading")
+    capsys.readouterr()
+
+    assert main(["invites"]) == 1
+    assert "only an admin" in capsys.readouterr().err

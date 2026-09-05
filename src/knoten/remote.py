@@ -260,6 +260,11 @@ def invite(root: Path, name: str, role: str = "write", days: int = 7) -> str:
     return _api(f"{base}/invite", {"name": name, "role": role, "days": days}, auth)["code"]
 
 
+def invites(root: Path) -> list[dict]:
+    base, auth = _graph_api(root)
+    return _api(f"{base}/invites", {}, auth)["invites"]
+
+
 def revoke(root: Path, name: str) -> None:
     base, auth = _graph_api(root)
     _api(f"{base}/revoke", {"name": name}, auth)

@@ -211,6 +211,8 @@ def viz_cmd(root, out, show) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- remote and server
+
 def hook(root, force) -> int:
     h = install_hook(root, force=force)
     print(f"  ✓ installed {h}")
@@ -245,6 +247,24 @@ def invite_cmd(root, name, role, days) -> int:
     code = remote.invite(root, name, role, days)
     print(f"  ✓ {name} may join as {role} for {days} day(s). Send them this code, once:")
     print(f"    {code}")
+    return 0
+
+
+def render_invites(payload: dict) -> None:
+    rows = payload["invites"]
+    if not rows:
+        print("  no open invites")
+        return
+    width = max(len(r["name"]) for r in rows)
+    for r in rows:
+        by = f"  (invited by {r['by']})" if r["by"] else ""
+        print(f"  {r['name']:{width}}  {r['role']:6}  expires {r['expires'][:10]}{by}")
+
+
+def invites_cmd(root, as_json=False) -> int:
+    """Who was invited and has not arrived. Without this an admin cannot tell a forgotten
+    invite from a revoked one, and an invite is a bearer secret sitting on the server."""
+    _emit({"invites": remote.invites(root)}, as_json, render_invites)
     return 0
 
 
@@ -686,6 +706,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--role", default="write", choices=ROLES)
     s.add_argument("--expires", type=int, default=7, metavar="DAYS")
 
+    s = sub.add_parser("invites", help="admin: list the invites nobody has redeemed yet")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
+
     s = sub.add_parser("join", help="redeem an invite and clone the graph")
     s.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
     s.add_argument("--invite", required=True, metavar="CODE")
@@ -784,6 +807,7 @@ def main(argv=None) -> int:
             "push":   lambda: remote.push(root),
             "pull":   lambda: remote.pull(root),
             "invite": lambda: invite_cmd(root, args.name, args.role, args.expires),
+            "invites": lambda: invites_cmd(root, args.json),
             "revoke": lambda: revoke_cmd(root, args.name),
         }[args.cmd]()
     except (GraphError, OSError) as e:
