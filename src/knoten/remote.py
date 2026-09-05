@@ -12,6 +12,7 @@ The owner secret for a server is stored under the bare host with user `owner`.
 from __future__ import annotations
 
 import base64
+import getpass
 import json
 import os
 import subprocess
@@ -128,9 +129,13 @@ def _api(url: str, body: dict, auth: tuple[str, str] | None = None) -> dict:
 
 def _explain(stderr: str) -> str:
     """git prints only a status code for an HTTP refusal. Say what it means."""
-    if any(m in stderr for m in ("401", "Authentication failed", "terminal prompts disabled")):
+    # A relayed `remote:` line can itself contain "401" or "403" (a node id, a rule
+    # message) — match only git's own lines, or a rule violation reads as a credential
+    # problem.
+    own = "\n".join(l for l in stderr.splitlines() if not l.startswith("remote:"))
+    if any(m in own for m in ("401", "Authentication failed", "terminal prompts disabled")):
         return "credentials refused; the token may have been revoked. Ask for a new invite."
-    if "403" in stderr:
+    if "403" in own:
         return "this token has read access, not write"
     if "pre-receive hook declined" in stderr:
         return "the server refused the push; fix the violations above and push again"
@@ -155,8 +160,13 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
     host_url = f"{u.scheme}://{u.netloc}"
     secret = owner_secret or (cred_lookup(host_url) or ("", ""))[1]
     if not secret:
-        import getpass
-        secret = getpass.getpass(f"owner secret for {u.netloc}: ")
+        try:
+            secret = getpass.getpass(f"owner secret for {u.netloc}: ")
+        except EOFError:
+            # No terminal to prompt on (cron, CI, a pipe): a raw traceback here would
+            # break "no tracebacks for user error", so this is a refusal like any other.
+            raise GraphError(f"no owner secret for {u.netloc}; pass --owner-secret, or "
+                             "run this where a prompt can be answered") from None
     if admin is None:
         admin = _git(repo, "config", "user.name").stdout.strip().lower().replace(" ", "-")
     if not ID_RE.match(admin or ""):

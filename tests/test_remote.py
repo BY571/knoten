@@ -155,6 +155,18 @@ def test_remote_create_with_the_wrong_owner_secret_is_one_line(hub, local_graph,
     assert "owner secret" in err and "Traceback" not in err
 
 
+def test_remote_create_with_no_secret_and_no_terminal_is_one_line(hub, local_graph, monkeypatch, capsys):
+    """getpass raises EOFError when stdin is not a terminal. From a script or CI that
+    was a traceback instead of the one line every other refusal gives."""
+    import io
+    monkeypatch.chdir(local_graph)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb"]) == 1
+    err = capsys.readouterr().err
+    assert "owner secret" in err and "Traceback" not in err
+
+
 def test_push_goes_through_the_gate(hub, shared, capsys):
     commit_node(shared, "hyp-x.md", "---\nid: hyp-x\ntype: hypothesis\nstatus: alive\n---\n\n# x\n")
 
@@ -193,6 +205,19 @@ def test_push_with_a_read_token_is_explained_not_dumped(hub, shared, tmp_path, m
 
     assert main(["push"]) == 1
     assert "read access, not write" in capsys.readouterr().err
+
+
+def test_a_rule_message_containing_401_is_not_mistaken_for_a_credential_problem(hub, shared, capsys):
+    """The gate's remote: lines share stderr with git's own. A node id with 401 in it
+    used to make the summary say "credentials refused" for a plain rule violation."""
+    commit_node(shared, "hyp-401-alive.md",
+                "---\nid: hyp-401-alive\ntype: hypothesis\nstatus: alive\n---\n\n# x\n")
+
+    assert main(["push"]) == 1
+    err = capsys.readouterr().err
+    assert "live-claims-must-cite-their-gates" in err
+    assert "credentials refused" not in err
+    assert "refused the push" in err
 
 
 def test_push_without_a_remote_says_so(local_graph, monkeypatch, capsys):
