@@ -37,6 +37,45 @@ WRITE = "git-receive-pack"
 KEEP_ENV = ("PATH", "HOME", "LANG", "TMPDIR")
 
 
+def _pkt_lines(data: bytes):
+    """The payload of each pkt-line in `data`: four hex digits of length, then that many
+    bytes including the header. `0000` is a flush. Stops at the first thing that is not
+    one rather than guessing."""
+    i = 0
+    while i + 4 <= len(data):
+        try:
+            size = int(data[i:i + 4], 16)
+        except ValueError:
+            return
+        if size == 0:                          # flush-pkt
+            i += 4
+            continue
+        if size < 4 or i + size > len(data):
+            return
+        yield data[i + 4:i + size]
+        i += size
+
+
+def _push_refused(body: bytes) -> bool:
+    """Did receive-pack decline this push?
+
+    http-backend exits 0 and answers 200 either way, so the verdict has to be read out of
+    the response. Grepping the whole body for git's words read the hook's stderr too,
+    which echoes back the paths in the pushed tree: a graph in a directory named
+    `denying x` made a push that landed log as refused, and every such phrase is
+    attacker-chosen. Band 1 carries report-status and nothing else. There, `ng <ref>
+    <reason>` is a rejection and `ok <ref>` is not, and a ref name cannot contain a
+    space, so there is nothing to spoof.
+    """
+    packets = list(_pkt_lines(body))
+    if any(p[:1] in (b"\x01", b"\x02", b"\x03") for p in packets):
+        # side-band-64k: band 1 is report-status, band 2 the hook's own stderr. Band 1 is
+        # itself a pkt-line stream, so it is unwrapped twice.
+        packets = list(_pkt_lines(b"".join(p[1:] for p in packets if p[:1] == b"\x01")))
+    # Without side-band the body IS report-status, and no unwrapping is needed.
+    return any(p.startswith(b"ng ") for p in packets)
+
+
 def _field(value) -> str:
     """One event, one line. A Basic username is chosen by whoever is connecting and is
     logged BEFORE authentication on the refused-push path, so a newline in it wrote a
@@ -155,7 +194,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _route(self) -> None:
         path, _, query = self.path.partition("?")
-        self._answered = False                 # a connection serves more than one request
+        # HTTP/1.0 here, so this is one request per connection today. Reset anyway: the
+        # flag is wrong the moment keep-alive is switched on, and it would be wrong
+        # silently, on the path that exists to stop a second response being written.
+        self._answered = False
         try:
             if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
                 # _body only ever reads Content-Length bytes, so a chunked body arrives as
@@ -247,12 +289,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._refuse(500, "knoten: git http-backend failed on the server; see its log")
         if push:
             # http-backend exits 0 and answers 200 when the gate refuses: the refusal
-            # travels in the sideband, not in the status line. A log that reads 200 for a
-            # rejected push cannot answer the one question it is kept for, which is
-            # whether that push landed. git puts these two phrases in the sideband, one
-            # for the hook and one for the deny* config.
-            refused = b"pre-receive hook declined" in out or b"denying " in out
-            self.log_message(WRITE, name, user, "refused" if refused else status)
+            # travels inside the response, not in the status line. A log that reads 200
+            # for a rejected push cannot answer the one question it is kept for.
+            self.log_message(WRITE, name, user,
+                             "refused" if _push_refused(out) else status)
         self.send_response(status)
         for key, value in headers:
             self.send_header(key, value)

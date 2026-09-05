@@ -868,3 +868,30 @@ def test_every_connection_gets_the_read_timeout(hub, trading, monkeypatch):
 
     assert serve_mod._Handler.timeout == 30
     assert seen == [30]
+
+
+def test_a_path_that_reads_like_a_refusal_does_not_log_as_one(hub, trading, rules_yaml,
+                                                              capfd):
+    """The verdict used to be grepped out of the whole response, which carries the hook's
+    stderr, and the hook echoes back the paths in the pushed tree. A graph in a directory
+    named `denying x` therefore made a push that LANDED log as refused, and every phrase
+    the grep looked for is chosen by whoever is pushing."""
+    work = trading["work"]
+    spoof = work / "denying x"
+    (spoof / "nodes").mkdir(parents=True)
+    (spoof / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
+    (spoof / "nodes" / "hyp-s.md").write_text(
+        "---\nid: hyp-s\ntype: hypothesis\nstatus: open\n---\n\n# s\n", encoding="utf-8")
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "a second graph in a directory named like a refusal", cwd=work)
+    capfd.readouterr()
+
+    r = git("push", "origin", "master", cwd=work)
+
+    assert r.returncode == 0, r.stderr
+    # The hook's stderr travels to the CLIENT on band 2, inside the same response the
+    # verdict is read from. If it were not there, this test would spoof nothing.
+    assert "denying x" in r.stderr, r.stderr
+    err = capfd.readouterr().err
+    pushes = [l for l in err.splitlines() if "git-receive-pack" in l]
+    assert pushes and pushes[-1].endswith(" 200"), err
