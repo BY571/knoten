@@ -70,9 +70,9 @@ or retracts the old one, never an edit to it.
 
 ## Before you work
 
-If the graph is shared, `git pull` FIRST. Every read below answers from the files on
-disk, so a stale clone reports work a collaborator settled days ago as still open. That
-is the exact failure this graph exists to prevent, arriving through the back door.
+If the graph has a remote, `knoten pull` FIRST. Every read below answers from the files
+on disk, so a stale clone reports work a collaborator settled days ago as still open.
+That is the exact failure this graph exists to prevent, arriving through the back door.
 
 1. `knoten frontier` — what is worth doing next: open work, dead ends whose stated
    reopen condition may now hold, and gates nothing has been through.
@@ -91,7 +91,9 @@ is the exact failure this graph exists to prevent, arriving through the back doo
    graph and the one that would otherwise be lost. Use `knoten update <id> --status dead
    --append <file> --field cause=<value>` instead if you opened the node earlier.
 6. `knoten attach <id> <files...>` — the script that ran it and the plot that shows it.
-   A claim nobody can re-run is a claim nobody trusts in six months.
+   A claim nobody can re-run is a claim nobody trusts in six months. If the graph has a
+   remote, `knoten push` when the node is filed; the server runs the same rules and
+   refuses what this clone would have.
 
 ## When you run out of ideas
 

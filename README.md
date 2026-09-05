@@ -90,7 +90,8 @@ knoten attach hyp-idea run.py accuracy.png       # the code and the plot
 
 knoten validate               # enforce this graph's rules
 knoten hook                   # make `git commit` refuse a broken graph
-knoten hook --server g.git    # ...and `git push`, for every contributor
+knoten remote create g --on https://graphs.example   # share it
+knoten invite maria --role write                     # let someone in
 knoten viz --open             # the whole graph as one HTML file
 ```
 
@@ -137,35 +138,43 @@ tags:       [decoding, reasoning, prompting, evaluation]
 
 ## A shared graph
 
-A graph is a folder in git, so a whole lab can work in one, and "has this been tried?"
-stops quietly meaning "have *I* tried this?". Sharing one needs no knoten at all:
+One graph, several people, one set of rules enforced for all of them. A remote is a
+`knoten serve` process on any machine you can reach over HTTPS: a box you own behind a
+reverse proxy or a tunnel, a small VPS, or a hosted knoten.
 
 ```bash
-git init --bare lab-graph.git        # on any box you can all reach
-git clone you@box:lab-graph.git      # everyone else, human or agent
+# you, once, in your graph
+knoten remote create trading --on https://graphs.example
+knoten invite maria --role write        # prints a one-time code
+
+# maria, anywhere
+knoten join https://graphs.example/trading --invite 7f3a-...
+knoten frontier                         # her clone; the loop is unchanged from here
+knoten push                             # over HTTPS, through the gate
 ```
 
-What knoten adds is the gate. `knoten hook` protects the person who ran it, in the clone
-they ran it in, and `git commit --no-verify` walks past it. `knoten hook --server
-lab-graph.git` installs a `pre-receive` hook on the repo everyone pushes *to*: it unpacks
-each pushed tree, finds every graph in it, runs `knoten validate` on each and refuses the
-push if any fails. No CI, no runner, no minutes, and nobody can skip it from a laptop.
+Every push runs `knoten validate` on the server before the ref moves, so a node that
+breaks the graph's rules is refused for everyone, including whoever wrote the rules, and
+including anyone who never installed `knoten hook`. That matters more here than it
+looks: the parser refuses rather than skips, on purpose, so on one machine a malformed
+node is your problem and on a shared one it would be everybody's.
 
-That gate matters more here than it looks. The parser refuses rather than skips, on
-purpose, so one malformed node does not quietly vanish from the graph. On one machine
-that is a good trade. On a shared one it means a single bad push breaks `frontier`,
-`index` and `gates` for **everyone** until somebody fixes a file they did not write.
+`read` can clone and pull. `write` can push. `admin` can invite and revoke. Tokens say
+who is connecting and nothing else; what a token can do is the role the admin gave it.
 
-Two people working at once do not collide: an edge is declared once, on the subject, and
-back-links are generated at load, so adding connections touches two different files and
-git merges them. Pull before you work, or your frontier will recommend something a
-collaborator killed on Tuesday.
+Reading needs nothing installed. Nodes are markdown, and `knoten viz` writes the graph as
+one self-contained HTML file you can hand to someone who has never heard of knoten.
 
-Reading needs nothing installed. Nodes are markdown, so any forge renders them, and
-`knoten viz` writes the graph as one self-contained HTML file you can hand to someone who
-has never heard of knoten. For invitations, per-user permissions or required approvals,
-put the repo on a forge such as [Forgejo](https://forgejo.org) and let it handle the
-people; the gate above still does the part no forge can.
+To run the server:
+
+```bash
+knoten serve --data ~/knoten-remotes       # prints the owner secret once; keep it
+```
+
+It binds localhost and speaks plain HTTP. Put TLS in front before anyone outside the
+machine connects. For a graph that lives in a bare repo you administer yourself, without
+a server, `knoten hook --server <repo.git>` installs the same gate as a `pre-receive`
+hook.
 
 ## For agents
 

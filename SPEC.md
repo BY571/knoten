@@ -51,8 +51,10 @@ A system that stores only conclusions would have preserved ~15% of that.
 
 ## 2. Non-goals
 
-- **We do not build a Git host.** Git already provides versioning, branching, blame,
-  diffs, PRs (peer review!) and hosting. Reimplementing any of it is madness.
+- **We do not build a general git host.** We host knoten graphs, because the permission
+  model (who may write, who verified what) is part of the graph and no general host can
+  enforce it. Git still provides versioning, branching, blame, diffs and history; we
+  write none of that.
 - **We do not build a UI first.** A static site generator over the graph is a
   phase-3 nicety, and it can emit its own JSON when it exists.
 - **We do not invent a vocabulary.** Micropublications and nanopublications already
@@ -377,7 +379,7 @@ body the day a graph outgrows a tag-filtered index — which the 1k–5k node ca
 | **2** | **Tool-protocol server** | ✅ done — later demoted to a fallback, then removed (§8) |
 | **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind every read, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
-| 4 | Hosted multi-graph service | probably never needed |
+| 4 | **Remote graphs**: `knoten serve`, invites, roles, the gate on push | ✅ transport done; signed identity and verification follow |
 
 Phase 0 **validated the schema against real content** — including retractions, structural
 blockers, and prose that no JSON schema could hold.
