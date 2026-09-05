@@ -15,6 +15,8 @@ from . import attachments, ops, viz
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook, install_server
+from .registry import ROLES, Registry
+from .serve import make_server
 from .validate import _csv, applies, load_config
 
 # Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
@@ -223,6 +225,29 @@ def server_hook(repo, force) -> int:
     print("    `git push` now runs `knoten validate` on the pushed tree and refuses a")
     print("    broken graph — for every contributor, including the ones who never ran")
     print("    `knoten hook` and the ones who used `git commit --no-verify`.")
+    return 0
+
+
+def serve_cmd(data, bind) -> int:
+    """Run on the server. Prints the owner secret the first time a data directory is
+    used, because that is the one moment the owner is certainly at the keyboard."""
+    host, _, port = bind.rpartition(":")
+    host = host or "127.0.0.1"
+    reg = Registry(Path(data))
+    first = not (reg.data / "owner").exists()
+    secret = reg.owner_secret()
+    srv = make_server(reg, host, int(port))
+    if first:
+        print(f"  owner secret (shown once, keep it somewhere safe): {secret}")
+    if host not in ("127.0.0.1", "localhost"):
+        print("  warning: plain HTTP on a non-local address. Put TLS in front (a reverse "
+              "proxy or a tunnel) before anyone outside this machine connects.",
+              file=sys.stderr)
+    print(f"  serving {reg.data} on http://{host}:{srv.server_address[1]}  (ctrl-c to stop)")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
     return 0
 
 
@@ -597,6 +622,10 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true",
                    help="overwrite a hook knoten did not write")
 
+    s = sub.add_parser("serve", help="host remote graphs (run this on the server)")
+    s.add_argument("--data", required=True, metavar="DIR", help="where graphs and tokens live")
+    s.add_argument("--bind", default="127.0.0.1:8899", metavar="HOST:PORT")
+
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
@@ -647,6 +676,9 @@ def main(argv=None) -> int:
         # Both bypass find_root(): `init` has no graph yet, and a bare repo never has one.
         if args.cmd == "hook" and args.server is not None:
             return server_hook(args.server, args.force)
+
+        if args.cmd == "serve":
+            return serve_cmd(args.data, args.bind)
 
         root = find_root()
         return {

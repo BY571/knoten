@@ -263,3 +263,34 @@ def test_a_non_numeric_days_is_a_400(hub, trading):
 def test_unknown_paths_are_404(hub):
     status, _ = api(hub, "/trading/steal", {})
     assert status == 404
+
+
+# ---------------------------------------------------------------- the cli
+
+def test_serve_prints_the_owner_secret_exactly_once(tmp_path, monkeypatch, capsys):
+    """Shown on first run, when the directory is created, and never again: the secret
+    on a terminal scrollback is one thing, in every restart's log is another."""
+    from http.server import ThreadingHTTPServer
+    from knoten.cli import main
+
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", lambda self: None)
+
+    assert main(["serve", "--data", str(tmp_path / "d"), "--bind", "127.0.0.1:0"]) == 0
+    first = capsys.readouterr().out
+    assert main(["serve", "--data", str(tmp_path / "d"), "--bind", "127.0.0.1:0"]) == 0
+    second = capsys.readouterr().out
+
+    secret = (tmp_path / "d" / "owner").read_text().strip()
+    assert secret in first
+    assert secret not in second
+    assert "serving" in second
+
+
+def test_serve_warns_when_bound_to_a_non_local_address(tmp_path, monkeypatch, capsys):
+    from http.server import ThreadingHTTPServer
+    from knoten.cli import main
+
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", lambda self: None)
+    main(["serve", "--data", str(tmp_path / "d"), "--bind", "0.0.0.0:0"])
+
+    assert "plain HTTP" in capsys.readouterr().err
