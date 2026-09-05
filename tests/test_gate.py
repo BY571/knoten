@@ -894,3 +894,105 @@ def test_a_graph_whose_every_writer_is_revoked_accepts_nothing(signed, keys_dir)
 
     assert r.returncode != 0
     assert "signed by a key not listed here" in r.stderr
+
+
+# ------------------------------------------- a constitution with no graph under it
+
+def test_a_writer_cannot_plant_a_constitution_where_no_graph_is_yet(signed, keys_dir):
+    """The per-commit loop walked graph dirs, and every rule in it keys on
+    contributors.yaml. So `mine/contributors.yaml` alone, with no graph.yaml and no
+    nodes/, was judged by nobody: it landed, and the NEXT commit added the graph around
+    it, where the constitution reads as unchanged and is checked against the key it
+    names. Two commits, and the writer is admin of a second graph the server then chokes
+    on."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+
+    (work / "mine").mkdir()
+    C.dump(work / "mine", {"maria": {"key": pub_line(maria), "role": "admin"}})
+    commit_signed(work, "maria plants a constitution of her own", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "starts a second contributors.yaml" in r.stderr
+    assert "mine/contributors.yaml" not in git("ls-tree", "-r", "--name-only", "master",
+                                               cwd=origin).stdout
+
+
+def test_a_retired_graphs_constitution_is_still_guarded(signed, keys_dir):
+    """An admin may retire a graph, which leaves contributors.yaml with no graph under
+    it. While that was true the directory was invisible to the loop, so a writer could
+    rewrite the constitution wholesale -- dropping the admin -- and restore nodes/ in a
+    second commit. The file is watched wherever it is, graph or no graph."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    assert push(work).returncode == 0
+    git("rm", "-rq", "g/nodes", cwd=work)
+    commit_signed(work, "seb retires the graph", k["seb"])
+    assert push(work).returncode == 0, "an admin may retire their own graph"
+
+    C.dump(work / "g", {"maria": {"key": pub_line(maria), "role": "admin"}})
+    commit_signed(work, "maria rewrites the constitution of a graph nobody is watching", maria)
+
+    r = push(work)
+
+    assert r.returncode != 0
+    assert "revoked, never removed" in r.stderr
+    assert "seb" in git("show", "master:g/contributors.yaml", cwd=origin).stdout
+
+
+def test_a_retired_graphs_admins_are_still_the_only_founders(signed, keys_dir):
+    """Who may lay down a second constitution is read from the constitutions at the
+    parent, and a retired graph still has one. Reading only the parent's GRAPH dirs left
+    nobody to vouch for anything the moment a graph was retired, so any writer could
+    found its successor and be its admin. Seb still can; maria still cannot."""
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    commit_signed(work, "seb adds maria", k["seb"])
+    git("rm", "-rq", "g/nodes", cwd=work)
+    commit_signed(work, "seb retires the graph", k["seb"])
+    assert push(work).returncode == 0
+
+    (work / "next").mkdir()
+    C.dump(work / "next", {"maria": {"key": pub_line(maria), "role": "admin"}})
+    commit_signed(work, "maria founds the successor and crowns herself", maria)
+    r = push(work)
+    assert r.returncode != 0
+    assert "starts a second contributors.yaml" in r.stderr
+
+    git("reset", "-q", "--hard", "HEAD~1", cwd=work)
+    (work / "next").mkdir()
+    C.dump(work / "next", {"seb": {"key": pub_line(k["seb"]), "role": "admin"}})
+    commit_signed(work, "seb founds the successor", k["seb"])
+
+    assert push(work).returncode == 0, "an admin could not found the successor"
+
+
+# ------------------------------------------------- a tag is not a branch, ever
+
+def test_a_refused_tag_does_not_spend_the_one_creation_a_push_may_make(bare, monkeypatch,
+                                                                      capsys):
+    """A push carrying a tag and a branch. The tag is refused for being a tag; if it also
+    counted as the push's one creation, the BRANCH line would carry the refusal and the
+    pusher would read the wrong ref as the problem. Driven through `main` so the tag line
+    is certainly read first, against a hosted repo that holds the objects but no ref."""
+    origin, work = bare
+    sha = seeded(work)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+    git("update-ref", "-d", "refs/heads/master", cwd=origin)   # the objects stay, the ref goes
+    monkeypatch.chdir(origin)
+
+    rc = gate.main(io.StringIO(f"{'0' * 40} {sha} refs/tags/v1\n"
+                               f"{'0' * 40} {sha} refs/heads/master\n"))
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert f"refs/tags/v1: {gate.ONE_BRANCH}" in err
+    assert f"refs/heads/master: {gate.ONE_BRANCH}" not in err

@@ -340,6 +340,24 @@ def test_it_gates_a_force_push(server):
     assert "rewritten" not in history(bare)
 
 
+def test_a_tag_is_refused_even_before_the_first_branch(server):
+    """The branch count reads `refs/heads/` only and cannot see a tag, so a tag pushed
+    into a repo with no branch was told "none here" and landed -- and the branch still
+    landed after it, which is two refs on a graph that has one. Counting `refs/` instead
+    would be worse: the tag would block the branch forever. A ref that is not a branch is
+    simply not a shape a hosted graph has."""
+    bare, work = server
+    commit(work, "a clean graph")
+    git("tag", "v1", cwd=work)
+
+    r = git("push", "origin", "v1", cwd=work)
+
+    assert r.returncode != 0
+    assert "new branches and tags are refused" in r.stderr
+    assert git("tag", cwd=bare).stdout.strip() == ""
+    assert push(work).returncode == 0, "the branch the tag went in front of must still land"
+
+
 def test_it_gates_a_tag(server):
     """A tag is a second ref on a graph that has one line of history: a published
     snapshot nobody pulls, whose tree no later push ever revisits. Refused as a ref,

@@ -257,7 +257,10 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
         # writer planted a graph in a fresh directory naming themselves its sole admin,
         # and the server's head_graph then died with "holds 2 graphs" for everyone.
         elders = {}
-        for d in sorted(parent_dirs):
+        # Every constitution at the parent, not just the ones with a graph under them: a
+        # graph an admin has retired still says who its admins are, and they are exactly
+        # the people who may found its successor.
+        for d in (contributors_dirs(f"{sha}^") if has_parent else []):
             other = contributors_at(f"{sha}^", d)
             if other is not None:
                 elders.update(C.admins(other))
@@ -380,6 +383,13 @@ def check_ref(old: str, new: str, ref: str) -> bool:
         say(f"{ref}: hosted graphs keep their history; refs are not deleted")
         return False
     if ZERO.match(old):
+        if not ref.startswith("refs/heads/"):
+            # A hosted graph has a branch and nothing else. The branch count below reads
+            # `refs/heads/` only, so it cannot see a tag: into a repo with no branch a tag
+            # answered "none here", landed, and the branch still landed after it. Counting
+            # `refs/` instead would be worse -- a tag would then block the branch forever.
+            say(f"{ref}: {ONE_BRANCH}")
+            return False
         r = _git("for-each-ref", "--format=%(refname)", "refs/heads/")
         if r.returncode != 0:
             raise GraphError(f"cannot list the branches already here, for {ref}")
@@ -423,7 +433,19 @@ def check_ref(old: str, new: str, ref: str) -> bool:
         # still checked against who could write to g a moment before this commit.
         now = frozenset(graph_dirs(sha))
         before = frozenset(graph_dirs(f"{sha}^")) if has_parent else frozenset()
-        for gdir in sorted(now | before):
+        # Every rule in check_commit keys on contributors.yaml, but the loop used to
+        # visit only directories that hold a GRAPH at this commit or its parent. A
+        # directory with a constitution and no graph was therefore judged by nobody: a
+        # writer could plant `mine/contributors.yaml` naming themselves admin (invisible,
+        # `mine` is not a graph dir) and add `mine/graph.yaml` and `mine/nodes/` in a
+        # second commit, where the constitution now reads as unchanged and is checked
+        # against their own key. The same blind spot let a writer rewrite the constitution
+        # of a graph an admin had retired, dropping the admin, while its directory held no
+        # graph at either end. Watch wherever a constitution is or was, not where a graph is.
+        watched = now | before | frozenset(contributors_dirs(sha))
+        if has_parent:
+            watched |= frozenset(contributors_dirs(f"{sha}^"))
+        for gdir in sorted(watched):
             if not check_commit(sha, gdir, ref, has_parent,
                                 is_graph=gdir in now, parent_dirs=before):
                 ok = False
@@ -460,7 +482,10 @@ def main(stdin=None) -> int:
                 say(f"{ref}: {ONE_BRANCH}, and one refused ref refuses the whole push")
                 ok = False
                 continue
-            born = True
+            # Only a branch spends it. A tag is refused by check_ref whatever else is in
+            # the push, and letting it spend the allowance made the BRANCH line carry the
+            # refusal -- the pusher then read the wrong ref as the problem.
+            born = ref.startswith("refs/heads/")
         try:
             if not check_ref(old, new, ref):
                 ok = False

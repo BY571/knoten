@@ -736,6 +736,41 @@ def test_a_bootstrap_may_not_bundle_anything_else(hub, trading, keys_dir):
     assert hub.registry.head_graph("trading")[0] is None, "the graph is still unsigned"
 
 
+def test_a_write_token_cannot_plant_a_second_constitution_through_the_hub(hub, signed_trading,
+                                                                         tmp_path, keys_dir):
+    """The exploit end to end: a listed writer pushes `mine/contributors.yaml` and
+    nothing else. It names no graph, so the per-commit walk never looked at it, and the
+    next commit could put a graph around it. Two graphs in one hosted repo is also the
+    state where `head_graph` refuses to answer, so the real admin's `/invite` starts
+    returning 400 and only the writer's own graph still works."""
+    work, seb = signed_trading["work"], signed_trading["seb_key"]
+    maria_key = make_key(keys_dir, "maria")
+    contribs = C.load(work)
+    contribs["maria"] = {"key": pub_line(maria_key), "role": "write"}
+    C.dump(work, contribs)
+    commit_signed(work, "seb adds maria", seb)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+
+    tok = hub.registry.mint("trading", "maria", "write")
+    dest = tmp_path / "maria"
+    git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(dest), cwd=tmp_path)
+    git("config", "user.email", "m@m.m", cwd=dest); git("config", "user.name", "m", cwd=dest)
+    (dest / "mine").mkdir()
+    C.dump(dest / "mine", {"maria": {"key": pub_line(maria_key), "role": "admin"}})
+    commit_signed(dest, "maria plants a constitution of her own", maria_key)
+
+    r = git("push", "origin", "master", cwd=dest)
+
+    assert r.returncode != 0
+    assert "starts a second contributors.yaml" in r.stderr
+    assert set(hub.registry.head_graph("trading")[0]) == {"seb", "maria"}
+
+    status, got = api(hub, "/trading/invite", invite_body(seb, "test", "friend", "write"),
+                      ("seb", signed_trading["admin"]))
+    assert status == 200, got
+    assert got["code"], "the admin's own route stopped working"
+
+
 def test_a_graph_whose_nodes_are_gone_is_broken_not_unsigned(hub, signed_trading):
     """An admin may retire their graph's contents; the gate allows exactly that. What
     must not happen is the server then reading a tip that still holds contributors.yaml
