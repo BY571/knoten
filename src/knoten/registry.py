@@ -138,7 +138,9 @@ class Registry:
         if not ID_RE.match(name or "") or not self.exists(name):
             return None
         entry = self._read(name, "tokens.json").get(user or "")
-        if not entry or not hmac.compare_digest(entry["hash"], _hash(token)):
+        # .get, not entry["hash"]: a hand-edited or truncated tokens.json then fails
+        # closed (no entry matches) instead of a traceback on every request for that user.
+        if not entry or not hmac.compare_digest(entry.get("hash", ""), _hash(token)):
             return None
         return entry["role"]
 

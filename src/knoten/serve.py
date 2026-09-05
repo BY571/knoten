@@ -155,6 +155,8 @@ class _Handler(BaseHTTPRequestHandler):
             key, _, value = line.partition(":")
             if key.strip().lower() == "status":
                 status, saw_status = int(value.strip().split()[0]), True
+            elif key.strip().lower() == "content-length":
+                pass  # knoten sends its own Content-Length below; relaying http-backend's too would duplicate the header
             elif key.strip():
                 headers.append((key.strip(), value.strip()))
         if r.returncode != 0:

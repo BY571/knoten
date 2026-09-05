@@ -148,7 +148,7 @@ knoten remote create trading --on https://graphs.example
 knoten invite maria --role write        # prints a one-time code
 
 # maria, anywhere
-knoten join https://graphs.example/trading --invite 7f3a-...
+knoten join https://graphs.example/trading --invite 7f3a9c...
 knoten frontier                         # her clone; the loop is unchanged from here
 knoten push                             # over HTTPS, through the gate
 ```
