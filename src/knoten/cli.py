@@ -791,19 +791,20 @@ def main(argv=None) -> int:
             return gate.main()
 
         if args.cmd == "key":
-            name = args.name or remote._git(Path.cwd(), "config", "user.name").stdout.strip().lower().replace(" ", "-")
+            name = args.name or remote.default_signing_name()
             priv = ensure_key(name)
             print(f"  {public_line(priv)}")
             print(f"    signs as {name}; private half at {priv}. Never share that file.")
             return 0
 
         if args.cmd == "join":
-            clone, name, role = remote.join(args.url, args.invite, args.dest)
+            clone, name, role, signed = remote.join(args.url, args.invite, args.dest)
             print(f"  ✓ joined as {name} ({role}), cloned to {clone}/")
-            gname = remote._graph_dir(clone)
-            gdir = clone / gname if gname is not None else None
-            if gdir is not None and C.load(gdir) is not None:
+            if signed:
                 print(f"    a signing key was made for {name}; this clone signs its own commits")
+            elif role == "read":
+                print("    read access: this clone can pull. Readers are not listed in "
+                      f"{C.FILE} and hold no signing key.")
             print(f"    cd {clone} && knoten frontier")
             return 0
 

@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 
 from . import contributors as C
 from . import gate
-from .core import GraphError, ID_RE, _yaml, today
+from .core import GraphError, ID_RE, MAX_DAYS, MAX_NAME, _yaml, today
 from .keys import INVITE_NS, configure_signing, ensure_key, key_dir, public_line, sign
 
 
@@ -242,7 +242,7 @@ def _graph_name(root: Path) -> str:
     return name
 
 
-def _graph_dir(repo: Path) -> str | None:
+def _graph_subdir(repo: Path) -> str | None:
     """Which directory inside `repo` holds ITS graph, at HEAD: `''` for the root, a
     subpath in a monorepo layout. `None` when there is no graph at all. More than one is
     refused here in one line -- exactly the ambiguity the gate itself would face, and
@@ -254,6 +254,17 @@ def _graph_dir(repo: Path) -> str | None:
             f"Your clone and credentials are in place; add yourself to the right "
             f"{C.FILE} by hand.")
     return dirs[0] if dirs else None
+
+
+def default_signing_name(cwd: Path | None = None) -> str:
+    """Who this machine signs as when nobody said: git's own `user.name`, lower-cased and
+    hyphenated into an id. Raises rather than returning "" -- an empty name reached
+    `ensure_key` as a key file with no name, and the refusal it gave there blamed the
+    name instead of saying what to do about it."""
+    name = _git(cwd or Path.cwd(), "config", "user.name").stdout.strip().lower().replace(" ", "-")
+    if not name:
+        raise GraphError("pass a name or set git config user.name")
+    return name
 
 
 def _bootstrap(root: Path, repo: Path, admin: str) -> None:
@@ -304,7 +315,7 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
                              "run this where a prompt can be answered") from None
     if admin is None:
         admin = _git(repo, "config", "user.name").stdout.strip().lower().replace(" ", "-")
-    if not ID_RE.match(admin or ""):
+    if not ID_RE.match(admin or "") or len(admin) > MAX_NAME:
         raise GraphError(f"'{admin}' is not a valid contributor name; pass --as NAME (kebab-case)")
 
     # Local work, and idempotent: a refusal here creates nothing on the server, and a
@@ -373,8 +384,8 @@ def invite(root: Path, name: str, role: str = "write", days: int = 7) -> str:
         # Bounded before it ever reaches timedelta: unbounded, a huge --expires overflows
         # timedelta with a raw OverflowError, well before the server gets a chance to
         # enforce the very same bound itself.
-        if not 1 <= int(days) <= 365:
-            raise GraphError("days must be between 1 and 365")
+        if not 1 <= int(days) <= MAX_DAYS:
+            raise GraphError(f"days must be between 1 and {MAX_DAYS}")
         priv = _my_key(contribs, auth[0])
         graph = _graph_name(root)
         expires = (datetime.now(timezone.utc) + timedelta(days=int(days))).date().isoformat()
@@ -450,9 +461,11 @@ def revoke(root: Path, name: str) -> None:
     _api(f"{base}/revoke", {"name": name}, auth)
 
 
-def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
-    """Redeem the code, remember the token, clone. Nothing is written to disk until the
-    server has accepted the code, so a wrong code leaves no half-made clone behind."""
+def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str, bool]:
+    """Redeem the code, remember the token, clone. Returns (clone, name, role, signed),
+    where `signed` says whether this join put a signing key and an entry in the graph.
+    Nothing is written to disk until the server has accepted the code, so a wrong code
+    leaves no half-made clone behind."""
     url = url.rstrip("/")
     git_url = url + ".git"
     got = _api(f"{url}/join", {"code": code})
@@ -461,7 +474,8 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
     # it: a credential for a remote the user never joined, on a host they never named.
     user, role = got.get("name", ""), got.get("role", "")
     token = got.get("token", "")
-    if (not ID_RE.match(user or "") or role not in ("read", "write", "admin")
+    if (not ID_RE.match(user or "") or len(user) > MAX_NAME
+            or role not in ("read", "write", "admin")
             or not token or any(c.isspace() for c in token)):
         raise GraphError("the server's reply was malformed")
     cred_store(git_url, user, token)
@@ -478,10 +492,17 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
             f"are saved, so finish by hand: git clone {git_url} <dir> && cd <dir> && "
             f"knoten remote add {url}")
     _wire(target, git_url)
+    if role == "read":
+        # A reader is not listed. contributors.yaml says who may WRITE here, and every
+        # entry in it is a key the gate will accept a commit from; a reader has nothing to
+        # sign and no commit to make, so making them a key and pushing an entry only asked
+        # the server for a write it would refuse anyway. Their token is the whole of their
+        # access, and it is the admin's to revoke.
+        return target, user, role, False
     # A hosted graph may sit at the clone's root or, in a monorepo layout, a subdirectory
     # of it -- the gate itself has to answer this same question on every push, so it is
     # asked here rather than assumed to be the root.
-    gname = _graph_dir(target)
+    gname = _graph_subdir(target)
     gdir = target / gname if gname is not None else None
     contribs = C.load(gdir) if gdir is not None else None
     if contribs is not None:
@@ -519,4 +540,5 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
                 f"the gate refused your join commit: {_explain(r.stderr)}. Your clone and "
                 f"credentials are in place; ask the admin for a fresh invite and run "
                 f"`knoten join` again with --dest pointing at a new directory.")
-    return target, user, role
+        return target, user, role, True
+    return target, user, role, False

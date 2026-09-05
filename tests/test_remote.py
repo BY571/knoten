@@ -233,7 +233,7 @@ def test_pull_brings_a_collaborators_node_down(hub, shared, tmp_path, monkeypatc
     """A minted token alone no longer earns a push on a signed graph: the graph is
     signed, so a collaborator has to be listed and sign, which is what `join` is for."""
     code = remote.invite(shared, "maria", "write")
-    other, _, _ = remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "maria"))
+    other, _, _, _ = remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "maria"))
     commit_node(other, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
     assert git("push", "-q", "origin", "master", cwd=other).returncode == 0
 

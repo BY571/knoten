@@ -23,7 +23,7 @@ from .keys import INVITE_NS, allowed_signers, verify
 FILE = "contributors.yaml"
 ROLES = ("read", "write", "admin")
 
-_REVOKED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_REVOKED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\Z")   # `\Z`, not `$`: `$` lets a trailing newline through
 
 
 def load(root: Path) -> dict | None:
@@ -116,7 +116,16 @@ def diff(prev: dict | None, cur: dict) -> tuple[dict, dict, set]:
 
 def invite_blob(graph: str, name: str, role: str, expires: str, nonce: str) -> bytes:
     """Canonical bytes: sorted keys, no whitespace. The same five fields always serialise
-    the same way, so a signature made on one machine verifies on another."""
+    the same way, so a signature made on one machine verifies on another.
+
+    Which field is enforced where, because it is not the same answer for all five.
+    `graph`, `name` and `role` are checked twice, against what the entry claims: by the
+    server at `/invite` (against HEAD) and again by the gate at the join commit (against
+    the parent). `expires` is enforced by nothing that reads THIS blob -- the server
+    checks its OWN invite record's expiry at `/join`, and the gate cannot, because a
+    commit's timestamp is chosen by whoever made it. `nonce` is checked nowhere at all;
+    it only keeps two invites for the same name and role from being the same bytes, and
+    therefore the same signature."""
     return json.dumps({"expires": expires, "graph": graph, "name": name, "nonce": nonce,
                        "role": role}, sort_keys=True, separators=(",", ":")).encode()
 
