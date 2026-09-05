@@ -743,23 +743,135 @@ def test_revoke_is_recorded_in_the_graph_before_the_token_dies(hub, shared_signe
     record exists even if the API call then fails."""
     assert main(["invite", "maria"]) == 0
     code = capsys.readouterr().out.strip().split()[-1]
+    admin = cred_lookup(f"{hub.url}/trading.git")  # admin's own token, before maria's join overwrites it
+
     monkeypatch.chdir(tmp_path)
     assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
     clone = tmp_path / "trading"
     git("config", "user.email", "m@m.m", cwd=clone); git("config", "user.name", "maria", cwd=clone)
+    maria = cred_lookup(f"{hub.url}/trading.git")
 
+    # The credential store is one machine's, keyed by remote URL: admin and maria are on
+    # separate machines in reality, each with their own store for this same URL. Restore
+    # each in turn to simulate that, since the test runs both in one shared file.
+    cred_store(f"{hub.url}/trading.git", *admin)
     monkeypatch.chdir(shared_signed)
     assert main(["revoke", "maria"]) == 0
 
+    hosted = hub.registry.repo("trading")
+    assert git("log", "-1", "--format=%s", cwd=hosted).stdout.strip() == "seb revokes maria"
     contribs, _ = hub.registry.head_graph("trading")
     assert contribs["maria"]["revoked"] == today()
-    assert hub.registry.authenticate("trading", "maria", "anything") is None
+    assert hub.registry.authenticate("trading", *maria) is None
+
+    cred_store(f"{hub.url}/trading.git", *maria)
     commit_node(clone, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
     monkeypatch.chdir(clone)
     assert main(["push"]) == 1
+    assert "credentials refused" in capsys.readouterr().err
 
 
 def test_revoking_a_name_the_graph_does_not_list_is_one_line(hub, shared_signed, monkeypatch, capsys):
     monkeypatch.chdir(shared_signed)
     assert main(["revoke", "ghost"]) == 1
     assert "not listed" in capsys.readouterr().err
+
+
+def test_only_an_admin_can_revoke(hub, shared_signed, tmp_path, monkeypatch, capsys):
+    assert main(["invite", "maria"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    clone = tmp_path / "trading"
+    git("config", "user.email", "m@m.m", cwd=clone); git("config", "user.name", "maria", cwd=clone)
+
+    monkeypatch.chdir(clone)
+    assert main(["revoke", "seb"]) == 1
+    assert "only an admin can revoke" in capsys.readouterr().err
+    hosted = hub.registry.repo("trading")
+    assert "revokes" not in git("log", "-1", "--format=%s", cwd=hosted).stdout
+
+
+def test_revoke_refuses_when_your_key_is_not_the_one_the_graph_lists(hub, shared_signed, keys_dir, capsys, monkeypatch):
+    """Same guard `invite` has, exercised through `revoke`'s own code path: seb's token
+    gets in, but this machine no longer holds seb's key, so nothing here can be signed
+    as him."""
+    (key_dir() / "seb").unlink(); (key_dir() / "seb.pub").unlink()
+    monkeypatch.chdir(shared_signed)
+
+    assert main(["revoke", "ghost"]) == 1
+    assert "different key" in capsys.readouterr().err
+
+
+def test_a_failed_server_revoke_after_a_successful_push_is_not_swallowed(hub, shared_signed, tmp_path,
+                                                                         monkeypatch, capsys):
+    """The mark landing in the graph is not full success on its own: the server has to
+    hear about it too, or a live token keeps working. A failure here must say so and
+    exit 1, not print success while the token stays alive."""
+    assert main(["invite", "maria"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+    admin = cred_lookup(f"{hub.url}/trading.git")  # admin's own token, before maria's join overwrites it
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    cred_store(f"{hub.url}/trading.git", *admin)
+    monkeypatch.chdir(shared_signed)
+
+    real_api = remote._api
+    def flaky(url, body, auth=None):
+        if url.endswith("/revoke"):
+            raise GraphError("server exploded")
+        return real_api(url, body, auth)
+    monkeypatch.setattr(remote, "_api", flaky)
+
+    assert main(["revoke", "maria"]) == 1
+    err = capsys.readouterr().err
+    assert "can still connect with a live token" in err
+    assert "knoten revoke maria" in err
+    # The graph mark itself is unaffected by the API call's failure: it already landed,
+    # signed and pushed, before `/revoke` was ever called.
+    assert C.load(shared_signed)["maria"]["revoked"] == today()
+
+
+def test_revoke_is_idempotent_so_a_failed_server_call_can_be_retried(hub, shared_signed, tmp_path,
+                                                                     monkeypatch, capsys):
+    """The retry item 1 promises has to be possible: re-running `revoke` on someone
+    already marked revoked must not redo the mark or the commit, only retry `/revoke`."""
+    assert main(["invite", "maria"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+    admin = cred_lookup(f"{hub.url}/trading.git")
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    cred_store(f"{hub.url}/trading.git", *admin)
+    monkeypatch.chdir(shared_signed)
+
+    real_api = remote._api
+    calls = []
+    def flaky_once(url, body, auth=None):
+        if url.endswith("/revoke"):
+            calls.append(1)
+            if len(calls) == 1:
+                raise GraphError("server exploded")
+        return real_api(url, body, auth)
+    monkeypatch.setattr(remote, "_api", flaky_once)
+
+    assert main(["revoke", "maria"]) == 1
+    hosted = hub.registry.repo("trading")
+    sha_after_first_call = git("rev-parse", "HEAD", cwd=hosted).stdout.strip()
+
+    assert main(["revoke", "maria"]) == 0
+    assert git("rev-parse", "HEAD", cwd=hosted).stdout.strip() == sha_after_first_call
+    assert len(calls) == 2
+    assert hub.registry.authenticate("trading", "maria", "anything") is None
+
+
+def test_revoke_refuses_when_this_clone_cannot_sign(hub, shared_signed, capsys, monkeypatch):
+    """A clone recovered with a bare `git clone` + `knoten remote add` never ran
+    `configure_signing`, so `user.signingkey` is empty here -- caught before `_my_key` is
+    asked to check a key file named by the empty string."""
+    git("config", "--unset", "user.signingkey", cwd=shared_signed)
+    monkeypatch.chdir(shared_signed)
+
+    assert main(["revoke", "ghost"]) == 1
+    err = capsys.readouterr().err
+    assert "no signing key configured" in err
+    assert "knoten key seb" in err

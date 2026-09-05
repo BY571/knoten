@@ -215,6 +215,18 @@ def _my_key(contribs: dict, name: str) -> Path:
     return priv
 
 
+def _commit_file(repo: Path, pathspec: str, message: str) -> str | None:
+    """Stage exactly `pathspec` and commit it -- never `add -A`, which in the enclosing
+    repo would also stage every unrelated untracked file a monorepo layout allows next to
+    the graph. `None` on success; the first non-empty stderr line on failure, so the
+    caller can say what that means and how to recover."""
+    _git(repo, "add", "--", pathspec)
+    r = _git(repo, "commit", "-q", "-m", message)
+    if r.returncode != 0:
+        return next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
+    return None
+
+
 def _graph_name(root: Path) -> str:
     """The graph's own `name:`, read straight from `graph.yaml` -- not through
     `validate.load_config`, whose full schema check would refuse an invite over a
@@ -264,14 +276,9 @@ def _bootstrap(root: Path, repo: Path, admin: str) -> None:
     priv = ensure_key(admin)
     configure_signing(repo, priv)
     C.dump(root, {admin: {"key": public_line(priv), "role": "admin"}})
-    # Only contributors.yaml: `add -A` in the enclosing repo would also stage every
-    # unrelated untracked file the monorepo layout allows next to this graph, and
-    # remote_create would then push it with no listing or confirmation.
-    _git(repo, "add", "--", str(root / C.FILE))
-    r = _git(repo, "commit", "-q", "-m", f"{admin} creates the graph as admin")
-    if r.returncode != 0:
-        first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
-        raise GraphError(f"could not commit {C.FILE}: {first_line}. Set user.name and "
+    fail = _commit_file(repo, str(root / C.FILE), f"{admin} creates the graph as admin")
+    if fail:
+        raise GraphError(f"could not commit {C.FILE}: {fail}. Set user.name and "
                          "user.email in this repo and run the command again")
 
 
@@ -386,53 +393,59 @@ def revoke(root: Path, name: str) -> None:
     contribs = C.load(root)
     if contribs is not None:
         repo = _toplevel(root)
-        # This clone's history may be behind -- as it is the moment right after someone
-        # new has joined -- and revoking a name this clone cannot yet see would silently
-        # mark nothing.
+        # Anyone may pull: this clone's history may be behind -- as it is the moment
+        # right after someone new has joined -- and revoking a name this clone cannot
+        # yet see would silently mark nothing.
         rp = _git(repo, "pull", "-q", "--ff-only", "origin")
         if rp.returncode != 0:
-            raise GraphError(f"could not update before revoking: {_explain(rp.stderr)}")
+            raise GraphError(f"could not update before revoking: {_explain(rp.stderr)}. "
+                             f"Pull or resolve that yourself, then run "
+                             f"`knoten revoke {name}` again")
         contribs = C.load(root)
-        # Who acts here is this clone's OWN configured signing key, not whatever this
-        # machine's credential file happens to hold for the remote right now -- a join
-        # run from the very same store (as every test and every single-laptop admin
-        # does) overwrites that entry with the newcomer's token. The signing key survives
-        # that untouched, and it is what the commit below is actually signed with.
-        admin = Path(_git(repo, "config", "user.signingkey").stdout.strip()).name
-        _my_key(contribs, admin)
-        if admin not in C.admins(contribs):
+        # `auth[0]` is this machine's OWN identity for this remote -- the same name
+        # `invite` trusts for the same reason. It signs with whatever key this repo is
+        # configured to sign with, so that has to actually be configured before anything
+        # else is checked against it: an admin clone recovered with a bare `git clone` +
+        # `knoten remote add` (skipping `remote create`/`join`, which both call
+        # `configure_signing`) has no `user.signingkey` at all, and `_my_key` below would
+        # otherwise be asked to check a key file whose name is the empty string.
+        if not _git(repo, "config", "user.signingkey").stdout.strip():
+            raise GraphError(
+                f"this clone has no signing key configured; run `knoten key {auth[0]}` "
+                "for the path, then `git config user.signingkey <path>` (and "
+                "`git config gpg.format ssh`, `git config commit.gpgsign true`) before "
+                "revoking here")
+        _my_key(contribs, auth[0])
+        if auth[0] not in C.admins(contribs):
             raise GraphError("only an admin can revoke")
         if name not in contribs:
             raise GraphError(f"'{name}' is not listed in {C.FILE}")
-        if contribs[name].get("revoked"):
-            raise GraphError(f"'{name}' is already revoked")
-        # The mark first, the token second. The mark is what the gate enforces and what
-        # a clone can still read a year on; the token is convenience. If the push is
-        # refused, nothing has changed and the message says why.
-        contribs[name]["revoked"] = today()
-        C.dump(root, contribs)
-        # Only contributors.yaml: `add -A` in the enclosing repo would also stage every
-        # unrelated untracked file the monorepo layout allows next to this graph.
-        _git(repo, "add", "--", str(root / C.FILE))
-        r = _git(repo, "commit", "-q", "-m", f"{admin} revokes {name}")
-        if r.returncode != 0:
-            first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
-            raise GraphError(f"could not commit the revocation: {first_line}")
-        r = _git(repo, "push", "origin", "HEAD")
-        _relay(r.stderr)
-        if r.returncode != 0:
-            raise GraphError(f"the gate refused the revocation: {_explain(r.stderr)}")
+        if not contribs[name].get("revoked"):
+            # The mark first, the token second. The mark is what the gate enforces and
+            # what a clone can still read a year on; the token is convenience. If the
+            # push is refused, nothing has changed and the message says why. Already
+            # revoked is not refused here: it is what lets a failed `/revoke` call below
+            # be retried by simply running `revoke` again, without redoing the mark.
+            contribs[name]["revoked"] = today()
+            C.dump(root, contribs)
+            fail = _commit_file(repo, str(root / C.FILE), f"{auth[0]} revokes {name}")
+            if fail:
+                raise GraphError(f"could not commit the revocation: {fail}")
+            r = _git(repo, "push", "origin", "HEAD")
+            _relay(r.stderr)
+            if r.returncode != 0:
+                raise GraphError(f"the gate refused the revocation: {_explain(r.stderr)}")
         try:
             _api(f"{base}/revoke", {"name": name}, auth)
         except GraphError as e:
-            # The graph mark just pushed is already the source of truth, and it already
-            # locks this person out at the gate; the server's token table catching up is
-            # convenience on top of that, not a condition of success. `auth` here is
-            # whatever this machine's credential file currently holds for the remote --
-            # not necessarily the acting admin's own token, since a join can have
-            # overwritten it -- so a refusal here is not evidence the mark itself failed.
-            print(f"  ⚠ the graph is updated, but the server did not confirm: {e}",
-                 file=sys.stderr)
+            # The graph mark landed and already locks this person out at the gate, but
+            # their token is not dead until the server hears about it too -- that must
+            # not be silently swallowed, or `knoten revoke` reports success while a live
+            # token still works.
+            raise GraphError(
+                f"the graph already marks '{name}' revoked, but the server refused the "
+                f"token call: {e}; '{name}' can still connect with a live token until "
+                f"you run `knoten revoke {name}` again") from e
         return
     _api(f"{base}/revoke", {"name": name}, auth)
 
@@ -493,12 +506,10 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
         # relative to it -- `target / C.FILE` looked right but resolved against the
         # PROCESS's cwd first, one directory too deep, and silently added nothing.
         pathspec = f"{gname}/{C.FILE}" if gname else C.FILE
-        _git(target, "add", "--", pathspec)
-        r = _git(target, "commit", "-q", "-m", f"{user} joins as {role}")
-        if r.returncode != 0:
-            first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
+        fail = _commit_file(target, pathspec, f"{user} joins as {role}")
+        if fail:
             raise GraphError(
-                f"could not commit your entry: {first_line}. Your clone and credentials "
+                f"could not commit your entry: {fail}. Your clone and credentials "
                 f"are in place at {target}; fix the problem and commit {C.FILE} yourself, "
                 f"or run `knoten join` again with --dest pointing at a new directory.")
         r = _git(target, "push", "origin", "HEAD")
