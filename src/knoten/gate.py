@@ -29,6 +29,10 @@ from .keys import allowed_signers
 ZERO = re.compile(r"^0+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 
+# Said by check_ref, for a repo that already has a branch, and by main(), for a second
+# creation inside ONE push. One wording, because to the pusher it is one rule.
+ONE_BRANCH = "a hosted graph has one branch; new branches and tags are refused"
+
 
 def _git(*args: str, input: bytes | None = None,
          repo: Path | None = None) -> subprocess.CompletedProcess:
@@ -226,8 +230,9 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
     signature. A commit that adds exactly one entry carrying an admin-signed invite is a
     join, and needs the NEWCOMER's signature (the invite is the admin's part). Anything
     else that touches the file is a change to who may write, and needs an admin. Two
-    things are refused outright, whoever signed: dropping a name (revoke, never remove)
-    and, under `knoten serve`, a bootstrap by anything but the graph's admin token.
+    things are refused outright, whoever signed: a name leaving the file, the whole file
+    leaving the gdir included (revoke, never remove), and, under `knoten serve`, a
+    bootstrap by anything but the graph's admin token.
 
     `has_parent` is the caller's own answer to "does this commit have a parent", asked
     once per commit rather than once per (commit, gdir) pair -- check_ref may call this
@@ -281,19 +286,18 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
                 return False
         return True
 
-    if cur is None:
-        # The file itself is gone. Not names removed one by one but the end of the
-        # constitution, and only an admin of what it said may end it.
-        added, changed, removed = {}, {}, set(prev)
-    else:
-        added, changed, removed = C.diff(prev, cur)
-        if removed:
-            # Revocation is a mark, so history stays attributable. Dropping the entry
-            # instead erases who could write, and an admin is no more entitled to that
-            # than anyone else.
-            say(f"{where}: contributors are revoked, never removed")
-            return False
-    if not added and not changed and not removed:
+    added, changed, removed = ({}, {}, set(prev)) if cur is None else C.diff(prev, cur)
+    if removed:
+        # Revocation is a mark, so history stays attributable. Dropping an entry erases
+        # who could write, and deleting the file outright is the same act in two commits
+        # -- delete it, then bootstrap a fresh one that leaves somebody out, which the
+        # bootstrap rules would accept because nothing is left to weigh it against. Both
+        # are refused whoever signed, so a graph's constitution never stops existing.
+        # A directory rename is a deletion here too: it takes the file away from the
+        # gdir the entries were written for.
+        say(f"{where}: contributors are revoked, never removed")
+        return False
+    if not added and not changed:
         if gdir in parent_dirs and not is_graph:
             # contributors.yaml untouched, but graph.yaml or nodes/ went away: the
             # directory stops being a graph while still holding a constitution. That is
@@ -311,7 +315,7 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
         say(f"{where} is not signed by a contributor who may write here ({WHY.get(status, status)})")
         return False
 
-    if len(added) == 1 and not changed and not removed:
+    if len(added) == 1 and not changed:
         name, entry = next(iter(added.items()))
         inv = entry.get("invite")
         if isinstance(inv, dict) and inv.get("blob") and inv.get("sig"):
@@ -380,7 +384,7 @@ def check_ref(old: str, new: str, ref: str) -> bool:
         if r.returncode != 0:
             raise GraphError(f"cannot list the branches already here, for {ref}")
         if r.stdout.strip():
-            say(f"{ref}: a hosted graph has one branch; new branches and tags are refused")
+            say(f"{ref}: {ONE_BRANCH}")
             return False
         # The first push, into a repo with no branch yet: this ref becomes the only one.
         # `--not --all` still earns its place -- a tag can reach a branchless repo before
@@ -433,6 +437,7 @@ def check_ref(old: str, new: str, ref: str) -> bool:
 
 def main(stdin=None) -> int:
     ok = True
+    born = False
     for line in (stdin or sys.stdin):
         parts = line.split()
         if len(parts) != 3:
@@ -445,6 +450,17 @@ def main(stdin=None) -> int:
             say(f"malformed ref line for {ref}")
             ok = False
             continue
+        if ZERO.match(old):
+            # check_ref asks git which branches exist, and mid-push the answer is the
+            # same for every line: no ref has moved yet when pre-receive runs. So a
+            # `git push --all` into a repo with no branch read "none here" once per ref
+            # and created them all. The count of creations in THIS push is kept here,
+            # where the lines are read, because nothing git can be asked knows it.
+            if born:
+                say(f"{ref}: {ONE_BRANCH}, and one refused ref refuses the whole push")
+                ok = False
+                continue
+            born = True
         try:
             if not check_ref(old, new, ref):
                 ok = False

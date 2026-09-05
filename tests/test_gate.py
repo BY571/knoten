@@ -403,20 +403,26 @@ def test_an_unsigned_removal_of_a_graph_is_refused(signed):
     r = push(work)
 
     assert r.returncode != 0
-    assert "unsigned" in r.stderr
+    assert "revoked, never removed" in r.stderr
     assert "g/contributors.yaml" in git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
 
 
-def test_an_admin_may_rename_the_graph_they_administer(signed):
-    """The fix for the two tests above must not refuse a legitimate rename: seb, admin of
-    g, renaming it to h and signing that commit himself is exactly what should land."""
+def test_not_even_an_admin_may_move_the_graph_out_from_under_its_constitution(signed):
+    """A rename takes contributors.yaml away from the directory its entries were written
+    for, and the gate cannot tell that from a deletion: both are "g has no constitution
+    now". It used to be allowed for an admin, which is also how an admin could drop a
+    name in two commits -- move the graph, then found the new one without them. A hosted
+    graph stays where it is; the cost is that `git mv` on a graph directory is refused."""
     origin, work, k = signed
     git("mv", "g", "h", cwd=work)
     commit_signed(work, "seb renames g to h", k["seb"])
 
     r = push(work)
 
-    assert r.returncode == 0, r.stderr
+    assert r.returncode != 0
+    assert "revoked, never removed" in r.stderr
+    assert "g/contributors.yaml" in git("ls-tree", "-r", "--name-only", "master",
+                                        cwd=origin).stdout
 
 
 # --------------------------------------------------------------- rev-list return codes
@@ -687,19 +693,32 @@ def test_a_join_may_add_only_itself(signed, keys_dir):
     assert "not signed by an admin" in r.stderr
 
 
-def test_deleting_contributors_yaml_needs_an_admin(signed, keys_dir):
+def test_deleting_contributors_yaml_is_refused_whoever_signs(signed, keys_dir):
+    """It used to need an admin, which left the two-commit version of dropping a name
+    open: delete the file, then bootstrap a fresh one leaving somebody out, which the
+    bootstrap rules accept because there is nothing left to weigh it against. A graph's
+    constitution does not stop existing."""
     origin, work, k = signed
     maria = make_key(keys_dir, "maria")
     add_person(work, "maria", maria, "write")
     commit_signed(work, "seb adds maria", k["seb"])
     assert push(work).returncode == 0
+
     (work / "g" / C.FILE).unlink()
     commit_signed(work, "maria removes the constitution", maria)
+    r = push(work)
+    assert r.returncode != 0
+    assert "revoked, never removed" in r.stderr
+
+    git("reset", "-q", "--hard", "HEAD~1", cwd=work)
+    (work / "g" / C.FILE).unlink()
+    commit_signed(work, "seb removes the constitution", k["seb"])
 
     r = push(work)
 
-    assert r.returncode != 0
-    assert "not signed by an admin" in r.stderr
+    assert r.returncode != 0, "an admin deleted it"
+    assert "revoked, never removed" in r.stderr
+    assert "maria" in git("show", "master:g/contributors.yaml", cwd=origin).stdout
 
 
 def test_an_admin_may_promote_demote_and_revoke(signed, keys_dir):
@@ -735,7 +754,7 @@ def test_a_writer_may_not_become_admin_by_moving_the_graph(signed, keys_dir):
     assert r.returncode != 0
     # Discriminates the removal-at-g branch from the bootstrap branch a naive per-gdir
     # check could have taken for the new h directory alone.
-    assert "changes contributors.yaml and is not signed by an admin" in r.stderr
+    assert "revoked, never removed" in r.stderr
     tree = git("ls-tree", "-r", "--name-only", "master", cwd=origin).stdout
     assert "g/contributors.yaml" in tree
 

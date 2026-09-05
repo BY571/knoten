@@ -280,23 +280,35 @@ def test_an_unparseable_node_is_refused(server):
 
 # ---------------------------------------------------------------- every ref, every push
 
-def test_it_checks_every_ref_in_one_push(server):
-    """`git push --all` hands the hook several refs on stdin. Checking only the first
-    leaves a broken branch on the server, and it is the branch someone will merge. The
-    refs go up together, into a repo with no branch yet, so nothing else refuses them
-    first."""
+def test_one_push_may_create_only_one_ref(server):
+    """Asked which branches exist, git answers the same thing for every ref line in a
+    push: none have moved yet when pre-receive runs. So `git push --all` into a repo with
+    no branch read "none here" once per ref and created them all, and a hosted graph
+    began life with two lines of history. The count is kept across the ref lines instead,
+    where the lines are read."""
     bare, work = server
     commit(work, "a clean graph")
     git("checkout", "-qb", "side", cwd=work)
-    (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
-    commit(work, "broken, on a side branch")
+    (work / "g" / "nodes" / "hyp-s.md").write_text(
+        "---\nid: hyp-s\ntype: hypothesis\nstatus: open\n---\n\n# s\n", encoding="utf-8")
+    commit(work, "a clean side branch")
     git("checkout", "-q", "master", cwd=work)
 
     r = git("push", "--all", "origin", cwd=work)
 
     assert r.returncode != 0
-    assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
+    assert "refs/heads/side" in r.stderr
+    assert "new branches and tags are refused" in r.stderr
     assert git("branch", cwd=bare).stdout.strip() == "", "a ref landed anyway"
+
+
+def test_the_one_ref_of_a_first_push_still_lands(server):
+    """The rule above must not refuse the push every hosted graph starts with."""
+    bare, work = server
+    commit(work, "a clean graph")
+
+    assert push(work).returncode == 0
+    assert "master" in git("branch", cwd=bare).stdout
 
 
 def test_it_gates_a_branch_that_is_not_master(server):
@@ -386,7 +398,9 @@ def test_a_symlinked_nodes_directory_cannot_read_the_servers_disk(server, tmp_pa
 def test_one_broken_ref_refuses_the_whole_push(server):
     """pre-receive runs once for all refs and its exit status is the verdict on all of
     them. A push carrying a clean branch and a broken one must land neither, or the
-    pusher gets a partial push and the shared repo a branch nobody validated."""
+    pusher gets a partial push and the shared repo a branch nobody validated. Here the
+    broken ref is read first and refused on its contents, the second is refused for being
+    a second: two reasons, one verdict, nothing on the server."""
     bare, work = server
     commit(work, "a clean graph")
     git("branch", "other", cwd=work)
