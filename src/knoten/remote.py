@@ -19,16 +19,19 @@ import getpass
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import contributors as C
 from .core import GraphError, ID_RE
-from .keys import configure_signing, ensure_key, public_line
+from .keys import INVITE_NS, configure_signing, ensure_key, public_line, sign
+from .validate import load_config
 
 
 # ---------------------------------------------------------------- credentials
@@ -315,7 +318,19 @@ def _graph_api(root: Path) -> tuple[str, tuple[str, str]]:
 
 def invite(root: Path, name: str, role: str = "write", days: int = 7) -> str:
     base, auth = _graph_api(root)
-    return _api(f"{base}/invite", {"name": name, "role": role, "days": days}, auth)["code"]
+    body = {"name": name, "role": role, "days": days}
+    contribs = C.load(root)
+    if contribs is not None:
+        me = auth[0]
+        priv = ensure_key(me)
+        if (contribs.get(me) or {}).get("key") != public_line(priv):
+            raise GraphError(f"{C.FILE} lists a different key for '{me}' than {priv}; "
+                             "invite from the machine that holds the listed key")
+        graph = str((load_config(root) or {}).get("name", ""))
+        expires = (datetime.now(timezone.utc) + timedelta(days=int(days))).date().isoformat()
+        blob = C.invite_blob(graph, name, role, expires, secrets.token_hex(8))
+        body.update(blob=blob.decode(), sig=sign(priv, blob, INVITE_NS))
+    return _api(f"{base}/invite", body, auth)["code"]
 
 
 def invites(root: Path) -> list[dict]:
@@ -356,4 +371,34 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
             f"are saved, so finish by hand: git clone {git_url} <dir> && cd <dir> && "
             f"knoten remote add {url}")
     _wire(target, git_url)
+    if C.load(target) is not None:
+        # A signed graph: the server handed back the admin's signed invite. The newcomer
+        # adds themself with it, in a commit signed by their own new key, and the gate
+        # accepts exactly that shape and nothing else.
+        priv = ensure_key(user)
+        configure_signing(target, priv)
+        contribs = C.load(target)
+        contribs[user] = {"key": public_line(priv), "role": role,
+                          "invited_by": got.get("by", ""),
+                          "invite": {"blob": got.get("blob", ""), "sig": got.get("sig", "")}}
+        C.dump(target, contribs)
+        # git refuses to commit without an identity, and a fresh clone under
+        # GIT_ISOLATION (or on a bare new machine) has none configured yet.
+        for k, v in (("user.name", user), ("user.email", f"{user}@knoten")):
+            if not _git(target, "config", k).stdout.strip():
+                _git(target, "config", k, v)
+        # `-C target` already anchors the command there, so the pathspec must be
+        # relative to it -- `target / C.FILE` looked right but resolved against the
+        # PROCESS's cwd first, one directory too deep, and silently added nothing.
+        _git(target, "add", "--", C.FILE)
+        r = _git(target, "commit", "-q", "-m", f"{user} joins as {role}")
+        if r.returncode != 0:
+            raise GraphError(f"could not commit your entry: {r.stderr.strip()}")
+        r = _git(target, "push", "origin", "HEAD")
+        _relay(r.stderr)
+        if r.returncode != 0:
+            raise GraphError(
+                f"the gate refused your join commit: {_explain(r.stderr)}. Your clone and "
+                f"credentials are in place; ask the admin for a fresh invite and run "
+                f"`knoten join` again with --dest pointing at a new directory.")
     return target, user, role

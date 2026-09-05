@@ -378,7 +378,8 @@ class Registry:
                 if signer != entry.get("by"):
                     # The code is already popped above -- correctly: a code that no
                     # longer proves anything must not be retried into working just as dead.
-                    raise GraphError("that invite is no longer valid; its signer is not an admin here any more")
+                    raise GraphError("that invite is no longer valid; it is not signed by an admin of "
+                                     "this graph any more")
         # Outside the lock: mint takes it again, and flock on a fresh handle would wait
         # on our own lock forever.
         extra = {"blob": blob, "sig": sig, "by": entry.get("by", "")}

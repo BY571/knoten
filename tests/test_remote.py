@@ -230,11 +230,10 @@ def test_push_goes_through_the_gate(hub, shared, capsys):
 
 
 def test_pull_brings_a_collaborators_node_down(hub, shared, tmp_path, monkeypatch):
-    tok = hub.registry.mint("trading", "maria", "write")
-    other = tmp_path / "maria"
-    url = f"http://maria:{tok}@{hub.url.removeprefix('http://')}/trading.git"
-    git("clone", "-q", url, str(other), cwd=tmp_path)
-    git("config", "user.email", "m@m.m", cwd=other); git("config", "user.name", "maria", cwd=other)
+    """A minted token alone no longer earns a push on a signed graph: the graph is
+    signed, so a collaborator has to be listed and sign, which is what `join` is for."""
+    code = remote.invite(shared, "maria", "write")
+    other, _, _ = remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "maria"))
     commit_node(other, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
     assert git("push", "-q", "origin", "master", cwd=other).returncode == 0
 
@@ -620,3 +619,56 @@ def test_knoten_key_prints_the_public_line(monkeypatch, capsys, tmp_path):
     assert "ssh-ed25519 AAAA" in out and str(key_dir() / "seb") in out
     assert main(["key", "seb"]) == 0
     assert capsys.readouterr().out == out           # same key, second time
+
+
+# ---------------------------------------------------------------- invite signs, join adds itself
+
+def test_the_whole_journey_signed(hub, shared_signed, tmp_path, monkeypatch, capsys):
+    """Seb invites (signed by his key). Maria joins: her key is made, her clone signs,
+    her own commit adds her to contributors.yaml with the invite, and the gate lets that
+    in because the invite is seb's and the commit is hers. Then she pushes a node."""
+    assert main(["invite", "maria", "--role", "write"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    clone = tmp_path / "trading"
+    c = C.load(clone)
+    assert c["maria"]["role"] == "write" and c["maria"]["invited_by"] == "seb"
+    assert c["maria"]["key"] == public_line(key_dir() / "maria")
+    assert "joins as write" in git("log", "-1", "--format=%s", cwd=hub.registry.repo("trading")).stdout
+
+    git("config", "user.email", "m@m.m", cwd=clone); git("config", "user.name", "maria", cwd=clone)
+    commit_node(clone, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
+    monkeypatch.chdir(clone)
+    assert main(["push"]) == 0
+
+    monkeypatch.chdir(shared_signed)
+    assert main(["pull"]) == 0
+    assert (shared_signed / "nodes" / "hyp-m.md").exists()
+
+
+def test_invite_refuses_when_your_key_is_not_the_one_the_graph_lists(hub, shared_signed, keys_dir, capsys, monkeypatch):
+    """Seb's token on a machine without seb's key: the token gets in, the invite cannot
+    be signed, and the server would refuse it anyway."""
+    (key_dir() / "seb").unlink(); (key_dir() / "seb.pub").unlink()
+    monkeypatch.chdir(shared_signed)
+
+    assert main(["invite", "maria"]) == 1
+    assert "different key" in capsys.readouterr().err
+
+
+def test_a_joiner_whose_push_is_refused_is_told_why(hub, shared_signed, tmp_path, monkeypatch, capsys):
+    """Force the gate to refuse the join commit (seb revokes himself between invite and
+    join, so the invite's signer is no longer an active admin) and check the message is
+    the gate's, not git's."""
+    assert main(["invite", "maria"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+    c = C.load(shared_signed); c["seb"]["revoked"] = "2026-09-05"; C.dump(shared_signed, c)
+    git("add", "-A", cwd=shared_signed); git("commit", "-qm", "seb steps down", cwd=shared_signed)
+    assert main(["push"]) == 0
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 1
+    err = capsys.readouterr().err
+    assert "not signed by an admin" in err and "Traceback" not in err
