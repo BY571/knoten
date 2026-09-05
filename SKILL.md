@@ -74,6 +74,10 @@ If the graph has a remote, `knoten pull` FIRST. Every read below answers from th
 on disk, so a stale clone reports work a collaborator settled days ago as still open.
 That is the exact failure this graph exists to prevent, arriving through the back door.
 
+On a signed graph every commit you make is signed by the clone's own configuration;
+nothing to do, but a refused push that says `not signed` means this clone was not set up
+by `knoten join` or `knoten remote create`.
+
 1. `knoten frontier` — what is worth doing next: open work, dead ends whose stated
    reopen condition may now hold, and gates nothing has been through.
 2. `knoten index` — the whole graph, one line per node. Read it and judge relatedness

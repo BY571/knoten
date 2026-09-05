@@ -379,7 +379,7 @@ body the day a graph outgrows a tag-filtered index — which the 1k–5k node ca
 | **2** | **Tool-protocol server** | ✅ done — later demoted to a fallback, then removed (§8) |
 | **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind every read, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
-| 4 | **Remote graphs**: `knoten serve`, invites, roles, the gate on push | ✅ transport done; signed identity and verification follow |
+| 4 | **Remote graphs**: serve, invites, roles, the gate; signed identity | ✅ transport and signed identity done; verification follows |
 
 Phase 0 **validated the schema against real content** — including retractions, structural
 blockers, and prose that no JSON schema could hold.
@@ -419,5 +419,5 @@ says what phase 1 does and what phase 2 would have to answer.
 
 | concern | phase 1 | phase 2 |
 |---|---|---|
-| **One admin removes another, the creator included.** An admin can also re-invite a name that already exists, at a lower role, which demotes that person. | Allowed. Every admin is equal and the creator holds no protected status. This is deliberate: a graph whose creator cannot be removed is a graph nobody else can rescue when that person leaves, and the alternative (a permanent super-admin) puts one token beyond recovery. | Whether the creator is protected, and whether demoting an admin should need more than one admin, is a phase 2 question. It needs signed identity first: today a role is a row in a file on the server, not a claim anyone can verify. |
+| **One admin removes another, the creator included.** An admin can also re-invite a name that already exists, at a lower role, which demotes that person. | Allowed. Every admin is equal and the creator holds no protected status. This is deliberate: a graph whose creator cannot be removed is a graph nobody else can rescue when that person leaves, and the alternative (a permanent super-admin) puts one token beyond recovery. | Still allowed, but the record is now signed: a role is a signed entry in `contributors.yaml`, not a row in a file only the server sees, and revocation is a signed commit marking the entry, not a call the server can forget. Whether the creator should be protected, and whether demoting an admin should need more than one admin's signature, remains open. |
 | **A revoked token finishes what it started.** Tokens do not expire, and revocation is checked once per request. | A push already past authentication runs to completion; the next request from that token is refused. Revocation is therefore prompt, not instant, and it never interrupts work in flight. | Expiring tokens, and a revocation that also reaches a request already being served. Both need somewhere to keep session state, which phase 1 deliberately does not have. |

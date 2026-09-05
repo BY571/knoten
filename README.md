@@ -176,6 +176,17 @@ the nodes, the rules, the history, lives in the graph, so losing the server lose
 availability and not the answer to who said what. The hosted repo refuses force pushes
 and branch deletion: nothing is deleted there either.
 
+Who may write is written down in the graph, not on the server. `knoten remote create`
+makes you a signing key and lists you as admin in `contributors.yaml`; every commit from
+then on is signed, and the server refuses one that is not signed by someone the file
+lists. An invite is signed on the admin's machine, so a stolen admin token mints nothing.
+Revoking someone is a signed commit that marks them revoked, and the mark outlives the
+server: a clone a year later still says who could write and who let them in.
+
+```bash
+knoten key                              # your signing key; made on first use
+```
+
 Reading needs nothing installed. Nodes are markdown, and `knoten viz` writes the graph as
 one self-contained HTML file you can hand to someone who has never heard of knoten.
 
