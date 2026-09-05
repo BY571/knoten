@@ -288,9 +288,11 @@ def serve_cmd(data, bind) -> int:
     reg = Registry(Path(data))
     srv = make_server(reg, host, port)
     # Only now, after the server socket is open, check and display the owner secret.
-    first = not (reg.data / "owner").exists()
-    secret = reg.owner_secret()
-    if first:
+    # The registry says whether it made one, rather than this guessing from the file:
+    # an `owner` file that existed but was empty read as "already shown" and the server
+    # came up with a secret nobody had ever seen.
+    secret, minted = reg.ensure_owner_secret()
+    if minted:
         print(f"  owner secret (shown once, keep it somewhere safe): {secret}")
     if host not in ("127.0.0.1", "localhost"):
         print("  warning: plain HTTP on a non-local address. Put TLS in front (a reverse "

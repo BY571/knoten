@@ -718,3 +718,26 @@ def test_a_newline_in_a_username_cannot_forge_a_log_line(hub, trading, capfd):
     # value, never as a record. Pinned exactly, because "the word is gone" would also
     # pass if the username were dropped, and knowing who tried is the point of the log.
     assert lines[0].split()[3] == "aforgedline1.2.3.4tradingadminpush"
+
+
+def test_serve_replaces_an_empty_owner_file_and_shows_the_new_secret(tmp_path, monkeypatch,
+                                                                     capsys):
+    """A zero-byte `owner` file is what a crash between the create and the write leaves.
+    It used to count as "already made": serve printed nothing, check_owner had nothing to
+    compare against, and every POST /graphs was a 401 forever with no way to tell why."""
+    from http.server import ThreadingHTTPServer
+
+    from knoten.cli import main
+    from knoten.registry import Registry
+
+    data = tmp_path / "d"
+    data.mkdir()
+    (data / "owner").write_text("", encoding="utf-8")
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", lambda self: None)
+
+    assert main(["serve", "--data", str(data), "--bind", "127.0.0.1:0"]) == 0
+
+    out = capsys.readouterr().out
+    secret = (data / "owner").read_text(encoding="utf-8").strip()
+    assert secret and secret in out, out
+    assert Registry(data).check_owner(secret)

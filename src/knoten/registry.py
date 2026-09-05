@@ -63,20 +63,32 @@ class Registry:
 
     # ---------------------------------------------------------------- owner
 
+    def ensure_owner_secret(self) -> tuple[str, bool]:
+        """The secret, and whether this call is the one that made it.
+
+        `knoten serve` prints it exactly once, on the run that creates it, so it has to be
+        told. Deciding from "did the file exist" is what broke: a file that existed but
+        was EMPTY counted as made, so serve printed nothing, check_owner had nothing to
+        compare against, and every `POST /graphs` was a 401 forever with nothing on disk
+        to explain it. A crash between the create and the write is exactly how that file
+        appears, which is why the write goes through a temp file and a rename.
+        """
+        p = self.data / "owner"
+        current = p.read_text(encoding="utf-8").strip() if p.exists() else ""
+        if current:
+            return current, False
+        secret = secrets.token_hex(32)
+        tmp = p.with_name("owner.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(secret)
+        os.chmod(tmp, 0o600)         # os.open's mode is ignored when the temp file existed
+        os.replace(tmp, p)
+        return secret, True
+
     def owner_secret(self) -> str:
         """Created on first call, 0600, printed once by `knoten serve` and never again."""
-        p = self.data / "owner"
-        if not p.exists():
-            # Temp file then rename, because a crash between the create and the write
-            # left a zero-byte `owner` that every later run treated as already made:
-            # the secret was never printed, and the empty string became the secret.
-            tmp = p.with_name("owner.tmp")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                fh.write(secrets.token_hex(32))
-            os.chmod(tmp, 0o600)     # os.open's mode is ignored when the temp file existed
-            os.replace(tmp, p)
-        return p.read_text(encoding="utf-8").strip()
+        return self.ensure_owner_secret()[0]
 
     def check_owner(self, secret: str) -> bool:
         """Fail closed. This must never CREATE the secret: it is reached by an
