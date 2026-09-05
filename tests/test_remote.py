@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from knoten import remote
 from knoten.cli import main
 from knoten.core import GraphError
 from knoten.remote import _explain, cred_lookup, cred_path, cred_store, credential_helper
@@ -24,12 +25,15 @@ def isolated_credentials(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- the store
 
 def test_store_and_lookup_round_trip_per_remote():
+    """The key carries the scheme: `http://h/x.git` is a different remote from
+    `https://h/x.git`, and a token scoped to the second must not answer for the first."""
     cred_store("https://h.example/trading.git", "seb", "tok-1")
     cred_store("https://h.example/biology.git", "seb", "tok-2")
 
     assert cred_lookup("https://h.example/trading.git") == ("seb", "tok-1")
     assert cred_lookup("https://h.example/biology.git") == ("seb", "tok-2")
     assert cred_lookup("https://h.example/nope.git") is None
+    assert cred_lookup("http://h.example/trading.git") is None
 
 
 def test_storing_the_same_remote_again_replaces_it():
@@ -77,6 +81,26 @@ def test_the_helper_answers_gits_request_for_a_known_remote():
     assert out == "username=maria\npassword=tok\n"
 
 
+def test_the_helper_will_not_hand_an_https_token_to_plain_http():
+    """The stored key used to be host plus path with no scheme, so the token a user
+    holds for an https server answered git's request for the same host over plain http:
+    a downgrade, and the token crossed the wire in the clear."""
+    cred_store("https://h.example/trading.git", "maria", "tok")
+
+    assert credential_helper("protocol=http\nhost=h.example\npath=trading.git\n") == ""
+
+
+def test_the_helper_never_hands_out_the_owner_secret():
+    """The owner secret opens every graph on a server. It lives under `owner://<host>`,
+    a scheme git never asks about, so no git request -- including the bare-host one git
+    sends when useHttpPath is off -- can be answered with it."""
+    cred_store("owner://h.example", "owner", "the-owner-secret")
+
+    assert credential_helper("protocol=https\nhost=h.example\n") == ""
+    assert credential_helper("protocol=https\nhost=h.example\npath=\n") == ""
+    assert credential_helper("protocol=owner\nhost=h.example\n") == ""
+
+
 def test_the_helper_says_nothing_for_an_unknown_remote():
     """Empty output tells git to fall through to its next helper or to prompt. Anything
     else, including an error, would break every non-knoten remote on the machine."""
@@ -115,7 +139,7 @@ def test_remote_create_puts_the_graph_on_the_server_and_wires_the_clone(capsys, 
     assert hub.registry.exists("trading")
     assert "seed" in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
     assert cred_lookup(f"{hub.url}/trading.git")[0] == "seb"
-    assert cred_lookup(hub.url) == ("owner", hub.secret)
+    assert cred_lookup(f"owner://{hub.url.removeprefix('http://')}") == ("owner", hub.secret)
     assert git("remote", "get-url", "origin", cwd=shared).stdout.strip() == f"{hub.url}/trading.git"
     assert git("config", "credential.helper", cwd=shared).stdout.strip() == "!knoten credential"
     assert f"{hub.url}/trading" in capsys.readouterr().out
@@ -362,3 +386,101 @@ def test_a_clone_failure_after_redemption_says_the_invite_is_spent(hub, shared, 
     assert "Traceback" not in err
     assert cred_lookup(f"{hub.url}/trading.git")[0] == "maria"
 
+
+
+# ---------------------------------------------------------------- a server is not trusted
+
+def test_a_hostile_join_reply_is_refused_and_writes_nothing(hub, tmp_path, monkeypatch):
+    """The credentials file is one line per remote, so a `name` carrying a newline
+    appends a second line to it: a credential for a host the user never named. The
+    server picks that field, so the client checks it before it reaches disk. `_api` is
+    stubbed for this one test because no honest server will send this."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(remote, "_api", lambda *a, **k: {
+        "name": "x\nevil.example/other.git attacker stolen-token",
+        "role": "admin", "token": "t"})
+
+    with pytest.raises(GraphError, match="malformed"):
+        remote.join(f"{hub.url}/trading", "code")
+
+    assert not cred_path().exists(), "a refused reply still wrote credentials"
+
+
+@pytest.mark.parametrize("reply", [
+    pytest.param({"role": "write", "token": "t"}, id="no-name"),
+    pytest.param({"name": "maria", "role": "owner", "token": "t"}, id="role-off-the-list"),
+    pytest.param({"name": "maria", "role": "write", "token": ""}, id="empty-token"),
+    pytest.param({"name": "maria", "role": "write", "token": "a b"}, id="token-with-a-space"),
+])
+def test_every_field_of_a_join_reply_is_checked(hub, tmp_path, monkeypatch, reply):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(remote, "_api", lambda *a, **k: reply)
+
+    with pytest.raises(GraphError, match="malformed"):
+        remote.join(f"{hub.url}/trading", "code")
+
+
+# ---------------------------------------------------------------- one host, many graphs
+
+def test_two_graphs_on_one_host_each_push_with_their_own_token(hub, local_graph, tmp_path,
+                                                               monkeypatch):
+    """One credentials file, one host, two graphs, two people. Without
+    credential.useHttpPath git asks only about the host, and whichever token was stored
+    last answers for both graphs -- so one of the two pushes with the other's identity,
+    or is refused for no visible reason."""
+    monkeypatch.chdir(local_graph)
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 0
+
+    second = tmp_path / "biology"
+    (second / "nodes").mkdir(parents=True)
+    (second / "graph.yaml").write_text("name: biology\n", encoding="utf-8")
+    for c in (["init", "-q", "-b", "master"], ["config", "user.email", "m@m.m"],
+              ["config", "user.name", "maria"], ["add", "-A"], ["commit", "-qm", "seed"]):
+        git(*c, cwd=second)
+    monkeypatch.chdir(second)
+    assert main(["remote", "create", "biology", "--on", hub.url, "--as", "maria"]) == 0
+
+    commit_node(second, "hyp-b.md", "---\nid: hyp-b\ntype: hypothesis\nstatus: open\n---\n\n# b\n")
+    assert main(["push"]) == 0
+    monkeypatch.chdir(local_graph)
+    commit_node(local_graph, "hyp-t.md",
+                "---\nid: hyp-t\ntype: hypothesis\nstatus: open\n---\n\n# t\n")
+    assert main(["push"]) == 0
+
+    assert cred_lookup(f"{hub.url}/trading.git")[0] == "seb"
+    assert cred_lookup(f"{hub.url}/biology.git")[0] == "maria"
+    assert "hyp-t" in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
+    assert "hyp-b" in git("log", "--oneline", cwd=hub.registry.repo("biology")).stdout
+
+
+def test_the_owner_secret_can_come_from_the_environment(hub, local_graph, monkeypatch):
+    """`--owner-secret` puts the secret in `ps` output for every other user on the
+    machine. The environment is the way to pass it without a terminal."""
+    def never(*_a, **_k):
+        raise AssertionError("prompted despite KNOTEN_OWNER_SECRET being set")
+    monkeypatch.chdir(local_graph)
+    monkeypatch.setenv("KNOTEN_OWNER_SECRET", hub.secret)
+    monkeypatch.setattr("knoten.remote.getpass.getpass", never)
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb"]) == 0
+    assert hub.registry.exists("trading")
+
+
+def test_a_push_that_fails_after_creation_says_the_graph_already_exists(hub, local_graph,
+                                                                        monkeypatch, capsys):
+    """The graph is created two calls before the push. When the push then failed the user
+    saw git's error alone, read it as "nothing happened", re-ran the command and met
+    "already exists" with no idea which half had worked."""
+    monkeypatch.chdir(local_graph)
+    (local_graph / "nodes" / "hyp-x.md").write_text(
+        "---\nid: hyp-x\ntype: hypothesis\nstatus: alive\n---\n\n# x\n", encoding="utf-8")
+    git("add", "-A", cwd=local_graph)
+    git("commit", "-qm", "broken", cwd=local_graph)
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 1
+
+    err = capsys.readouterr().err
+    assert "EXISTS" in err and "knoten remote add" in err
+    assert hub.registry.exists("trading"), "the message would be a lie"

@@ -6,8 +6,11 @@ a handful of commands that wrap git and make four JSON calls. It imports nothing
 server: a client and a server never share code paths, so a bug in one cannot hide in the
 other.
 
-Tokens live in one file, mode 0600, one line per remote: `<host>/<path> <user> <token>`.
-The owner secret for a server is stored under the bare host with user `owner`.
+Tokens live in one file, mode 0600, one line per remote: `<url> <user> <token>`. The key
+carries the scheme, because `https://h/x.git` and `http://h/x.git` are not the same
+remote and a token scoped to the first must never travel in the clear to the second. The
+owner secret for a server is stored under `owner://<host>`, a scheme git never asks for,
+so no git request can be answered with the key to the whole server.
 """
 from __future__ import annotations
 
@@ -35,7 +38,9 @@ def cred_path() -> Path:
 
 def _key(url: str) -> str:
     u = urlsplit(url)
-    return f"{u.netloc}{u.path}".rstrip("/")
+    # The scheme is part of the identity. Without it a token stored for `https://h/x.git`
+    # answered git's request for `http://h/x.git` and was sent over the wire in the clear.
+    return f"{u.scheme}://{u.netloc}{u.path}".rstrip("/")
 
 
 def cred_store(url: str, user: str, secret: str) -> None:
@@ -46,8 +51,14 @@ def cred_store(url: str, user: str, secret: str) -> None:
              if not l.startswith(key + " ")]
     lines.append(f"{key} {user} {secret}")
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    # os.open's mode applies only when the file is created; existing files keep their bits.
-    os.fchmod(fd, 0o600)
+    try:
+        # os.open's mode applies only when the file is created; existing files keep their bits.
+        os.fchmod(fd, 0o600)
+    except OSError:
+        # The file is already truncated by now. Leaking the fd on top of that would hold
+        # it open for the life of the process, on a file with the wrong bits.
+        os.close(fd)
+        raise
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
@@ -71,7 +82,12 @@ def credential_helper(request: str) -> str:
     next helper, so every non-knoten remote on the machine keeps working.
     """
     fields = dict(line.split("=", 1) for line in request.splitlines() if "=" in line)
-    url = f"{fields.get('protocol', 'https')}://{fields.get('host', '')}/{fields.get('path', '')}"
+    url = f"{fields.get('protocol', '')}://{fields.get('host', '')}/{fields.get('path', '')}"
+    if not url.startswith(("http://", "https://")):
+        # git asks about ssh, file and whatever else a helper is configured for, and the
+        # owner secret sits under `owner://<host>`. Answering anything but http(s) here
+        # would hand the key to the whole server to whoever asked for the bare host.
+        return ""
     found = cred_lookup(url)
     return f"username={found[0]}\npassword={found[1]}\n" if found else ""
 
@@ -166,8 +182,13 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
     repo = _toplevel(root)
     on = on.rstrip("/")
     u = urlsplit(on)
-    host_url = f"{u.scheme}://{u.netloc}"
-    secret = owner_secret or (cred_lookup(host_url) or ("", ""))[1]
+    # Not `<scheme>://<host>`: that is the shape git asks for when useHttpPath is off, and
+    # the credential helper would then hand the owner secret to a plain `git fetch`.
+    owner_key = f"owner://{u.netloc}"
+    # The environment before the prompt, and before argv is even considered a good idea:
+    # `--owner-secret` puts the secret in `ps` output for every other user on the machine.
+    secret = (owner_secret or os.environ.get("KNOTEN_OWNER_SECRET")
+              or (cred_lookup(owner_key) or ("", ""))[1])
     if not secret:
         try:
             secret = getpass.getpass(f"owner secret for {u.netloc}: ")
@@ -182,14 +203,20 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
         raise GraphError(f"'{admin}' is not a valid contributor name; pass --as NAME (kebab-case)")
 
     token = _api(f"{on}/graphs", {"name": name, "admin": admin}, ("owner", secret))["token"]
-    cred_store(host_url, "owner", secret)
+    cred_store(owner_key, "owner", secret)
     git_url = f"{on}/{name}.git"
     cred_store(git_url, admin, token)
     _wire(repo, git_url)
     r = _git(repo, "push", "-u", "origin", "HEAD")
     _relay(r.stderr)
     if r.returncode != 0:
-        raise GraphError(_explain(r.stderr))
+        # The graph was created two calls up. Reporting only git's error read as "nothing
+        # happened", so people re-ran the command and met "already exists" with no idea
+        # which half had worked.
+        raise GraphError(
+            f"{_explain(r.stderr)}. The graph now EXISTS on {on} and your token is saved, "
+            f"so do not create it again: fix the above, then `knoten push` here, or "
+            f"`knoten remote add {on}/{name}` in a fresh clone.")
     return f"{on}/{name}"
 
 
@@ -244,7 +271,15 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
     url = url.rstrip("/")
     git_url = url + ".git"
     got = _api(f"{url}/join", {"code": code})
-    cred_store(git_url, got["name"], got["token"])
+    # The server is not trusted with the contents of the credentials file. That file is
+    # one line per remote, so a `name` carrying a newline appends a whole second line to
+    # it: a credential for a remote the user never joined, on a host they never named.
+    user, role = got.get("name", ""), got.get("role", "")
+    token = got.get("token", "")
+    if (not ID_RE.match(user or "") or role not in ("read", "write", "admin")
+            or not token or any(c.isspace() for c in token)):
+        raise GraphError("the server's reply was malformed")
+    cred_store(git_url, user, token)
     target = Path(dest or url.rsplit("/", 1)[-1])
     r = subprocess.run(["git", "-c", "credential.helper=!knoten credential",
                         "-c", "credential.useHttpPath=true",
@@ -258,4 +293,4 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str]:
             f"are saved, so finish by hand: git clone {git_url} <dir> && cd <dir> && "
             f"knoten remote add {url}")
     _wire(target, git_url)
-    return target, got["name"], got["role"]
+    return target, user, role

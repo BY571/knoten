@@ -671,7 +671,10 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("name")
     c.add_argument("--on", required=True, metavar="URL", help="the server, e.g. https://graphs.example")
     c.add_argument("--as", dest="admin", metavar="NAME", help="your contributor name (default: git user.name)")
-    c.add_argument("--owner-secret", help="the server's owner secret (asked for if not stored)")
+    c.add_argument("--owner-secret",
+                   help="the server's owner secret, as a last resort: argv is visible to "
+                        "every other process on the machine. Prefer KNOTEN_OWNER_SECRET in "
+                        "the environment, or let knoten prompt for it.")
     a = rs.add_parser("add", help="point this clone at an existing remote graph")
     a.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
 
