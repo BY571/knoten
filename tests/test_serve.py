@@ -808,3 +808,63 @@ def test_a_failure_after_the_headers_are_sent_does_not_answer_twice(hub, trading
     assert body == b"ok", "a second response was appended to the first"
     err = capfd.readouterr().err
     assert len([l for l in err.splitlines() if "knoten serve:" in l]) == 1, err
+
+
+# ---------------------------------------------------------------- what the comments claim
+
+def test_a_git_variable_in_the_daemons_environment_does_not_reach_the_backend(hub, trading,
+                                                                              tmp_path,
+                                                                              monkeypatch):
+    """os.environ used to be handed to http-backend wholesale, so a GIT_DIR or a
+    GIT_COMMITTER_NAME left in the operator's shell reached the backend and the hook it
+    runs against a tree an attacker chose. GIT_DIR is the loud one: it points git at a
+    different repository entirely."""
+    monkeypatch.setenv("GIT_DIR", "/nonexistent")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "not-this-person")
+
+    r = git("clone", "-q", clone_url(hub, "trading", "seb", trading["admin"]),
+            str(tmp_path / "x"), cwd=tmp_path)
+
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "x" / "nodes" / "hyp-ok.md").exists()
+
+
+def test_an_unforeseen_error_is_a_500_not_a_dropped_connection(hub, trading, monkeypatch,
+                                                               capfd):
+    """Before the catch-all, anything the handler did not expect killed the thread and
+    left the client holding a connection that never answers, which reads to a user as a
+    hung network rather than as a server that broke."""
+    def boom(*_a, **_k):
+        raise RuntimeError("something nobody planned for")
+    monkeypatch.setattr(hub.registry, "authenticate", boom)
+    capfd.readouterr()
+
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(f"{hub.url}/trading.git/info/refs?service=git-upload-pack")
+
+    assert e.value.code == 500
+    assert json.loads(e.value.read())["error"] == "knoten: internal error"
+    assert "RuntimeError" in capfd.readouterr().err
+
+
+def test_every_connection_gets_the_read_timeout(hub, trading, monkeypatch):
+    """A valid Content-Length whose body never arrives parked a thread on rfile.read
+    forever: no credentials required, one thread per connection, until there are none.
+    The class attribute is only half of it. StreamRequestHandler.setup() is what puts it
+    on the socket, so this checks the socket, not the constant."""
+    from knoten import serve as serve_mod
+
+    seen = []
+    original = serve_mod._Handler.do_GET
+
+    def spy(self):
+        seen.append(self.connection.gettimeout())
+        return original(self)
+    monkeypatch.setattr(serve_mod._Handler, "do_GET", spy)
+
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(hub.url + "/nothing-here")
+    e.value.read()
+
+    assert serve_mod._Handler.timeout == 30
+    assert seen == [30]

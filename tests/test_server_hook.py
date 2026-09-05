@@ -380,6 +380,39 @@ def test_one_broken_ref_refuses_the_whole_push(server):
     assert git("branch", cwd=bare).stdout.strip() == "", "a ref landed anyway"
 
 
+def test_a_directory_name_containing_a_newline_is_still_validated(server, rules_yaml):
+    """`git archive` writes every name git will store, and `git mktree -z` builds trees
+    `git commit` will not make by hand. A newline in a directory name split one path
+    across two lines of the hook's list, neither of which named a graph, so the gate
+    validated nothing and accepted the push while reporting green."""
+    import subprocess
+
+    from conftest import GIT_ISOLATION
+
+    bare, work = server
+
+    def plumb(*args, stdin=""):
+        r = subprocess.run(["git", *args], cwd=work, input=stdin, capture_output=True,
+                           text=True, env={**os.environ, **GIT_ISOLATION})
+        assert r.returncode == 0, (args, r.stderr)
+        return r.stdout.strip()
+
+    rules = plumb("hash-object", "-w", "--stdin", stdin=rules_yaml)
+    node = plumb("hash-object", "-w", "--stdin", stdin=ALIVE_NO_GATE)
+    nodes = plumb("mktree", stdin=f"100644 blob {node}\thyp-x.md\n")
+    graph = plumb("mktree", stdin=f"100644 blob {rules}\tgraph.yaml\n"
+                                  f"040000 tree {nodes}\tnodes\n")
+    # -z, because the name is exactly what the line-oriented form cannot carry.
+    root = plumb("mktree", "-z", stdin=f"040000 tree {graph}\tresearch\nnotes\0")
+    commit = plumb("commit-tree", root, "-m", "a directory name with a newline in it")
+
+    r = git("push", "origin", f"{commit}:refs/heads/sneaky", cwd=work)
+
+    assert r.returncode != 0, "the gate never found the graph and accepted the push"
+    assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
+    assert "sneaky" not in git("branch", cwd=bare).stdout
+
+
 # ---------------------------------------------------------------- hygiene
 
 def test_it_leaves_no_temporary_directories_behind(server, tmp_path):
