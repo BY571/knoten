@@ -36,6 +36,11 @@ WRITE = "git-receive-pack"
 # chose -- GIT_DIR in particular pointed git at a repo nobody meant to touch.
 KEEP_ENV = ("PATH", "HOME", "LANG", "TMPDIR")
 
+# Bound here, by name, so a test can replace knoten's ONE use of it without replacing
+# subprocess.run for every thread in the process. The crashed-backend test used to do the
+# latter, and a handler thread outliving the test that started it then picked up the fake.
+_run = subprocess.run
+
 
 def _pkt_lines(data: bytes):
     """The payload of each pkt-line in `data`: four hex digits of length, then that many
@@ -97,6 +102,20 @@ class _Server(ThreadingHTTPServer):
     def __init__(self, registry: Registry, address, handler):
         self.registry = registry
         super().__init__(address, handler)
+
+    def handle_error(self, request, client_address) -> None:
+        """One line, never socketserver's traceback block.
+
+        The house rule is that nobody reads a stack to find out what went wrong, and the
+        server's own log is not an exception: a traceback is unreadable next to the access
+        log and says nothing this line does not. Two things reach it -- a client that
+        closed before the response was written, and a handler thread outliving the test or
+        request that started it, since these are daemon threads and shutdown() does not
+        join them. Anything the handler itself raises is already a 500, one frame up.
+        """
+        e = sys.exc_info()[1]
+        print(f"knoten serve: {type(e).__name__}: {e} "
+              f"from {client_address[0]}:{client_address[1]}", file=sys.stderr, flush=True)
 
 
 def make_server(reg: Registry, host: str = "127.0.0.1", port: int = 8899) -> ThreadingHTTPServer:
@@ -267,8 +286,7 @@ class _Handler(BaseHTTPRequestHandler):
             "CONTENT_LENGTH": self.headers.get("Content-Length", ""),
             "HTTP_CONTENT_ENCODING": self.headers.get("Content-Encoding", ""),
         }
-        r = subprocess.run(["git", "http-backend"], input=self._body(),
-                           capture_output=True, env=env)
+        r = _run(["git", "http-backend"], input=self._body(), capture_output=True, env=env)
         head, _, out = r.stdout.partition(b"\r\n\r\n")
         status, headers, saw_status = 200, [], False
         for line in head.decode(errors="replace").splitlines():

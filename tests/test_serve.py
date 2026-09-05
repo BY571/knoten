@@ -156,13 +156,17 @@ def test_a_crashed_backend_is_a_500_not_a_silent_200(hub, trading, monkeypatch):
     """A refusal by the gate arrives in the sideband with exit 0, so a non-zero exit
     with no Status line can only be the backend dying. That used to relay as 200 with
     an empty body. Real git cannot be made to crash headerless on demand, which is why
-    this one test fakes the subprocess: it is testing the relay, not git."""
+    this one test fakes the subprocess: it is testing the relay, not git.
+
+    The fake replaces knoten's own bound name, not `subprocess.run`: patching the module
+    hands the fake to every thread in the process, and a handler thread outliving an
+    earlier test would pick it up."""
     import subprocess as sp
     from knoten import serve as serve_mod
 
     def dead(*args, **kwargs):
         return sp.CompletedProcess(args, 128, stdout=b"", stderr=b"fatal: boom")
-    monkeypatch.setattr(serve_mod.subprocess, "run", dead)
+    monkeypatch.setattr(serve_mod, "_run", dead)
 
     req = urllib.request.Request(
         f"{hub.url}/trading.git/info/refs?service=git-upload-pack",
@@ -895,3 +899,22 @@ def test_a_path_that_reads_like_a_refusal_does_not_log_as_one(hub, trading, rule
     err = capfd.readouterr().err
     pushes = [l for l in err.splitlines() if "git-receive-pack" in l]
     assert pushes and pushes[-1].endswith(" 200"), err
+
+
+def test_an_error_escaping_the_handler_is_one_line_not_a_traceback(hub, capfd):
+    """socketserver prints a whole traceback block for anything that escapes the handler.
+    Nobody reads a stack to find out that a client hung up, and it is unreadable next to
+    the access log. Reached by a client that closed before the response was written, and
+    by a handler thread outliving the request that started it."""
+    capfd.readouterr()
+
+    try:
+        raise BrokenPipeError("the client hung up")
+    except BrokenPipeError:
+        hub.server.handle_error(None, ("127.0.0.1", 4242))
+
+    err = capfd.readouterr().err
+    lines = [l for l in err.splitlines() if l.strip()]
+    assert len(lines) == 1, err
+    assert lines[0] == "knoten serve: BrokenPipeError: the client hung up from 127.0.0.1:4242"
+    assert "Traceback" not in err

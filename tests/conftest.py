@@ -100,7 +100,7 @@ def hub(tmp_path, monkeypatch):
     srv = make_server(reg, "127.0.0.1", 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     host, port = srv.server_address
-    yield SimpleNamespace(url=f"http://{host}:{port}", registry=reg,
+    yield SimpleNamespace(url=f"http://{host}:{port}", registry=reg, server=srv,
                           secret=reg.owner_secret(), data=tmp_path / "data")
     srv.shutdown()
     srv.server_close()
