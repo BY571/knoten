@@ -86,3 +86,112 @@ def test_create_rolls_back_on_partial_failure(reg, monkeypatch):
     monkeypatch.undo()
     reg.create("trading", admin="seb")
     assert reg.exists("trading")
+
+
+# ---------------------------------------------------------------- tokens
+
+def test_a_minted_token_authenticates_with_its_role(reg):
+    reg.create("trading", admin="seb")
+    tok = reg.mint("trading", "maria", "write")
+
+    assert reg.authenticate("trading", "maria", tok) == "write"
+
+
+def test_the_wrong_token_the_wrong_user_and_the_wrong_graph_all_fail_closed(reg):
+    reg.create("trading", admin="seb")
+    tok = reg.mint("trading", "maria", "write")
+
+    assert reg.authenticate("trading", "maria", "not-it") is None
+    assert reg.authenticate("trading", "seb", tok) is None          # someone else's token
+    assert reg.authenticate("biology", "maria", tok) is None        # no such graph
+    assert reg.authenticate("trading", "maria", "") is None
+    assert reg.authenticate("trading", "", tok) is None
+
+
+def test_tokens_are_stored_hashed(reg):
+    """A leaked tokens.json must be worthless."""
+    reg.create("trading", admin="seb")
+    tok = reg.mint("trading", "maria", "write")
+
+    on_disk = (reg.graph_dir("trading") / "tokens.json").read_text(encoding="utf-8")
+    assert tok not in on_disk
+    assert "maria" in on_disk
+
+
+def test_create_returns_a_working_admin_token(reg):
+    tok = reg.create("trading", admin="seb")
+
+    assert reg.authenticate("trading", "seb", tok) == "admin"
+
+
+@pytest.mark.parametrize("role", ["owner", "Admin", "", "rw"])
+def test_a_role_outside_the_three_is_refused(reg, role):
+    reg.create("trading", admin="seb")
+    with pytest.raises(GraphError, match="role must be one of"):
+        reg.mint("trading", "maria", role)
+
+
+def test_contributor_names_follow_id_re(reg):
+    """The name ends up as a JSON key and, in phase 2, as a filename in graph.yaml."""
+    reg.create("trading", admin="seb")
+    with pytest.raises(GraphError, match="not a valid contributor name"):
+        reg.mint("trading", "Maria Lopez", "write")
+
+
+def test_revoke_ends_access_and_nothing_else(reg):
+    reg.create("trading", admin="seb")
+    tok = reg.mint("trading", "maria", "write")
+
+    reg.revoke("trading", "maria")
+
+    assert reg.authenticate("trading", "maria", tok) is None
+    assert reg.exists("trading")
+
+
+def test_revoking_a_stranger_is_an_error(reg):
+    reg.create("trading", admin="seb")
+    with pytest.raises(GraphError, match="no contributor 'ghost'"):
+        reg.revoke("trading", "ghost")
+
+
+# ---------------------------------------------------------------- invites
+
+def test_an_invite_redeems_once_into_a_working_token(reg):
+    reg.create("trading", admin="seb")
+    code = reg.invite("trading", "maria", "write")
+
+    user, role, tok = reg.redeem("trading", code)
+
+    assert (user, role) == ("maria", "write")
+    assert reg.authenticate("trading", "maria", tok) == "write"
+    with pytest.raises(GraphError, match="not valid"):
+        reg.redeem("trading", code)                       # spent
+
+
+def test_an_expired_invite_is_refused_and_spent(reg):
+    """Expired codes are removed when tried, so a stale invites.json does not grow
+    forever and a late guess cannot be retried after the clock is fixed."""
+    reg.create("trading", admin="seb")
+    code = reg.invite("trading", "maria", "write", days=-1)
+
+    with pytest.raises(GraphError, match="expired"):
+        reg.redeem("trading", code)
+    with pytest.raises(GraphError, match="not valid"):
+        reg.redeem("trading", code)
+
+
+def test_invite_codes_are_stored_hashed(reg):
+    reg.create("trading", admin="seb")
+    code = reg.invite("trading", "maria", "write")
+
+    assert code not in (reg.graph_dir("trading") / "invites.json").read_text(encoding="utf-8")
+
+
+def test_a_wrong_code_and_a_wrong_graph_both_fail(reg):
+    reg.create("trading", admin="seb")
+    reg.invite("trading", "maria", "write")
+
+    with pytest.raises(GraphError, match="not valid"):
+        reg.redeem("trading", "guess")
+    with pytest.raises(GraphError, match="no graph 'biology'"):
+        reg.redeem("biology", "anything")

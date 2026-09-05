@@ -107,11 +107,65 @@ class Registry:
 
     # ---------------------------------------------------------------- tokens
 
+    def _check(self, name: str, user: str, role: str) -> None:
+        if role not in ROLES:
+            raise GraphError(f"role must be one of {', '.join(ROLES)}, not '{role}'")
+        if not ID_RE.match(user or ""):
+            raise GraphError(f"'{user}' is not a valid contributor name (use kebab-case)")
+        self.repo(name)
+
     def mint(self, name: str, user: str, role: str) -> str:
-        """Task 2 completes this. Kept minimal here so `create` has something to return."""
+        self._check(name, user, role)
         token = secrets.token_urlsafe(32)
         with graph_lock(self.graph_dir(name)):
             tokens = self._read(name, "tokens.json")
             tokens[user] = {"hash": _hash(token), "role": role}
             self._write(name, "tokens.json", tokens)
         return token
+
+    def authenticate(self, name: str, user: str, token: str) -> str | None:
+        """The role this token grants on this graph, or None. Never raises: an unknown
+        graph and a wrong token look identical to the caller, so the server does not
+        leak which graphs exist."""
+        if not ID_RE.match(name or "") or not self.exists(name):
+            return None
+        entry = self._read(name, "tokens.json").get(user or "")
+        if not entry or not hmac.compare_digest(entry["hash"], _hash(token)):
+            return None
+        return entry["role"]
+
+    def revoke(self, name: str, user: str) -> None:
+        with graph_lock(self.graph_dir(name)):
+            tokens = self._read(name, "tokens.json")
+            if user not in tokens:
+                raise GraphError(f"no contributor '{user}' on graph '{name}'")
+            del tokens[user]
+            self._write(name, "tokens.json", tokens)
+
+    # ---------------------------------------------------------------- invites
+
+    def invite(self, name: str, user: str, role: str, days: int = 7) -> str:
+        self._check(name, user, role)
+        code = secrets.token_urlsafe(16)
+        expires = (_now() + timedelta(days=days)).isoformat()
+        with graph_lock(self.graph_dir(name)):
+            invites = self._read(name, "invites.json")
+            invites[_hash(code)] = {"name": user, "role": role, "expires": expires}
+            self._write(name, "invites.json", invites)
+        return code
+
+    def redeem(self, name: str, code: str) -> tuple[str, str, str]:
+        """One use. Returns (user, role, token). The code is removed on first try
+        whether or not it was still live, so an expired code cannot be retried."""
+        self.repo(name)
+        with graph_lock(self.graph_dir(name)):
+            invites = self._read(name, "invites.json")
+            entry = invites.pop(_hash(code), None)
+            if entry is None:
+                raise GraphError("that invite code is not valid for this graph")
+            self._write(name, "invites.json", invites)
+        if datetime.fromisoformat(entry["expires"]) < _now():
+            raise GraphError("that invite has expired; ask the admin for a new one")
+        # Outside the lock: mint takes it again, and flock on a fresh handle would wait
+        # on our own lock forever.
+        return entry["name"], entry["role"], self.mint(name, entry["name"], entry["role"])
