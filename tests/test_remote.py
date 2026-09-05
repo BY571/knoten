@@ -581,6 +581,36 @@ def test_remote_create_refuses_when_you_are_not_in_an_existing_contributors_file
                  "--owner-secret", hub.secret]) == 1
     assert "not listed" in capsys.readouterr().err
     assert not hub.registry.exists("trading")          # refused before the server was asked
+    assert not (key_dir() / "seb").exists()            # refused before a key was even made
+
+
+def test_remote_create_does_not_stage_unrelated_files_in_the_enclosing_repo(hub, local_graph, monkeypatch):
+    """`_bootstrap`'s commit must add only contributors.yaml. `git add -A` in the
+    enclosing repo would also stage (and remote_create would then push) any unrelated
+    scratch file or secret the monorepo layout puts next to this graph, with no listing
+    or confirmation."""
+    (local_graph / "secret.txt").write_text("shh", encoding="utf-8")
+    monkeypatch.chdir(local_graph)
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 0
+
+    hosted = git("ls-tree", "-r", "--name-only", "HEAD", cwd=hub.registry.repo("trading")).stdout
+    assert "secret.txt" not in hosted
+    assert (local_graph / "secret.txt").exists()
+    assert "secret.txt" in git("status", "--porcelain", cwd=local_graph).stdout
+
+
+def test_remote_create_bootstrap_commit_failure_is_one_line(hub, local_graph, monkeypatch, capsys):
+    """git's "Please tell me who you are" refusal is several lines; only the first, plus
+    a hint, belongs in the one line every other refusal here gives."""
+    git("config", "--unset", "user.email", cwd=local_graph)
+    monkeypatch.chdir(local_graph)
+
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "could not commit" in err
 
 
 def test_knoten_key_prints_the_public_line(monkeypatch, capsys, tmp_path):

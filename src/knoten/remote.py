@@ -203,21 +203,28 @@ def _bootstrap(root: Path, repo: Path, admin: str) -> None:
     The first contributors.yaml is the constitution's genesis: the gate accepts it only
     if the commit is signed by an admin it names, so the creator's key must exist before
     the first push, and the file and the signature must agree."""
+    contribs = C.load(root)
+    if contribs is not None and admin not in contribs:
+        # Checked before ensure_key: a typo'd but kebab-valid --as must not leave a
+        # stray keypair on disk after this exact refusal.
+        raise GraphError(f"'{admin}' is not listed in {C.FILE}; an admin has to invite you, "
+                         "or delete that file if you are starting this graph")
     priv = ensure_key(admin)
     configure_signing(repo, priv)
     mine = public_line(priv)
-    contribs = C.load(root)
     if contribs is None:
         C.dump(root, {admin: {"key": mine, "role": "admin"}})
-        _git(repo, "add", "-A")
+        # Only contributors.yaml: `add -A` in the enclosing repo would also stage every
+        # unrelated untracked file the monorepo layout allows next to this graph, and
+        # remote_create would then push it with no listing or confirmation.
+        _git(repo, "add", "--", str(root / C.FILE))
         r = _git(repo, "commit", "-q", "-m", f"{admin} creates the graph as admin")
         if r.returncode != 0:
-            raise GraphError(f"could not commit contributors.yaml: {r.stderr.strip()}")
+            first_line = next((l for l in r.stderr.splitlines() if l.strip()), r.stderr.strip())
+            raise GraphError(f"could not commit {C.FILE}: {first_line}. Set user.name and "
+                             "user.email in this repo and run the command again")
         return
-    entry = contribs.get(admin)
-    if entry is None:
-        raise GraphError(f"'{admin}' is not listed in {C.FILE}; an admin has to invite you, "
-                         "or delete that file if you are starting this graph")
+    entry = contribs[admin]
     if entry["key"] != mine:
         raise GraphError(f"{C.FILE} lists a different key for '{admin}' than the one in "
                          f"{priv}; the graph's key wins, so use the machine that holds it")
