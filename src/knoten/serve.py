@@ -340,8 +340,11 @@ class _Handler(BaseHTTPRequestHandler):
         # A fresh read, not whatever head_graph said when the invite was minted: an admin
         # revoked between the invite and the join must be caught NOW, not only later when
         # the gate refuses the join commit -- by then the holder already has a live token.
-        contribs, _ = self.server.registry.head_graph(name)
-        user, role, token, extra = self.server.registry.redeem(name, body.get("code", ""), contribs)
+        # Passed as a callable, not called here: redeem() only invokes it AFTER the code
+        # itself is confirmed to exist, so a bogus code costs no git work at all and a
+        # misconfigured hosted repo never gets a chance to answer before the code does.
+        user, role, token, extra = self.server.registry.redeem(
+            name, body.get("code", ""), lambda: self.server.registry.head_graph(name)[0])
         self.log_message(f"join:{role}", name, user, 200)
         self._json(200, {"name": user, "role": role, "token": token, **extra})
 
@@ -367,10 +370,20 @@ class _Handler(BaseHTTPRequestHandler):
             raise GraphError("days must be a whole number") from None
         contribs, graph_name = self.server.registry.head_graph(name)
         blob, sig = str(body.get("blob", "")), str(body.get("sig", ""))
+        try:
+            # A lone surrogate in `blob`/`sig` (a crafted \udXXX escape in the JSON body)
+            # decodes fine through json.loads but not through .encode(): unguarded, that
+            # reached the catch-all as a bare 500 instead of a refusal. Encoding BEFORE
+            # the size cap below also means that cap counts BYTES, not code points -- a
+            # multi-byte character made a code-point count understate what actually gets
+            # stored and signed over.
+            blob_bytes, sig_bytes = blob.encode(), sig.encode()
+        except UnicodeEncodeError:
+            raise GraphError("that invite is malformed") from None
         # A bearer secret with no cap at all is one more thing for a hostile admin token
         # to abuse; these are generous ceilings for a real signed blob and SSHSIG, not a
         # size any legitimate invite comes close to.
-        if len(blob) > 4096 or len(sig) > 8192:
+        if len(blob_bytes) > 4096 or len(sig_bytes) > 8192:
             raise GraphError("invite fields are too large")
         if contribs is None:
             # An unsigned graph has no admin key to check a signature against; carrying
@@ -388,13 +401,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # but contributors.yaml never listed them, so there is no key of theirs to
                 # check anything against in the first place.
                 return self._refuse(403, "knoten: you are not a listed admin of this graph")
-            try:
-                # A lone surrogate in `blob` (a crafted \udXXX escape in the JSON body)
-                # encodes fine through json.loads but not through .encode(): unguarded,
-                # that reached the catch-all as a bare 500 instead of a refusal.
-                blob_bytes, _ = blob.encode(), sig.encode()
-            except UnicodeEncodeError:
-                raise GraphError("that invite is malformed") from None
             try:
                 signer = C.verify_invite(contribs, blob_bytes, sig)
             except GraphError:

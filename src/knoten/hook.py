@@ -15,7 +15,6 @@ and silently not gating. Which is precisely the failure this module exists to pr
 """
 from __future__ import annotations
 
-import os
 import stat
 import subprocess
 from pathlib import Path
@@ -44,8 +43,14 @@ exec knoten validate
 
 def _git(root: Path, *args: str, env: dict | None = None) -> str:
     try:
+        # env AS GIVEN, never merged with os.environ: a caller that passes an env is
+        # asserting "this is the complete environment", server_git_env() among them --
+        # merging os.environ back in here let a stray GIT_DIR survive every filter the
+        # caller applied and point `rev-parse --git-path hooks` at a repo nobody asked
+        # for. `env=None` (no caller-supplied env, the client `hook.install` path) still
+        # inherits the parent's environment in full, same as subprocess.run's own default.
         r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
-                           env={**os.environ, **env} if env else None)
+                           env=env)
     except FileNotFoundError as e:
         raise GraphError("git is not installed") from e
     if r.returncode != 0:
@@ -132,10 +137,13 @@ def install_server(repo: Path, force: bool = False, env: dict | None = None) -> 
 
     `env` must be whatever the receive-pack that will ENFORCE this gate runs under, since
     that is what decides where hooks are read from. `knoten serve` owns the repo and runs
-    receive-pack itself, so `Registry.create` passes SERVER_GIT_ENV. `knoten hook
-    --server` does not: that repo is hosted by nginx or sshd under the operator's own
-    account, receive-pack reads their ~/.gitconfig, and forcing SERVER_GIT_ENV here wrote
-    the gate to repo.git/hooks while git went looking at their core.hooksPath. The gate
-    then failed OPEN, which is the one way for it to be wrong and still report green.
+    receive-pack itself, so `Registry.create` passes `server_git_env()` -- the COMPLETE
+    environment, not a few keys merged over the caller's own os.environ: a stray GIT_DIR
+    or core.hooksPath left in the daemon's environment must not survive into this call
+    and redirect where the gate gets written. `knoten hook --server` passes no env at
+    all: that repo is hosted by nginx or sshd under the operator's own account,
+    receive-pack reads their ~/.gitconfig, and forcing a server env here wrote the gate
+    to repo.git/hooks while git went looking at their core.hooksPath. The gate then
+    failed OPEN, which is the one way for it to be wrong and still report green.
     """
     return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force, env=env)

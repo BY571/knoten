@@ -657,6 +657,37 @@ def test_an_admin_token_not_listed_in_contributors_gets_a_clear_refusal(hub, sig
     assert "not a listed admin" in got["error"]
 
 
+def test_invite_field_size_cap_counts_bytes_not_code_points(hub, trading):
+    """A multi-byte character must count by its actual stored/signed byte length, not
+    code points: 2049 two-byte characters is 4098 bytes -- over the cap, though under it
+    by code-point count alone."""
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": "é" * 2049, "sig": ""},
+                       ("seb", trading["admin"]))
+    assert status == 400
+    assert "too large" in body["error"]
+
+
+def test_an_invite_issued_before_the_graph_was_signed_is_refused_at_join(hub, trading, keys_dir):
+    """Bootstrapping a signed graph does not retroactively arm invites that were minted
+    unsigned, before there was any admin key to check them against."""
+    status, got = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                      ("seb", trading["admin"]))
+    assert status == 200
+
+    work = trading["work"]
+    seb = make_key(keys_dir, "seb")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb signs the graph after the fact", seb)
+    r = git("push", "-q", "origin", "master", cwd=work)
+    assert r.returncode == 0, r.stderr
+
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+
+    assert status == 400
+    assert "issued before this graph was signed" in joined["error"]
+
+
 # ---------------------------------------------------------------- the invite list
 
 def test_an_admin_can_list_the_open_invites(hub, trading):
