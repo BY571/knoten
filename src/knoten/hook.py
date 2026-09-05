@@ -20,7 +20,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from .core import GraphError, SERVER_GIT_ENV
+from .core import GraphError
 
 MARKER = "# knoten pre-commit gate"
 

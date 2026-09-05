@@ -653,7 +653,6 @@ def hooks_path_hub(tmp_path, monkeypatch):
     import threading
     from types import SimpleNamespace
 
-    from conftest import GIT_ISOLATION
     from knoten.registry import Registry
     from knoten.serve import make_server
 
@@ -661,10 +660,14 @@ def hooks_path_hub(tmp_path, monkeypatch):
     elsewhere = home / "unrelated-hooks"
     elsewhere.mkdir(parents=True)
     (home / ".gitconfig").write_text(f"[core]\n\thooksPath = {elsewhere}\n", encoding="utf-8")
-    for k, v in GIT_ISOLATION.items():
-        monkeypatch.setenv(k, v)
     monkeypatch.setenv("KNOTEN_CREDENTIALS", str(tmp_path / "credentials"))
     monkeypatch.setenv("HOME", str(home))          # before the Registry, which installs the gate
+    # Undo the autouse isolation for the SERVER side only: this fixture exists to put a
+    # global core.hooksPath in front of the code, and pinning it away here would make the
+    # test pass without `Registry.create` passing SERVER_GIT_ENV to install_server. The
+    # pushing client still gets GIT_ISOLATION, which `git()` merges per subprocess.
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
 
     reg = Registry(tmp_path / "data")
     srv = make_server(reg, "127.0.0.1", 0)

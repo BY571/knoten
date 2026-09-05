@@ -64,6 +64,22 @@ GIT_ISOLATION = {
 }
 
 
+@pytest.fixture(autouse=True)
+def isolated_git(monkeypatch):
+    """The developer's own ~/.gitconfig, out of every test, in-process calls included.
+
+    `git()` merged GIT_ISOLATION into the subprocesses IT ran, which protected nothing
+    that knoten runs itself: `install_server(bare)` asks git where hooks live through
+    `subprocess.run` inside the module under test. On a machine with a global
+    `core.hooksPath`, the hook tests answered with the developer's shared hooks directory,
+    wrote a `pre-receive` into it, and 24 tests failed -- after touching a directory
+    outside the tmp_path they were given. The merge in `git()` stays; this is the
+    guarantee.
+    """
+    for k, v in GIT_ISOLATION.items():
+        monkeypatch.setenv(k, v)
+
+
 def git(*args, cwd, env=None):
     """Every test file drives real git. One spelling of the call, so the isolation above
     cannot be present in two files and missing in the third -- which is what happened:

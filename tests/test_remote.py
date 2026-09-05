@@ -62,7 +62,7 @@ def test_the_store_is_made_private_again_if_it_was_not():
 
 def test_a_schemeless_key_is_never_matched_by_stripping_the_scheme():
     """A fallback to the old `<netloc><path>` key leaked the owner secret. Without a
-    scheme, `owner://h:8899` and `https://h:8899` are the same string, so a plain
+    scheme, `owner://h:8899` and `https://h:8899` collapse to the same string, so a plain
     `git fetch` against the bare host matched the owner line and got the key to every
     graph on the server. The lookup is exact, and nothing rewrites keys."""
     p = cred_path()
