@@ -157,10 +157,13 @@ def test_remote_create_with_the_wrong_owner_secret_is_one_line(hub, local_graph,
 
 def test_remote_create_with_no_secret_and_no_terminal_is_one_line(hub, local_graph, monkeypatch, capsys):
     """getpass raises EOFError when stdin is not a terminal. From a script or CI that
-    was a traceback instead of the one line every other refusal gives."""
-    import io
+    was a traceback instead of the one line every other refusal gives. The prompt itself
+    is stubbed rather than pointing stdin at a StringIO, which makes getpass warn about
+    not being able to control echo on the terminal."""
+    def no_terminal(*_a, **_k):
+        raise EOFError
     monkeypatch.chdir(local_graph)
-    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    monkeypatch.setattr("knoten.remote.getpass.getpass", no_terminal)
 
     assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb"]) == 1
     err = capsys.readouterr().err
