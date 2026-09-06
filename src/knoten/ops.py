@@ -11,7 +11,7 @@ from pathlib import Path
 from .core import (GATE_SECTIONS, GATE_TYPE, VERDICT, GraphError, Node,
                    frontier as _frontier, gates as _gates, load, retrieve, section,
                    shortest_path)
-from .update import update as _update_node
+from .update import update_with_report
 from .validate import check, load_config
 
 # A row is ~45 tokens once JSON key overhead is counted, so 200 rows is ~9k — readable
@@ -183,10 +183,13 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
     convention rather than inventing a third shape.
     """
     try:
-        now = _update_node(root, nid, status=status, results=results,
-                           links=links, append=append, fields=fields)
+        now, report = update_with_report(root, nid, status=status, results=results,
+                                         links=links, append=append, fields=fields)
     except GraphError as e:
         return {"status": "REJECTED", "node": nid, "reason": str(e),
                 "hint": "Fix it and update again. The gate is the point."}
-    return {"status": "UPDATED", "node": nid, "node_status": now,
-            "next": "git add + commit to version this."}
+    out = {"status": "UPDATED", "node": nid, "node_status": now,
+           "next": "git add + commit to version this."}
+    if report:
+        out["compressed"] = report
+    return out

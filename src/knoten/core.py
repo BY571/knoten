@@ -580,3 +580,30 @@ def compressible_types(cfg: dict) -> tuple[str, ...]:
     v = cfg.get("compressible") or ["finding"]
     v = [v] if isinstance(v, str) else v
     return tuple(str(t) for t in v)
+
+
+def shape(nodes: dict[str, Node], cfg: dict) -> dict:
+    """The graph's compression state: rules over specifics, and the budget per question
+    when a `max_alive` rule exists. The same numbers reward a commit and head `frontier`."""
+    types = compressible_types(cfg)
+    alive = [n for n in nodes.values() if n.status == "alive"]
+    rules = [n for n in alive if is_general(n)]
+    covered = {t for n in alive for t in supersedes(n)}
+    specifics = [n for n in alive if n.type in types and not is_general(n) and n.id not in covered]
+    out = {"rules": len(rules), "specifics": len(specifics), "budget": []}
+    for r in cfg.get("rules", []):
+        spec = r.get("max_alive")
+        if not spec or spec.get("per", "question") != "question":
+            continue
+        rtypes = tuple(str(t).strip() for t in str(spec["type"]).split(",")) \
+            if isinstance(spec["type"], str) else tuple(spec["type"])
+        counts: dict[str, int] = {}
+        for n in alive:
+            if n.type in rtypes and n.id not in covered:
+                q = question_of(nodes, n.id) or "(no question)"
+                counts[q] = counts.get(q, 0) + 1
+        for q, c in counts.items():
+            out["budget"].append({"question": q, "type": "/".join(rtypes),
+                                  "free": spec["count"] - c, "count": spec["count"]})
+    out["budget"].sort(key=lambda b: (b["free"], b["question"]))
+    return out

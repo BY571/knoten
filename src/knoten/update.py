@@ -19,9 +19,10 @@ from pathlib import Path
 
 import yaml
 
-from .core import (FM_RE, GraphError, backlink, graph_lock, load, node_path, parse_text,
-                   split, today, write_atomic)
-from .validate import check
+from .core import (FM_RE, SUPERSEDES, GraphError, Node, backlink, graph_lock, load,
+                   node_path, parse_text, question_of, shape, split, supersedes, today,
+                   write_atomic)
+from .validate import check, load_config
 
 # A key we re-emit; everything else keeps its original text, comments included.
 _BLOCK = re.compile(r"^(\w[\w-]*):", re.M)
@@ -57,6 +58,26 @@ def _rewrite(fm: str, changed: dict) -> str:
     return "\n".join(lines)
 
 
+def update_with_report(root: Path, nid: str, status: str | None = None,
+                       results: dict | None = None, links: list | None = None,
+                       append: str | None = None,
+                       fields: dict | None = None) -> tuple[str, dict | None]:
+    """Append to a node, move its status, set its fields. Raises GraphError, having
+    written nothing.
+
+    Returns (the status the node now carries, what a compression freed — or None when
+    this update did not add a `npx:supersedes` edge).
+    """
+    with graph_lock(root):
+        now = _update(root, nid, status=status, results=results, links=links,
+                      append=append, fields=fields)
+        report = None
+        if links and any(l.get("rel") == SUPERSEDES for l in links):
+            node = load(root)[nid]
+            report = compression_report(root, node, flip_superseded(root, node))
+        return now, report
+
+
 def update(root: Path, nid: str, status: str | None = None, results: dict | None = None,
            links: list | None = None, append: str | None = None,
            fields: dict | None = None) -> str:
@@ -65,9 +86,7 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
 
     Returns the status the node now carries.
     """
-    with graph_lock(root):
-        return _update(root, nid, status=status, results=results, links=links,
-                       append=append, fields=fields)
+    return update_with_report(root, nid, status, results, links, append, fields)[0]
 
 
 def _update(root: Path, nid: str, status, results, links, append, fields) -> str:
@@ -121,3 +140,38 @@ def _update(root: Path, nid: str, status, results, links, append, fields) -> str
 
     write_atomic(nf, out)
     return candidate.status
+
+
+def flip_superseded(root: Path, node: Node) -> list[str]:
+    """Mark everything `node` supersedes as superseded. Called by the op that just wrote
+    `node`, inside its lock, AFTER the graph validated with `node` in it: by then the bar
+    has been met and the only thing left is the status the lifecycle promises."""
+    flipped = []
+    nodes = load(root)
+    for tid in supersedes(node):
+        t = nodes.get(tid)
+        if t is None or t.status == "superseded":
+            continue
+        _update(root, tid, status="superseded", results=None, links=None,
+                append=f"superseded by {node.id} on {today()}", fields=None)
+        flipped.append(tid)
+    return flipped
+
+
+def compression_report(root: Path, node: Node, flipped: list[str]) -> dict | None:
+    """What a compression freed, in the numbers the agent can act on."""
+    targets = supersedes(node)
+    if not targets:
+        return None
+    nodes = backlink(load(root))
+    cfg = load_config(root)
+    faced = {l["to"] for l in node.links if l["rel"] == "kn:survivedGate"}
+    most = max((len({l["to"] for l in nodes[t].links if l["rel"] == "kn:survivedGate"})
+                for t in targets if t in nodes), default=0)
+    q = question_of(nodes, node.id)
+    s = shape(nodes, cfg)
+    slot = next((b for b in s["budget"] if b["question"] == q and node.type in b["type"].split("/")), None)
+    return {"targets": targets, "flipped": flipped, "gates": len(faced),
+            "gates_bonus": len(faced) > most, "question": q,
+            "free": slot["free"] if slot else None, "count": slot["count"] if slot else None,
+            "rules": s["rules"], "specifics": s["specifics"]}

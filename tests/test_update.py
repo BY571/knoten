@@ -222,3 +222,42 @@ def test_a_frontmatter_id_that_would_disagree_with_the_filename_is_refused(graph
 
     with pytest.raises(GraphError, match="mismatched-id"):
         update(graph.root, "hyp-x", fields={"id": "hyp-someone-else"})
+
+
+def test_update_that_adds_a_supersedes_link_flips_the_target(graph):
+    graph.rules("""\
+name: t
+statuses: [open, alive, superseded]
+node_types: [question, finding, gate]
+rules: []
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}",
+               "# G\n\n## Covers\n- finding-1: it\n")
+
+    update(graph.root, "finding-g", links=[{"rel": "npx:supersedes", "to": "finding-1"}])
+
+    assert load(graph.root)["finding-1"].status == "superseded"
+
+
+def test_a_target_already_superseded_is_left_alone(graph):
+    graph.rules("name: t\nstatuses: [alive, superseded]\nnode_types: [question, finding]\nrules: []\n")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: alive", "# Q\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: superseded\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}", "# 1\n")
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}", "# 2\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}",
+               "# G\n\n## Covers\n- finding-2: it\n")
+    was = graph.read("finding-1")
+
+    update(graph.root, "finding-g", links=[{"rel": "npx:supersedes", "to": "finding-2"}])
+
+    assert graph.read("finding-1") == was

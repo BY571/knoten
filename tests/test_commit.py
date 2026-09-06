@@ -164,3 +164,103 @@ def test_a_malformed_candidate_is_refused_not_raised(graph):
 
     assert res["status"] == "REJECTED"
     assert not (graph.root / "nodes" / "hyp-bad.md").exists()
+
+
+COMP_RULES = """\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, finding, gate]
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {type: finding, per: question, count: 4}
+    message: Compress first.
+"""
+
+GENERAL = ("type: finding\nstatus: alive\nlinks:\n"
+           "  - {rel: npx:supersedes, to: finding-1}\n"
+           "  - {rel: npx:supersedes, to: finding-2}\n"
+           "  - {rel: kn:survivedGate, to: gate-a}\n"
+           "  - {rel: kn:survivedGate, to: gate-b}")
+COVERS = "# G\n\n## Covers\n- finding-1: small\n- finding-2: large\n"
+
+
+def _specifics(graph, n=2):
+    graph.rules(COMP_RULES)
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
+    for i in range(1, n + 1):
+        gate = "gate-a" if i % 2 else "gate-b"
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\n"
+                                   f"created: 2026-01-{i:02d}\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                   f"  - {{rel: kn:survivedGate, to: {gate}}}",
+                   f"# {i}\n\nThe claim {i}.\n")
+    return graph
+
+
+def test_committing_a_general_node_flips_its_targets_and_keeps_their_claims(graph):
+    _specifics(graph)
+    before = {i: graph.read(f"finding-{i}") for i in (1, 2)}
+
+    res = commit(graph.root, "finding-g", GENERAL, COVERS)
+
+    assert res["status"] == "COMMITTED"
+    nodes = load(graph.root)
+    assert nodes["finding-1"].status == nodes["finding-2"].status == "superseded"
+    for i in (1, 2):
+        after = graph.read(f"finding-{i}")
+        assert f"The claim {i}." in after and after.startswith("---\n")
+        assert "superseded by finding-g" in after
+        assert before[i].split("---")[2].strip() in after      # the body survives verbatim
+
+
+def test_a_refused_general_node_flips_nothing(graph):
+    _specifics(graph)
+
+    res = commit(graph.root, "finding-g", GENERAL, "# G\n")     # no Covers
+
+    assert res["status"] == "REJECTED"
+    assert any(v["rule"] == "supersession" for v in res["violations"])
+    assert load(graph.root)["finding-1"].status == "alive"
+    assert not (graph.root / "nodes" / "finding-g.md").exists()
+
+
+def test_a_compression_reports_what_it_freed(graph):
+    _specifics(graph, n=4)
+
+    res = commit(graph.root, "finding-g", GENERAL, COVERS)
+
+    c = res["compressed"]
+    assert c["targets"] == ["finding-1", "finding-2"]
+    assert c["gates"] == 2 and c["gates_bonus"] is True
+    assert c["question"] == "question-q"
+    assert (c["free"], c["count"]) == (1, 4)          # 4 - 2 + 1 = 3 alive, budget 4
+    assert (c["rules"], c["specifics"]) == (1, 2)
+
+
+def test_the_budget_refuses_the_one_too_many_and_a_compression_unblocks_it(graph):
+    _specifics(graph, n=4)
+    fifth = ("type: finding\nstatus: alive\ncreated: 2026-02-01\nlinks:\n"
+             "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+             "  - {rel: kn:survivedGate, to: gate-a}")
+
+    res = commit(graph.root, "finding-5", fifth, "# 5\n")
+    assert res["status"] == "REJECTED"
+    assert "Compress first" in res["violations"][0]["message"]
+    assert not (graph.root / "nodes" / "finding-5.md").exists()
+
+    assert commit(graph.root, "finding-g", GENERAL, COVERS)["status"] == "COMMITTED"
+    assert commit(graph.root, "finding-5", fifth, "# 5\n")["status"] == "COMMITTED"
+
+
+def test_a_single_replacement_reports_one_line_worth(graph):
+    _specifics(graph)
+    one = ("type: finding\nstatus: alive\nlinks:\n"
+           "  - {rel: npx:supersedes, to: finding-1}\n"
+           "  - {rel: kn:survivedGate, to: gate-a}")
+
+    res = commit(graph.root, "finding-r", one, "# R\n\n## Covers\n- finding-1: replaced\n")
+
+    assert res["compressed"]["targets"] == ["finding-1"]
+    assert load(graph.root)["finding-1"].status == "superseded"

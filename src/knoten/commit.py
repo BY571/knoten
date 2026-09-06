@@ -14,7 +14,9 @@ import re
 from pathlib import Path
 
 from .core import (VERDICT, GraphError, Node, backlink, fields, graph_lock, load,
-                   node_path, parse_text, retrieve, section, today, write_atomic)
+                   node_path, parse_text, retrieve, section, supersedes, today,
+                   write_atomic)
+from .update import compression_report, flip_superseded
 from .validate import check
 
 
@@ -84,9 +86,13 @@ def commit(root: Path, nid: str, frontmatter: str, body: str) -> dict:
 
         write_atomic(path, text)
 
+        flipped = flip_superseded(root, candidate) if supersedes(candidate) else []
+
     out = {"status": "COMMITTED", "node": nid, "path": f"nodes/{nid}.md",
            "graph_size": len(nodes) + 1,
            "next": "git add + commit to version this."}
+    if supersedes(candidate):
+        out["compressed"] = compression_report(root, candidate, flipped)
     if similar := _similar(nodes, candidate):
         out["similar"] = similar
         out["warning"] = (
