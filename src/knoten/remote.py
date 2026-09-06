@@ -190,6 +190,11 @@ def _explain(stderr: str) -> str:
         return "this token has read access, not write"
     if "pre-receive hook declined" in stderr:
         return "the server refused the push; fix the violations above and push again"
+    if re.search(r"\(fetch first\)|\(non-fast-forward\)", own):
+        return "the graph moved on since your last pull; run `knoten pull`, then push again"
+    if "CONFLICT" in stderr or "could not apply" in own:
+        return ("pull stopped on a conflict; fix the file git names, `git add` it, "
+                "`git rebase --continue`, then push")
     lines = [l for l in stderr.strip().splitlines() if l.strip()]
     return lines[-1] if lines else "git failed"
 
@@ -341,13 +346,35 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
     return f"{on}/{name}"
 
 
-def remote_add(root: Path, url: str) -> None:
-    _wire(_toplevel(root), url.rstrip("/") + ".git")
+def remote_add(root: Path, url: str, me: str | None = None) -> str | None:
+    """Point a clone at its remote. On a signed graph, if `me` is listed there and this
+    machine holds their key, make the clone sign as them: this is the second-laptop
+    path, and a clone that pulls fine but pushes unsigned is a puzzle nobody deserves.
+    Returns the name the clone now signs as, or None (unsigned graph, or a reader)."""
+    repo = _toplevel(root)
+    git_url = url.rstrip("/") + ".git"
+    _wire(repo, git_url)
+    contribs = C.load(root)
+    if contribs is None:
+        return None
+    me = me or (cred_lookup(git_url) or ("",))[0] or default_signing_name(root)
+    if me not in contribs:
+        return None
+    configure_signing(repo, _my_key(contribs, me))
+    return me
 
 
 def push(root: Path) -> int:
     repo = _toplevel(root)
     _origin(repo)
+    # `knoten commit` files a node on disk and git commits nothing; `push` sends HEAD.
+    # Without this check a collaborator files a node, pushes, sees a tick, and has sent
+    # nothing -- the one mistake every first-time contributor made.
+    dirty = _git(repo, "status", "--porcelain", "--", str(root))
+    if dirty.stdout.strip():
+        n = len(dirty.stdout.strip().splitlines())
+        raise GraphError(f"{n} change(s) in the graph are not committed to git, so there is "
+                         "nothing to push yet: `git add -A && git commit -m '...'`, then push")
     r = _git(repo, "push", "origin", "HEAD")
     _relay(r.stderr)
     if r.returncode != 0:
@@ -359,7 +386,10 @@ def push(root: Path) -> int:
 def pull(root: Path) -> int:
     repo = _toplevel(root)
     _origin(repo)
-    r = _git(repo, "pull", "-q", "--ff-only", "origin")
+    # Rebase, never merge: the gate refuses a merge commit, so a merge is a pull that can
+    # never be pushed. The clone signs every commit it makes, and a rebase makes commits,
+    # so what comes out is signed again. Autostash keeps a half-written node out of the way.
+    r = _git(repo, "pull", "-q", "--rebase", "--autostash", "origin")
     if r.returncode != 0:
         raise GraphError(_explain(r.stderr))
     print("  ✓ up to date")

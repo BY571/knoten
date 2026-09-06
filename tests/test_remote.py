@@ -229,6 +229,60 @@ def test_push_goes_through_the_gate(hub, shared, capsys):
     assert "hyp-y" in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
 
 
+def test_push_refuses_uncommitted_changes_instead_of_pushing_nothing(hub, shared, capsys):
+    """`knoten commit` writes a node; git has not seen it. A push that then says "pushed"
+    sent nothing, and the collaborator only learns that when somebody else cannot find
+    the node."""
+    (shared / "nodes" / "hyp-u.md").write_text(
+        "---\nid: hyp-u\ntype: hypothesis\nstatus: open\n---\n\n# u\n", encoding="utf-8")
+
+    assert main(["push"]) == 1
+    err = capsys.readouterr().err
+    assert "not committed" in err and "git commit" in err and err.count("\n") == 1
+    assert "hyp-u" not in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
+
+    git("add", "-A", cwd=shared)
+    git("commit", "-qm", "hyp-u", cwd=shared)
+    assert main(["push"]) == 0
+
+
+def test_pull_puts_your_commit_on_top_of_theirs_and_the_gate_still_accepts_it(
+        hub, shared, tmp_path, monkeypatch, capsys):
+    """Two people push. The second is behind; a merge would be refused by the gate, so
+    `pull` rebases. The gate then accepting the replayed commit is the proof that the
+    rebase re-signed it."""
+    code = remote.invite(shared, "maria", "write")
+    other, _, _, _ = remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "maria"))
+    commit_node(other, "hyp-m.md", "---\nid: hyp-m\ntype: hypothesis\nstatus: open\n---\n\n# m\n")
+    assert git("push", "-q", "origin", "master", cwd=other).returncode == 0
+
+    monkeypatch.chdir(shared)
+    commit_node(shared, "hyp-s.md", "---\nid: hyp-s\ntype: hypothesis\nstatus: open\n---\n\n# s\n")
+    assert main(["push"]) == 1
+    assert "moved on since your last pull" in capsys.readouterr().err
+
+    assert main(["pull"]) == 0
+    assert main(["push"]) == 0
+    hosted = hub.registry.repo("trading")
+    log = git("log", "--oneline", cwd=hosted).stdout
+    assert "hyp-m" in log and "hyp-s" in log
+    assert git("log", "--merges", "--oneline", cwd=hosted).stdout == ""
+
+
+def test_pull_stops_on_a_conflict_and_says_what_to_do(hub, shared, tmp_path, monkeypatch,
+                                                      capsys):
+    code = remote.invite(shared, "maria", "write")
+    other, _, _, _ = remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "maria"))
+    commit_node(other, "hyp-c.md", "---\nid: hyp-c\ntype: hypothesis\nstatus: open\n---\n\n# theirs\n")
+    assert git("push", "-q", "origin", "master", cwd=other).returncode == 0
+
+    monkeypatch.chdir(shared)
+    commit_node(shared, "hyp-c.md", "---\nid: hyp-c\ntype: hypothesis\nstatus: open\n---\n\n# mine\n")
+    assert main(["pull"]) == 1
+    err = capsys.readouterr().err
+    assert "conflict" in err and "rebase --continue" in err
+
+
 def test_pull_brings_a_collaborators_node_down(hub, shared, tmp_path, monkeypatch):
     """A minted token alone no longer earns a push on a signed graph: the graph is
     signed, so a collaborator has to be listed and sign, which is what `join` is for."""
@@ -297,6 +351,46 @@ def test_remote_add_points_an_existing_clone_at_a_remote(hub, local_graph, monke
 
     assert git("remote", "get-url", "origin", cwd=local_graph).stdout.strip() == f"{hub.url}/trading.git"
     assert git("config", "credential.useHttpPath", cwd=local_graph).stdout.strip() == "true"
+
+
+def test_remote_add_makes_a_second_machines_clone_sign(hub, shared, tmp_path, monkeypatch,
+                                                        capsys):
+    """Maria's second laptop: her key and credentials copied over, a plain `git clone`,
+    then `remote add`. The push going through the gate is the proof the clone signs."""
+    code = remote.invite(shared, "maria", "write")
+    remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "maria"))
+    second = tmp_path / "maria2"
+    # The README's exact recipe: the helper must be wired DURING the clone, because a
+    # hosted graph needs a token to be read at all.
+    assert git("clone", "-q", "-c", "credential.helper=!knoten credential",
+               "-c", "credential.useHttpPath=true", f"{hub.url}/trading.git", str(second),
+               cwd=tmp_path).returncode == 0
+    git("config", "user.name", "maria", cwd=second)
+    git("config", "user.email", "m@x", cwd=second)
+    monkeypatch.chdir(second)
+
+    assert main(["remote", "add", f"{hub.url}/trading", "--as", "maria"]) == 0
+    assert "signs as maria" in capsys.readouterr().out
+    commit_node(second, "hyp-2.md", "---\nid: hyp-2\ntype: hypothesis\nstatus: open\n---\n\n# 2\n")
+    assert main(["push"]) == 0
+    assert "hyp-2" in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
+
+
+def test_remote_add_leaves_a_reader_unsigned_and_refuses_a_listed_name_without_its_key(
+        hub, shared, tmp_path, monkeypatch, capsys, keys_dir):
+    code = remote.invite(shared, "ravi", "read")
+    remote.join(f"{hub.url}/trading", code, dest=str(tmp_path / "ravi"))
+    plain = tmp_path / "plain"
+    assert git("clone", "-q", str(hub.registry.repo("trading")), str(plain), cwd=tmp_path).returncode == 0
+    monkeypatch.chdir(plain)
+
+    assert main(["remote", "add", f"{hub.url}/trading", "--as", "ravi"]) == 0
+    assert "signs as" not in capsys.readouterr().out
+    assert git("config", "user.signingkey", cwd=plain).stdout.strip() == ""
+
+    (keys_dir / "seb").rename(keys_dir / "seb.gone")     # the listed admin, key not here
+    assert main(["remote", "add", f"{hub.url}/trading", "--as", "seb"]) == 1
+    assert "different key for 'seb'" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------- the friend's journey

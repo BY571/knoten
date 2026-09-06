@@ -241,8 +241,10 @@ def remote_cmd(root, args) -> int:
         print(f"  ✓ {url}")
         print("    invite someone:  knoten invite <name> --role write")
         return 0
-    remote.remote_add(root, args.url)
+    signs_as = remote.remote_add(root, args.url, me=args.me)
     print("  ✓ origin set. `knoten pull` and `knoten push` now use it.")
+    if signs_as:
+        print(f"    this clone signs as {signs_as}")
     return 0
 
 
@@ -708,9 +710,11 @@ def _parser() -> argparse.ArgumentParser:
                         "the environment, or let knoten prompt for it.")
     a = rs.add_parser("add", help="point this clone at an existing remote graph")
     a.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
+    a.add_argument("--as", dest="me", metavar="NAME",
+                   help="sign as this contributor (default: the stored credential's name)")
 
-    sub.add_parser("push", help="push this graph to its remote, through the gate")
-    sub.add_parser("pull", help="fetch what collaborators pushed")
+    sub.add_parser("push", help="push this graph's commits to its remote, through the gate")
+    sub.add_parser("pull", help="bring down what collaborators pushed; your own commits go on top")
 
     s = sub.add_parser("invite", help="admin: let someone in (prints a one-time code)")
     s.add_argument("name", help="their contributor name, kebab-case")
