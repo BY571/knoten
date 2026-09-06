@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+from . import contributors as C
 from .core import GraphError, MAX_PUSH_BYTES, SERVER_GIT_ENV
 from .registry import Registry
 
@@ -277,6 +278,14 @@ class _Handler(BaseHTTPRequestHandler):
             **SERVER_GIT_ENV,
             "GIT_PROJECT_ROOT": str(self.server.registry.graph_dir(name)),
             "GIT_HTTP_EXPORT_ALL": "1",
+            # The gate runs as a pre-receive hook under http-backend and inherits this
+            # env. It is the only place that knows who the token belongs to: a signature
+            # says which KEY wrote a commit, never which token pushed it, and the first
+            # contributors.yaml in a hosted graph has to be laid down by its admin's own
+            # token. Not in KEEP_ENV, and not GIT_*: set here, per request, from what the
+            # server itself authenticated a moment ago.
+            "KNOTEN_PUSHER": user,
+            "KNOTEN_ROLE": role,
             "PATH_INFO": "/repo.git" + sub,          # the URL says <name>.git; disk says repo.git
             "QUERY_STRING": query,
             "REQUEST_METHOD": self.command,
@@ -336,9 +345,16 @@ class _Handler(BaseHTTPRequestHandler):
             # /join needs no credentials, so it must not become a name oracle: an
             # unknown graph gets the same 400 a wrong code gets, not "no graph 'x'".
             return self._refuse(400, "knoten: that invite code is not valid for this graph")
-        user, role, token = self.server.registry.redeem(name, body.get("code", ""))
+        # A fresh read, not whatever head_graph said when the invite was minted: an admin
+        # revoked between the invite and the join must be caught NOW, not only later when
+        # the gate refuses the join commit -- by then the holder already has a live token.
+        # Passed as a callable, not called here: redeem() only invokes it AFTER the code
+        # itself is confirmed to exist, so a bogus code costs no git work at all and a
+        # misconfigured hosted repo never gets a chance to answer before the code does.
+        user, role, token, extra = self.server.registry.redeem(
+            name, body.get("code", ""), lambda: self.server.registry.head_graph(name)[0])
         self.log_message(f"join:{role}", name, user, 200)
-        self._json(200, {"name": user, "role": role, "token": token})
+        self._json(200, {"name": user, "role": role, "token": token, **extra})
 
     def _admin(self, name: str) -> str | None:
         """The calling admin's name, or None after having refused the request.
@@ -360,10 +376,51 @@ class _Handler(BaseHTTPRequestHandler):
             days = int(body.get("days", 7))
         except (TypeError, ValueError):
             raise GraphError("days must be a whole number") from None
+        contribs, graph_name = self.server.registry.head_graph(name)
+        blob, sig = str(body.get("blob", "")), str(body.get("sig", ""))
+        try:
+            # A lone surrogate in `blob`/`sig` (a crafted \udXXX escape in the JSON body)
+            # decodes fine through json.loads but not through .encode(): unguarded, that
+            # reached the catch-all as a bare 500 instead of a refusal. Encoding BEFORE
+            # the size cap below also means that cap counts BYTES, not code points -- a
+            # multi-byte character made a code-point count understate what actually gets
+            # stored and signed over.
+            blob_bytes, sig_bytes = blob.encode(), sig.encode()
+        except UnicodeEncodeError:
+            raise GraphError("that invite is malformed") from None
+        # A bearer secret with no cap at all is one more thing for a hostile admin token
+        # to abuse; these are generous ceilings for a real signed blob and SSHSIG, not a
+        # size any legitimate invite comes close to.
+        if len(blob_bytes) > 4096 or len(sig_bytes) > 8192:
+            raise GraphError("invite fields are too large")
+        if contribs is None:
+            # An unsigned graph has no admin key to check a signature against; carrying
+            # one anyway is either a confused client or a probe, never something to store.
+            if blob or sig:
+                raise GraphError("this graph is not signed; an invite carries no signature here")
+        else:
+            # A signed graph: the token opened the door, the key has to authorise. The
+            # invite must be signed by the calling admin's OWN key, as listed at HEAD, so
+            # a stolen admin token mints nothing without the admin's machine.
+            if not blob or not sig:
+                raise GraphError("this graph is signed; invites must carry the admin's signature")
+            if admin not in C.admins(contribs):
+                # Distinct from a bad signature below: this admin's own token authenticates,
+                # but contributors.yaml never listed them, so there is no key of theirs to
+                # check anything against in the first place.
+                return self._refuse(403, "knoten: you are not a listed admin of this graph")
+            try:
+                signer = C.verify_invite(contribs, blob_bytes, sig)
+            except GraphError:
+                signer = ""
+            if signer != admin:
+                return self._refuse(403, "knoten: the invite must be signed with your own signing key")
+            C.check_blob(C.parse_blob(blob_bytes), graph_name, body.get("name", ""),
+                        body.get("role", "write"))
         # `by`, so revoking this admin takes the invites they issued with them. The range
         # check on days lives in the registry, next to the timedelta that overflowed.
         code = self.server.registry.invite(name, body.get("name", ""), body.get("role", "write"),
-                                    days, by=admin)
+                                           days, by=admin, blob=blob, sig=sig)
         self.log_message(f"invite:{body.get('name', '')}", name, admin, 200)
         self._json(200, {"code": code})
 

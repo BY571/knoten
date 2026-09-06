@@ -163,6 +163,67 @@ knoten invites                          # who was invited and has not arrived
 knoten revoke maria                     # ends her access; what she pushed stays
 ```
 
+### A team in three places
+
+Seb runs the graph and the server. Maria contributes from another city. An agent works in
+Maria's clone. Nothing below needs a shared machine, a VPN, or an account anywhere.
+
+Seb, once, on a small VPS with a reverse proxy terminating TLS in front of it:
+
+```bash
+knoten serve --data ~/knoten-remotes           # localhost:8899; put caddy or nginx in front
+```
+
+Seb, once, in the graph on his laptop:
+
+```bash
+knoten remote create trading --on https://graphs.example --as seb
+knoten invite maria --role write               # a one-time code, good for 7 days; send it
+```
+
+Maria, once:
+
+```bash
+knoten join https://graphs.example/trading --invite 7f3a9c...
+cd trading                                     # a clone that signs as maria
+```
+
+Maria, or her agent, every session:
+
+```bash
+knoten pull                                    # what arrived; her own commits go on top
+knoten frontier                                # the loop is unchanged from here
+knoten commit hyp-14 --frontmatter fm.yaml --body body.md
+git add -A && git commit -m "hyp-14: batch size does not close the gap"
+knoten push                                    # signed as maria, checked by the gate
+```
+
+`knoten commit` files a node; git commits it; `knoten push` sends the commits and refuses
+while anything is still uncommitted, so it never reports a push that sent nothing.
+
+When two people push the same afternoon, the second one sees `the graph moved on since
+your last pull; run knoten pull, then push again`, does that, and pushes. There is never
+a merge commit: `knoten pull` replays your commits on top of theirs, and the server
+refuses a merge if you make one by hand. A conflict needs two people editing the same
+file, which a graph where every correction is a new node never asks for.
+
+Seb, whenever:
+
+```bash
+knoten pull                                    # maria's nodes, into his
+knoten invites                                 # who has a code and has not arrived
+knoten revoke maria                            # a signed mark in the graph, then her token
+```
+
+Maria, on a second laptop, after copying `~/.config/knoten/keys/maria` and
+`~/.config/knoten/credentials` over:
+
+```bash
+git clone -c credential.helper='!knoten credential' -c credential.useHttpPath=true \
+    https://graphs.example/trading.git
+cd trading && knoten remote add https://graphs.example/trading   # signs as maria from here
+```
+
 Every push runs `knoten validate` on the server before the ref moves, so a node that
 breaks the graph's rules is refused for everyone, including whoever wrote the rules, and
 including anyone who never installed `knoten hook`. That matters more here than it
@@ -173,8 +234,33 @@ node is your problem and on a shared one it would be everybody's.
 who is connecting and nothing else; what a token can do is the role the admin gave it.
 The server holds only hashed tokens and open invites. Everything that means anything,
 the nodes, the rules, the history, lives in the graph, so losing the server loses
-availability and not the answer to who said what. The hosted repo refuses force pushes
-and branch deletion: nothing is deleted there either.
+availability and not the answer to who said what.
+
+A shared graph is one line of history. The first push creates the only branch it will
+ever have; after that there are no new branches, no tags, no deletions and no force
+pushes, and each of those is refused with the reason. A second branch is a tree nobody
+pulls, which is a fine place to hide a second set of rules about who may write.
+
+Who may write is written down in the graph, not on the server. `knoten remote create`
+makes you a signing key and lists you as admin in `contributors.yaml`; every commit from
+then on is signed, and the server refuses one that is not signed by someone the file
+lists. On a graph you host with `knoten serve`, only the admin's own token may lay down
+that first `contributors.yaml`, and the commit that does it may touch nothing else. An
+invite is signed on the admin's machine, so a stolen admin token mints nothing. Revoking
+someone is a signed commit that marks them revoked, never a line deleted: the mark
+outlives the server, so a clone a year later still says who could write and who let them
+in. Readers are not listed at all. They hold a token and nothing more, because the file
+is the list of people who may write.
+
+```bash
+knoten key seb                          # the name the graph lists you under
+```
+
+The key lives at `~/.config/knoten/keys/<name>` (`KNOTEN_KEYS` moves that directory).
+One name, one key: to sign from a second machine, copy that private file there. Lose it
+and you cannot sign as that name again, so an admin has to add you back under a new one.
+Being revoked takes away your token and your future signatures; your clone and everything
+in its history stay yours.
 
 Reading needs nothing installed. Nodes are markdown, and `knoten viz` writes the graph as
 one self-contained HTML file you can hand to someone who has never heard of knoten.

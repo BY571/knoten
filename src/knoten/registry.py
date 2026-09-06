@@ -21,19 +21,13 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .core import (GraphError, ID_RE, MAX_PUSH_BYTES, SERVER_GIT_ENV, graph_lock,
-                   write_atomic)
+from . import contributors as C
+from . import gate
+from .core import (GraphError, ID_RE, MAX_DAYS, MAX_NAME, MAX_PUSH_BYTES, graph_lock,
+                   server_git_env, write_atomic)
 from .hook import install_server
 
 ROLES = ("read", "write", "admin")
-
-# A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
-# bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an
-# opaque OSError after the data directory had already been touched.
-MAX_NAME = 64
-
-# An invite is a bearer secret. A year is already generous for one.
-MAX_DAYS = 365
 
 
 def _hash(secret: str) -> str:
@@ -128,6 +122,56 @@ class Registry:
             raise GraphError(f"no graph '{name}' on this server")
         return r
 
+    def head_graph(self, name: str) -> tuple[dict | None, str]:
+        """The hosted repo's contributors.yaml at its tip and its graph name. None for a
+        phase-1 graph or an empty repo. A signed remote holds one graph: the server has
+        to know WHICH contributors.yaml an invite is checked against.
+
+        The tip is `HEAD` when that resolves, but `knoten remote create` runs `git push
+        -u origin HEAD` -- whatever branch the user happens to be on, `main` as often as
+        `master` -- so a bare repo freshly made by `git init --bare` has an UNBORN HEAD
+        (it still points at refs/heads/master, which a push to `main` never creates).
+        Reading only `HEAD` there returned "no contributors, no name" for a graph that is
+        fully bootstrapped and signed, and every invite for it minted unsigned. When HEAD
+        does not resolve, fall back to whatever branch actually exists: exactly one, use
+        it, and FIX HEAD to point there so this fallback runs exactly once -- a graph
+        pushed as `main` today must not turn into "several branches and no HEAD" the day
+        someone pushes a second branch to it. None, an empty repo. More than one with no
+        valid HEAD, refuse: there is no single line of history left to check an invite
+        against, and only a human can say which branch should have been HEAD."""
+        repo = self.repo(name)
+        tip = "HEAD"
+        if gate._git("rev-parse", "--verify", "-q", "HEAD", repo=repo).returncode != 0:
+            r = gate._git("for-each-ref", "--format=%(refname)", "refs/heads/", repo=repo)
+            branches = [b for b in r.stdout.decode().splitlines() if b]
+            if not branches:
+                return None, ""
+            if len(branches) > 1:
+                # No path and no command line in the message: this reaches an ordinary
+                # contributor through /invite's 400 body, and the server's data directory
+                # is not theirs to know. The operator has the repo in front of them.
+                raise GraphError(
+                    f"graph '{name}' has several branches and no HEAD; a signed remote "
+                    f"needs one line of history, and its operator must point HEAD at the "
+                    f"branch it should follow")
+            tip = branches[0]
+            gate._git("symbolic-ref", "HEAD", tip, repo=repo)
+        dirs = gate.graph_dirs(tip, repo=repo)
+        if len(dirs) > 1:
+            raise GraphError(f"graph '{name}' holds {len(dirs)} graphs; a signed remote holds one")
+        if not dirs:
+            # "No graph here" is not "nobody signed here". A writer who runs `git rm -r
+            # nodes` passes the gate (contributors unchanged, their own signature) and
+            # this used to read the result as phase-1: signed invites refused, UNSIGNED
+            # invites accepted for any role, and /join skipping the signature re-check
+            # entirely. A constitution with no graph under it is a broken graph, not an
+            # unsigned one.
+            if gate.contributors_dirs(tip, repo=repo):
+                raise GraphError(f"graph '{name}' holds a {C.FILE} but no graph; "
+                                 f"an admin must restore it")
+            return None, ""
+        return gate.contributors_at(tip, dirs[0], repo=repo), gate.graph_name_at(tip, dirs[0], repo=repo)
+
     def create(self, name: str, admin: str) -> str:
         """A bare repo with the gate already installed. Returns the creating admin's
         token: creating a graph and being able to push to it are one act."""
@@ -146,7 +190,10 @@ class Registry:
             # The same config every other git on this server runs under: a core.hooksPath
             # or an init.templateDir in the daemon account's ~/.gitconfig would otherwise
             # make the repo we create and the repo receive-pack sees two different repos.
-            env = {**os.environ, **SERVER_GIT_ENV}
+            # server_git_env(), not {**os.environ, **SERVER_GIT_ENV}: a stray GIT_DIR in
+            # the operator's shell outranks `-C` and would point `git init`/`git config`
+            # at a repo nobody asked to create or configure.
+            env = server_git_env()
             subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True, env=env)
             for key, value in (("http.receivepack", "true"),
                                ("receive.maxInputSize", str(MAX_PUSH_BYTES)),
@@ -164,11 +211,22 @@ class Registry:
                                ("receive.fsckObjects", "true")):
                 subprocess.run(["git", "-C", str(repo), "config", key, value],
                                check=True, env=env)
-            # SERVER_GIT_ENV, because this server runs receive-pack itself and
-            # under exactly that. Asked under anything else, git answers with a
-            # different hooks directory and the gate is installed where the git
-            # that enforces it will never look.
-            install_server(repo, env=SERVER_GIT_ENV)
+            # server_git_env(), because this server runs receive-pack itself and under
+            # exactly that -- and because hook._git uses this env AS GIVEN, with no
+            # merge over os.environ, a stray GIT_DIR in the daemon's own environment
+            # cannot survive into the `rev-parse --git-path hooks` call install_server
+            # makes and redirect it at a different repo's hooks directory. Asked under
+            # anything else, git answers with a different hooks directory and the gate
+            # is installed where the git that enforces it will never look.
+            install_server(repo, env=server_git_env())
+            if not (repo / "hooks" / "pre-receive").exists():
+                # install_server reported success, but nothing is actually there to
+                # enforce the gate -- exactly what a GIT_DIR or core.hooksPath silently
+                # redirecting the write would produce. An unsigned push into this repo
+                # would then be accepted with no gate at all; refuse instead of serving
+                # a graph nobody is actually checking.
+                raise GraphError("the gate did not land in the hosted repo; a GIT_DIR or "
+                                 "core.hooksPath in the server's environment redirected it")
             return self.mint(name, admin, "admin")
         except GraphError:
             # A half-made repo that exists() calls valid would accept pushes with no gate, forever.
@@ -240,7 +298,8 @@ class Registry:
 
     # ---------------------------------------------------------------- invites
 
-    def invite(self, name: str, user: str, role: str, days: int = 7, by: str = "") -> str:
+    def invite(self, name: str, user: str, role: str, days: int = 7, by: str = "",
+              blob: str = "", sig: str = "") -> str:
         self._check(name, user, role)
         try:
             days = int(days)
@@ -255,22 +314,38 @@ class Registry:
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")
             # `by` so revoking an admin can take their outstanding invites with them, and
-            # so the list an admin reads says who let each pending person in.
-            invites[_hash(code)] = {"name": user, "role": role, "expires": expires, "by": by}
+            # so the list an admin reads says who let each pending person in. `blob`/`sig`
+            # are the admin's signed authorisation on a signed graph, kept so the joiner
+            # can be handed the same proof they will need for their join commit.
+            invites[_hash(code)] = {"name": user, "role": role, "expires": expires, "by": by,
+                                    "blob": blob, "sig": sig}
             self._write(name, "invites.json", invites)
         return code
 
     def invites(self, name: str) -> list[dict]:
         """The open invites, without their hashes. An admin needs to see who is still
-        pending; the hash is the one thing in that file worth stealing."""
+        pending; the hash and the signed blob/sig are not for this listing -- it is for
+        humans deciding who to expect, not a place to keep the signature alive."""
         self.repo(name)
         return [{"name": e.get("name", ""), "role": e.get("role", ""),
                  "expires": e.get("expires", ""), "by": e.get("by", "")}
                 for e in self._read(name, "invites.json").values()]
 
-    def redeem(self, name: str, code: str) -> tuple[str, str, str]:
-        """One use. Returns (user, role, token). The code is removed on first try
-        whether or not it was still live, so an expired code cannot be retried."""
+    def redeem(self, name: str, code: str, contribs_for=None) -> tuple[str, str, str, dict]:
+        """One use. Returns (user, role, token, extra) where extra is the admin's signed
+        blob/sig and who issued it (empty strings on an unsigned invite). The code is
+        removed on first try whether or not it was still live, so an expired code cannot
+        be retried.
+
+        `contribs_for`, when given, is a ZERO-ARGUMENT CALLABLE returning the graph's
+        current contributors.yaml (or None), called only AFTER the code is confirmed to
+        exist and already popped -- a bogus code must not pay for the git read this
+        implies, nor leak a misconfigured hosted repo's own error through this route
+        before the code itself was even checked. When it does return contributors, a
+        signed invite's signature is re-checked against them: the gate would refuse the
+        eventual join COMMIT anyway once an admin is revoked, but without this a revoked
+        admin's still-unexpired invite minted a live TOKEN here and now, which reads a
+        private graph long before that commit is ever attempted."""
         self.repo(name)
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")
@@ -287,6 +362,33 @@ class Registry:
             raise GraphError("that invite is malformed; ask for a new one") from None
         if expires < _now():
             raise GraphError("that invite has expired; ask the admin for a new one")
+        blob, sig = entry.get("blob", ""), entry.get("sig", "")
+        if contribs_for is not None:
+            try:
+                contribs = contribs_for()
+            except GraphError:
+                # A misconfigured hosted repo (several branches, no HEAD; more than one
+                # graph at the tip) must not leak its own message through /join, and must
+                # not read any differently from a plain bad code -- both are the one
+                # refusal this route ever gives for a code that no longer works.
+                raise GraphError("that invite code is not valid for this graph") from None
+            if contribs is not None:
+                if not (blob and sig):
+                    # This invite predates contributors.yaml: minted while the graph was
+                    # still phase-1, before there was any admin key to sign it with. It
+                    # is not a forgery, but it authorises nothing on a graph that now
+                    # requires a signature for every join.
+                    raise GraphError("that invite was issued before this graph was signed; "
+                                     "ask for a new one")
+                try:
+                    signer = C.verify_invite(contribs, blob.encode(), sig)
+                except GraphError:
+                    signer = ""
+                if signer != entry.get("by"):
+                    # The code is already popped above -- correctly: a code that no
+                    # longer proves anything must not be retried into working just as dead.
+                    raise GraphError("that invite is no longer valid; its signer is not an admin here any more")
         # Outside the lock: mint takes it again, and flock on a fresh handle would wait
         # on our own lock forever.
-        return entry["name"], entry["role"], self.mint(name, entry["name"], entry["role"])
+        extra = {"blob": blob, "sig": sig, "by": entry.get("by", "")}
+        return entry["name"], entry["role"], self.mint(name, entry["name"], entry["role"]), extra

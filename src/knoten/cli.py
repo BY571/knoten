@@ -12,11 +12,14 @@ import webbrowser
 from pathlib import Path
 
 from . import attachments, ops, viz
+from . import contributors as C
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
 from .hook import install as install_hook, install_server
+from .keys import ensure_key, public_line
 from .registry import ROLES, Registry
 from .serve import make_server
+from . import gate
 from . import remote
 from .validate import _csv, applies, load_config
 
@@ -238,8 +241,10 @@ def remote_cmd(root, args) -> int:
         print(f"  ✓ {url}")
         print("    invite someone:  knoten invite <name> --role write")
         return 0
-    remote.remote_add(root, args.url)
+    signs_as = remote.remote_add(root, args.url, me=args.me)
     print("  ✓ origin set. `knoten pull` and `knoten push` now use it.")
+    if signs_as:
+        print(f"    this clone signs as {signs_as}")
     return 0
 
 
@@ -270,7 +275,7 @@ def invites_cmd(root, as_json=False) -> int:
 
 def revoke_cmd(root, name) -> int:
     remote.revoke(root, name)
-    print(f"  ✓ {name} can no longer connect. What they already pushed stays.")
+    print(f"  ✓ {name} is revoked and can no longer connect. What they already pushed stays.")
     return 0
 
 
@@ -687,6 +692,12 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("credential", help=argparse.SUPPRESS)
     s.add_argument("action", nargs="?")
 
+    # git runs this from the pre-receive hook; nobody types it.
+    sub.add_parser("gate", help=argparse.SUPPRESS)
+
+    s = sub.add_parser("key", help="your signing key (made on first use)")
+    s.add_argument("name", nargs="?", help="who you sign as (default: git user.name)")
+
     s = sub.add_parser("remote", help="connect this graph to a knoten server")
     rs = s.add_subparsers(dest="remote_cmd", required=True)
     c = rs.add_parser("create", help="create this graph on a server and push it")
@@ -699,9 +710,11 @@ def _parser() -> argparse.ArgumentParser:
                         "the environment, or let knoten prompt for it.")
     a = rs.add_parser("add", help="point this clone at an existing remote graph")
     a.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
+    a.add_argument("--as", dest="me", metavar="NAME",
+                   help="sign as this contributor (default: the stored credential's name)")
 
-    sub.add_parser("push", help="push this graph to its remote, through the gate")
-    sub.add_parser("pull", help="fetch what collaborators pushed")
+    sub.add_parser("push", help="push this graph's commits to its remote, through the gate")
+    sub.add_parser("pull", help="bring down what collaborators pushed; your own commits go on top")
 
     s = sub.add_parser("invite", help="admin: let someone in (prints a one-time code)")
     s.add_argument("name", help="their contributor name, kebab-case")
@@ -778,9 +791,24 @@ def main(argv=None) -> int:
                 sys.stdout.write(remote.credential_helper(sys.stdin.read()))
             return 0           # store/erase: git manages nothing here; knoten does
 
+        if args.cmd == "gate":
+            return gate.main()
+
+        if args.cmd == "key":
+            name = args.name or remote.default_signing_name()
+            priv = ensure_key(name)
+            print(f"  {public_line(priv)}")
+            print(f"    signs as {name}; private half at {priv}. Never share that file.")
+            return 0
+
         if args.cmd == "join":
-            clone, name, role = remote.join(args.url, args.invite, args.dest)
+            clone, name, role, signed = remote.join(args.url, args.invite, args.dest)
             print(f"  ✓ joined as {name} ({role}), cloned to {clone}/")
+            if signed:
+                print(f"    a signing key was made for {name}; this clone signs its own commits")
+            elif role == "read":
+                print("    read access: this clone can pull. Readers are not listed in "
+                      f"{C.FILE} and hold no signing key.")
             print(f"    cd {clone} && knoten frontier")
             return 0
 

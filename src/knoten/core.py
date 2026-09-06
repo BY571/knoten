@@ -44,7 +44,22 @@ MAX_PUSH_BYTES = 100 * 1024 * 1024
 # Dropping global config also drops `init.templateDir` and `init.defaultBranch` for
 # hosted repos, deliberately: a template directory is one more place a hook can arrive
 # from, which is one more place the gate can be replaced without anyone editing the repo.
-SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                  # A graph directory named "*" once widened `git archive`'s pathspec to
+                  # the whole repo; literal pathspecs make every name a plain path, glob
+                  # metacharacters included.
+                  "GIT_LITERAL_PATHSPECS": "1"}
+
+
+def server_git_env() -> dict:
+    """The environment every server-side git subprocess must run under: the operator's
+    shell, minus every GIT_* variable it might carry, with SERVER_GIT_ENV then reapplied
+    on top. `-C <repo>` is not enough on its own -- an absolute GIT_DIR left in the
+    environment (the operator's shell, a stray export) outranks `-C` and points git at a
+    repo nobody asked for, silently: a `-C` flag was verified to lose that race. Every
+    site that reads a HOSTED repo from outside its own process (gate._git, Registry.create)
+    must build its env from this, never from `{**os.environ, **SERVER_GIT_ENV}` alone."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | SERVER_GIT_ENV
 
 
 class GraphError(Exception):
@@ -91,7 +106,19 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 # for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
 # the graph: an id authored by a model is not a path, and only one entry point
 # checked that — not the one people used.
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# `\\Z`, not `$`: `$` also matches just before a trailing newline, so `"maria\\n"` passed
+# every id check in the codebase -- and that name goes on to be a filename, a
+# directory, a URL segment and a line in the credentials file.
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
+
+# An invite is a bearer secret. A year is already generous for one. Here rather than in
+# the registry so the client's own bound and the server's cannot drift apart.
+MAX_DAYS = 365
+
+# A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
+# bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an
+# opaque OSError after the data directory had already been touched.
+MAX_NAME = 64
 
 
 @contextmanager

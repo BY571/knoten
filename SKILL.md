@@ -31,7 +31,7 @@ writing anything. The question may already be settled, and the gates still apply
 ## How the graph is shaped
 
 `graph.yaml` declares the node kinds and, if the author wrote them, what each word means.
-**Read it first** — knoten defines none of these words, so `hypothesis` means whatever
+**Read it first**: knoten defines none of these words, so `hypothesis` means whatever
 that graph says it means. A common shape:
 
     question ─▶ source ─▶ idea ─▶ hypothesis ─▶ experiment ─▶ finding
@@ -40,7 +40,7 @@ that graph says it means. A common shape:
 
     gate    stands outside the loop: the bar every claim must survive
 
-A graph starts from ONE question, statement or task — `knoten init` scaffolds it, and
+A graph starts from ONE question, statement or task. `knoten init` scaffolds it, and
 everything else descends from it. Investigate sources first (papers, posts, datasets,
 searches); if the work starts from your own head instead, record that as a source too, so
 an idea always names where it came from.
@@ -60,11 +60,11 @@ forward edge and never authored.
     prov:wasDerivedFrom                 claim ──▶ what it came from
 
 `knoten validate` lists every relation it knows when you name one it does not, so ask it
-rather than guessing — `kn:explains`, `kn:generalises` and `kn:followsFrom` name the KIND
+rather than guessing. `kn:explains`, `kn:generalises` and `kn:followsFrom` name the KIND
 of a derivation when that matters.
 
 Writing the generated name (`kn:testedBy` where you meant `kn:tests`) is refused. Writing
-the right relation on the wrong node is NOT detectable — the back-link lands and the graph
+the right relation on the wrong node is NOT detectable: the back-link lands and the graph
 reports itself healthy, with the claim reversed. A correction is a NEW node that supersedes
 or retracts the old one, never an edit to it.
 
@@ -73,27 +73,50 @@ or retracts the old one, never an edit to it.
 If the graph has a remote, `knoten pull` FIRST. Every read below answers from the files
 on disk, so a stale clone reports work a collaborator settled days ago as still open.
 That is the exact failure this graph exists to prevent, arriving through the back door.
+See "In a shared graph" below for the rest of what a remote changes.
 
-1. `knoten frontier` — what is worth doing next: open work, dead ends whose stated
+1. `knoten frontier` says what is worth doing next: open work, dead ends whose stated
    reopen condition may now hold, and gates nothing has been through.
-2. `knoten index` — the whole graph, one line per node. Read it and judge relatedness
+2. `knoten index`: the whole graph, one line per node. Read it and judge relatedness
    yourself; this is the only way to find work already done in DIFFERENT WORDS.
    `knoten query <term>` is keyword search: faster when the idea has a distinctive name,
    and blind to paraphrase. An empty result means "no keyword match", NOT "never tried".
-3. `knoten show <id>` — the full node: edges, results, and the path of the script that
+3. `knoten show <id>` gives the full node: edges, results, and the path of the script that
    produced them, for anything that looks close.
-4. `knoten gates` — what a result must survive here. Read this BEFORE designing the
+4. `knoten gates`: what a result must survive here. Read this BEFORE designing the
    experiment; a claim cannot be filed as alive without citing a gate it survived.
 ## When the work concludes
 
-5. `knoten commit <id> --frontmatter <file> --body <file>` — file the claim, INCLUDING
+5. `knoten commit <id> --frontmatter <file> --body <file>`: file the claim, INCLUDING
    when it failed. A dead hypothesis with a stated cause is the most valuable node in the
    graph and the one that would otherwise be lost. Use `knoten update <id> --status dead
    --append <file> --field cause=<value>` instead if you opened the node earlier.
-6. `knoten attach <id> <files...>` — the script that ran it and the plot that shows it.
+6. `knoten attach <id> <files...>`: the script that ran it and the plot that shows it.
    A claim nobody can re-run is a claim nobody trusts in six months. If the graph has a
-   remote, `knoten push` when the node is filed; the server runs the same rules and
-   refuses what this clone would have.
+   remote, git commit the node and `knoten push` now, not at the end of the session; the
+   server runs the same rules and refuses what this clone would have.
+
+## In a shared graph
+
+A graph with a remote is one line of history that several people and their agents push
+to. Three things change, and nothing else does:
+
+- `knoten pull` before step 1, every session. Your own unpushed commits are replayed on
+  top of what arrived; there is never a merge commit, because the server refuses one.
+- `knoten commit` writes a node to disk and git has not seen it. Filing is finished when
+  you run `git add -A && git commit -m "<id>: what was found"`; the clone signs the
+  commit for you. `knoten push` refuses while anything is uncommitted, so it cannot
+  claim to have sent what it did not.
+- `knoten push` after each filed node. Three refusals to know:
+  `moved on since your last pull` means somebody was faster: `knoten pull`, then push
+  again. A rule violation is the refusal step 5 would have given you, applied on the
+  server for everyone: fix the node, push again. `not signed` means this clone was not
+  set up by `knoten join`, `knoten remote create` or `knoten remote add`; stop and say
+  so rather than working around it.
+
+Never edit a node somebody else filed, not even to fix it: supersede or retract it with a
+new node, as above. Two people editing one file is the only way a pull ends in a
+conflict here, and `knoten pull` then names the file and what to run next.
 
 ## When you run out of ideas
 
@@ -131,14 +154,14 @@ node already carries: correct a published result by superseding or retracting th
 never by editing it. A node that fails the graph's rules never reaches disk.
 
 An experiment that takes a week does not finish in the session that started it. Open the
-node now with `status: open`, come back, and close it — `knoten index --status open` is
+node now with `status: open`, come back, and close it. `knoten index --status open` is
 what shows you the ones you left hanging.
 
 ## Reading the output
 
-Default output is compact prose — prefer it. `--json` exists for nested data and for
+Default output is compact prose; prefer it. `--json` exists for nested data and for
 scripts; it costs about 2.2x the tokens for the same information (measured: 46 vs 21
 tokens per node).
 
 Exit code is the signal: `0` succeeded, `1` rejected or violated a rule. A refusal is the
-feature — read it, fix the node, run it again.
+feature: read it, fix the node, run it again.

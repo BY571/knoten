@@ -99,21 +99,26 @@ def test_a_force_push_is_refused_by_the_shared_repo(hub, trading, tmp_path):
     r = git("push", "-f", "origin", "master", cwd=dest)
 
     assert r.returncode != 0
+    assert "not a fast-forward" in r.stderr
     assert git("rev-parse", "master", cwd=repo).stdout.strip() == before
 
 
-def test_deleting_a_branch_on_the_server_is_refused(hub, trading):
-    """A shared graph is append-only. This is deliberately the opposite of
-    `test_deleting_a_branch_is_not_treated_as_a_push`, which drives the raw hook on a
-    bare repo with none of this config: the HOOK must still tolerate an all-zero oid, and
-    the REPO must still refuse the deletion that carries it."""
+def test_a_second_branch_and_a_deletion_are_refused_over_http(hub, trading):
+    """A shared graph is append-only and has one line of history. Both halves reach the
+    client as the gate's own `remote:` line, through http-backend, rather than as
+    receive-pack's terse `denyDeletes`."""
     work = trading["work"]
-    assert git("push", "-q", "origin", "master:scratch", cwd=work).returncode == 0
 
-    r = git("push", "origin", "--delete", "scratch", cwd=work)
+    second = git("push", "origin", "master:scratch", cwd=work)
+    assert second.returncode != 0
+    assert "new branches and tags are refused" in second.stderr
+    assert "scratch" not in git("branch", cwd=hub.registry.repo("trading")).stdout
+
+    r = git("push", "origin", "--delete", "master", cwd=work)
 
     assert r.returncode != 0
-    assert "scratch" in git("branch", cwd=hub.registry.repo("trading")).stdout
+    assert "refs are not deleted" in r.stderr
+    assert "master" in git("branch", cwd=hub.registry.repo("trading")).stdout
 
 
 # ---------------------------------------------------------------- the gate, over HTTP
@@ -516,6 +521,279 @@ def test_an_absurd_invite_lifetime_is_a_400_not_a_dropped_connection(hub, tradin
     assert "between 1 and 365" in body["error"]
 
 
+# ---------------------------------------------------------------- signed invites
+
+from conftest import commit_signed, make_key, pub_line
+from knoten import contributors as C
+from knoten.core import GraphError
+from knoten.keys import INVITE_NS, sign
+
+
+@pytest.fixture
+def signed_trading(hub, trading, keys_dir):
+    """`trading` bootstrapped: contributors.yaml lists seb as admin, pushed signed.
+    Returns the fixture dict plus seb's private key under "seb_key"."""
+    work = trading["work"]
+    seb = make_key(keys_dir, "seb")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb creates the graph", seb)
+    r = git("push", "-q", "origin", "master", cwd=work)
+    assert r.returncode == 0, r.stderr
+    return {**trading, "seb_key": seb}
+
+
+def invite_body(priv, graph, name, role):
+    blob = C.invite_blob(graph, name, role, "2099-01-01", "n0nce")
+    return {"name": name, "role": role, "days": 7, "blob": blob.decode(),
+            "sig": sign(priv, blob, INVITE_NS)}
+
+
+def test_a_signed_graph_refuses_an_unsigned_invite(hub, signed_trading):
+    status, body = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                       ("seb", signed_trading["admin"]))
+    assert status == 400
+    assert "invites must carry the admin's signature" in body["error"]
+
+
+def test_a_stolen_admin_token_cannot_mint_an_invite(hub, signed_trading, keys_dir):
+    """The token says who is connecting; the key says who is authorising. An invite
+    signed by any key but the admin's own is refused even with the admin's token."""
+    eve = make_key(keys_dir, "eve")
+    status, body = api(hub, "/trading/invite", invite_body(eve, "test", "maria", "write"),
+                       ("seb", signed_trading["admin"]))
+    assert status == 403
+    assert "your own signing key" in body["error"]
+
+
+def test_an_admin_signed_invite_is_stored_and_handed_to_the_joiner(hub, signed_trading):
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+    status, got = api(hub, "/trading/invite", body, ("seb", signed_trading["admin"]))
+    assert status == 200, got
+
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+
+    assert status == 200
+    assert joined["blob"] == body["blob"] and joined["sig"] == body["sig"] and joined["by"] == "seb"
+    assert hub.registry.authenticate("trading", "maria", joined["token"]) == "write"
+
+
+def test_an_invite_whose_blob_disagrees_with_the_request_is_refused(hub, signed_trading):
+    """The signed bytes say maria/write; the request says maria/admin. The signature is
+    real, the request is not what was signed."""
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+    body["role"] = "admin"
+    status, got = api(hub, "/trading/invite", body, ("seb", signed_trading["admin"]))
+    assert status == 400
+    assert "different name, role or graph" in got["error"]
+
+
+def test_a_phase_1_graph_still_invites_without_a_signature(hub, trading):
+    status, got = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                      ("seb", trading["admin"]))
+    assert status == 200
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+    assert status == 200 and joined["blob"] == "" and joined["sig"] == ""
+
+
+# ---------------------------------------------------------------- signed invites: review fixes
+
+def test_a_revoked_admins_earlier_invite_is_refused_at_join_not_only_at_the_gate(hub, signed_trading):
+    """The gate refuses the eventual join COMMIT once seb is revoked, but that is not
+    enough on its own: without re-checking at redeem, the holder already had a live
+    TOKEN the moment /join answered, and a token reads a private graph whether or not
+    its holder ever gets as far as committing."""
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+    status, got = api(hub, "/trading/invite", body, ("seb", signed_trading["admin"]))
+    assert status == 200, got
+
+    work, seb = signed_trading["work"], signed_trading["seb_key"]
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin", "revoked": "2020-01-01"}})
+    commit_signed(work, "seb steps down", seb)
+    r = git("push", "-q", "origin", "master", cwd=work)
+    assert r.returncode == 0, r.stderr
+
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+
+    assert status == 400
+    assert "no longer valid" in joined["error"]
+    # Not "is this token refused" -- there must be no token in the reply at all.
+    assert "token" not in joined
+
+
+def test_an_unsigned_graph_refuses_an_invite_carrying_a_signature(hub, trading):
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": "x", "sig": "y"},
+                       ("seb", trading["admin"]))
+    assert status == 400
+    assert "not signed" in body["error"]
+
+
+@pytest.mark.parametrize("blob, sig", [
+    pytest.param("x" * 4097, "", id="blob-over-4096-bytes"),
+    pytest.param("", "y" * 8193, id="sig-over-8192-bytes"),
+    # 2049 two-byte characters is 4098 BYTES: over the cap, though under it counted as
+    # code points, and bytes are what gets stored and signed over.
+    pytest.param("é" * 2049, "", id="blob-over-4096-bytes-in-two-byte-characters"),
+])
+def test_invite_fields_over_the_size_cap_are_refused(hub, trading, blob, sig):
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": blob, "sig": sig},
+                       ("seb", trading["admin"]))
+    assert status == 400
+    assert "too large" in body["error"]
+
+
+def test_a_lone_surrogate_in_an_invite_field_is_a_400_not_a_500(hub, signed_trading):
+    """A crafted \\ud800 escape in the JSON body decodes fine through json.loads but not
+    through .encode(): unguarded, that reached the catch-all as a bare 500."""
+    status, body = api(hub, "/trading/invite",
+                       {"name": "maria", "role": "write", "blob": "\ud800", "sig": "x"},
+                       ("seb", signed_trading["admin"]))
+    assert status == 400
+
+
+def test_an_admin_token_not_listed_in_contributors_gets_a_clear_refusal(hub, signed_trading):
+    """A registry admin token and a listed admin in contributors.yaml are different
+    things: this admin's own token authenticates, but the graph never named them, so
+    there is no key of theirs to check a signature against at all."""
+    rogue = hub.registry.mint("trading", "rogue", "admin")
+    body = invite_body(signed_trading["seb_key"], "test", "maria", "write")
+
+    status, got = api(hub, "/trading/invite", body, ("rogue", rogue))
+
+    assert status == 403
+    assert "not a listed admin" in got["error"]
+
+
+def test_an_invite_issued_before_the_graph_was_signed_is_refused_at_join(hub, trading, keys_dir):
+    """Bootstrapping a signed graph does not retroactively arm invites that were minted
+    unsigned, before there was any admin key to check them against."""
+    status, got = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                      ("seb", trading["admin"]))
+    assert status == 200
+
+    work = trading["work"]
+    seb = make_key(keys_dir, "seb")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    commit_signed(work, "seb signs the graph after the fact", seb)
+    r = git("push", "-q", "origin", "master", cwd=work)
+    assert r.returncode == 0, r.stderr
+
+    status, joined = api(hub, "/trading/join", {"code": got["code"]})
+
+    assert status == 400
+    assert "issued before this graph was signed" in joined["error"]
+
+
+# ------------------------------------------- who may lay down the first constitution
+
+def test_a_write_token_cannot_bootstrap_a_hosted_graphs_contributors_file(hub, trading,
+                                                                          tmp_path, keys_dir):
+    """A signature says which KEY wrote a commit, never which token pushed it, and the
+    first contributors.yaml is signed by a key it names itself -- so on a phase-1 hosted
+    graph any `write` collaborator could write one naming themselves admin and push it.
+    `knoten serve` tells the hook who it authenticated; only the admin's token may."""
+    tok = hub.registry.mint("trading", "maria", "write")
+    dest = tmp_path / "maria"
+    git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(dest), cwd=tmp_path)
+    git("config", "user.email", "m@m.m", cwd=dest); git("config", "user.name", "m", cwd=dest)
+    maria = make_key(keys_dir, "maria")
+    C.dump(dest, {"maria": {"key": pub_line(maria), "role": "admin"}})
+    commit_signed(dest, "maria writes herself a constitution", maria)
+
+    r = git("push", "origin", "master", cwd=dest)
+
+    assert r.returncode != 0
+    assert "only the graph's admin token may bootstrap" in r.stderr
+    assert hub.registry.head_graph("trading")[0] is None, "the graph is still unsigned"
+
+
+def test_the_admins_own_token_bootstraps(hub, signed_trading):
+    """The other half: the fixture above this one IS the admin's bootstrap, pushed
+    through the same server, and the graph is signed afterwards."""
+    contribs, name = hub.registry.head_graph("trading")
+
+    assert set(contribs) == {"seb"} and contribs["seb"]["role"] == "admin"
+    assert name == "test"
+
+
+def test_a_bootstrap_may_not_bundle_anything_else(hub, trading, keys_dir):
+    """Same restriction a join carries. The signature proves who wrote the constitution,
+    not that the rest of the tree was looked at, and this commit is accepted on the
+    strength of naming its own signer."""
+    work = trading["work"]
+    seb = make_key(keys_dir, "seb")
+    C.dump(work, {"seb": {"key": pub_line(seb), "role": "admin"}})
+    (work / "nodes" / "hyp-extra.md").write_text(
+        "---\nid: hyp-extra\ntype: hypothesis\nstatus: open\n---\n\n# extra\n",
+        encoding="utf-8")
+    commit_signed(work, "seb signs the graph and slips a node in", seb)
+
+    r = git("push", "origin", "master", cwd=work)
+
+    assert r.returncode != 0
+    assert "may change nothing else" in r.stderr
+    assert hub.registry.head_graph("trading")[0] is None, "the graph is still unsigned"
+
+
+def test_a_write_token_cannot_plant_a_second_constitution_through_the_hub(hub, signed_trading,
+                                                                         tmp_path, keys_dir):
+    """The exploit end to end: a listed writer pushes `mine/contributors.yaml` and
+    nothing else. It names no graph, so the per-commit walk never looked at it, and the
+    next commit could put a graph around it. Two graphs in one hosted repo is also the
+    state where `head_graph` refuses to answer, so the real admin's `/invite` starts
+    returning 400 and only the writer's own graph still works."""
+    work, seb = signed_trading["work"], signed_trading["seb_key"]
+    maria_key = make_key(keys_dir, "maria")
+    contribs = C.load(work)
+    contribs["maria"] = {"key": pub_line(maria_key), "role": "write"}
+    C.dump(work, contribs)
+    commit_signed(work, "seb adds maria", seb)
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+
+    tok = hub.registry.mint("trading", "maria", "write")
+    dest = tmp_path / "maria"
+    git("clone", "-q", clone_url(hub, "trading", "maria", tok), str(dest), cwd=tmp_path)
+    git("config", "user.email", "m@m.m", cwd=dest); git("config", "user.name", "m", cwd=dest)
+    (dest / "mine").mkdir()
+    C.dump(dest / "mine", {"maria": {"key": pub_line(maria_key), "role": "admin"}})
+    commit_signed(dest, "maria plants a constitution of her own", maria_key)
+
+    r = git("push", "origin", "master", cwd=dest)
+
+    assert r.returncode != 0
+    assert "starts a second contributors.yaml" in r.stderr
+    assert set(hub.registry.head_graph("trading")[0]) == {"seb", "maria"}
+
+    status, got = api(hub, "/trading/invite", invite_body(seb, "test", "friend", "write"),
+                      ("seb", signed_trading["admin"]))
+    assert status == 200, got
+    assert got["code"], "the admin's own route stopped working"
+
+
+def test_a_graph_whose_nodes_are_gone_is_broken_not_unsigned(hub, signed_trading):
+    """An admin may retire their graph's contents; the gate allows exactly that. What
+    must not happen is the server then reading a tip that still holds contributors.yaml
+    as phase-1 -- where an UNSIGNED invite for any role is accepted and /join skips the
+    signature re-check entirely."""
+    work = signed_trading["work"]
+    git("rm", "-rq", "nodes", cwd=work)
+    commit_signed(work, "seb retires the graph", signed_trading["seb_key"])
+    assert git("push", "-q", "origin", "master", cwd=work).returncode == 0
+
+    with pytest.raises(GraphError, match="but no graph"):
+        hub.registry.head_graph("trading")
+
+    status, body = api(hub, "/trading/invite", {"name": "maria", "role": "write"},
+                       ("seb", signed_trading["admin"]))
+
+    assert status == 400 and "code" not in body
+    # The refusal reaches an ordinary contributor. The server's own data directory is not
+    # theirs to learn from it.
+    assert "--git-dir" not in body["error"]
+    assert str(hub.data) not in body["error"]
+
+
 # ---------------------------------------------------------------- the invite list
 
 def test_an_admin_can_list_the_open_invites(hub, trading):
@@ -579,10 +857,10 @@ def test_a_token_revoked_between_the_advertisement_and_the_push_is_refused(hub, 
     assert "hyp-m" not in git("log", "--oneline", cwd=hub.registry.repo("trading")).stdout
 
 
-def test_an_annotated_tag_carrying_a_broken_tree_is_refused(hub, trading):
+def test_an_annotated_tag_is_refused_as_a_second_ref(hub, trading):
     """An annotated tag is its own object, not a commit, and it reaches the hook as the
-    new oid. A gate that only knows how to read a commit would let a published, broken
-    snapshot onto the server."""
+    new oid. It is also a second ref on a graph with one line of history: refused for
+    being one, before anything reads the tree it points at."""
     work = trading["work"]
     commit_node(work, "hyp-x.md", ALIVE_NO_GATE)
     git("tag", "-a", "v1", "-m", "a broken release", cwd=work)
@@ -590,7 +868,7 @@ def test_an_annotated_tag_carrying_a_broken_tree_is_refused(hub, trading):
     r = git("push", "origin", "v1", cwd=work)
 
     assert r.returncode != 0
-    assert "live-claims-must-cite-their-gates" in r.stderr
+    assert "new branches and tags are refused" in r.stderr
     assert "v1" not in git("tag", cwd=hub.registry.repo("trading")).stdout
 
 

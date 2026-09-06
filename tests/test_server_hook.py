@@ -120,17 +120,25 @@ def test_a_repo_with_no_graph_pushes_freely(server):
     assert push(work).returncode == 0
 
 
-def test_deleting_a_branch_is_not_treated_as_a_push(server):
-    """A deletion arrives as an all-zeros new sha. `git archive` on it fails, and a gate
-    that explodes on a routine branch delete is one people disable."""
+def test_a_second_branch_and_a_deletion_are_both_refused(server):
+    """One hosted graph, one line of history. A second branch is a tree nobody pulls and
+    a place to hide a second contributors.yaml; a deletion takes history away. Both are
+    refused by the gate itself, not only by the hosted repo's `receive.*` config, which a
+    repo gated by hand with `knoten hook --server` does not have."""
     bare, work = server
     commit(work, "a clean graph")
     push(work)
-    git("push", "-q", "origin", "master:scratch", cwd=work)
 
-    r = git("push", "origin", "--delete", "scratch", cwd=work)
+    second = git("push", "origin", "master:scratch", cwd=work)
+    assert second.returncode != 0
+    assert "new branches and tags are refused" in second.stderr
+    assert "scratch" not in git("branch", cwd=bare).stdout
 
-    assert r.returncode == 0, r.stdout + r.stderr
+    r = git("push", "origin", "--delete", "master", cwd=work)
+
+    assert r.returncode != 0
+    assert "refs are not deleted" in r.stderr
+    assert "master" in git("branch", cwd=bare).stdout
 
 
 def test_it_fails_closed_when_knoten_is_not_on_the_server_path(server):
@@ -272,21 +280,35 @@ def test_an_unparseable_node_is_refused(server):
 
 # ---------------------------------------------------------------- every ref, every push
 
-def test_it_checks_every_ref_in_one_push(server):
-    """`git push --all` hands the hook several refs on stdin. Checking only the first
-    leaves a broken branch on the server, and it is the branch someone will merge."""
+def test_one_push_may_create_only_one_ref(server):
+    """Asked which branches exist, git answers the same thing for every ref line in a
+    push: none have moved yet when pre-receive runs. So `git push --all` into a repo with
+    no branch read "none here" once per ref and created them all, and a hosted graph
+    began life with two lines of history. The count is kept across the ref lines instead,
+    where the lines are read."""
     bare, work = server
     commit(work, "a clean graph")
-    push(work)
     git("checkout", "-qb", "side", cwd=work)
-    (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
-    commit(work, "broken, on a side branch")
+    (work / "g" / "nodes" / "hyp-s.md").write_text(
+        "---\nid: hyp-s\ntype: hypothesis\nstatus: open\n---\n\n# s\n", encoding="utf-8")
+    commit(work, "a clean side branch")
+    git("checkout", "-q", "master", cwd=work)
 
     r = git("push", "--all", "origin", cwd=work)
 
     assert r.returncode != 0
-    assert "live-claims-must-cite-their-gates" in r.stdout + r.stderr
-    assert "side" not in git("branch", cwd=bare).stdout
+    assert "refs/heads/side" in r.stderr
+    assert "new branches and tags are refused" in r.stderr
+    assert git("branch", cwd=bare).stdout.strip() == "", "a ref landed anyway"
+
+
+def test_the_one_ref_of_a_first_push_still_lands(server):
+    """The rule above must not refuse the push every hosted graph starts with."""
+    bare, work = server
+    commit(work, "a clean graph")
+
+    assert push(work).returncode == 0
+    assert "master" in git("branch", cwd=bare).stdout
 
 
 def test_it_gates_a_branch_that_is_not_master(server):
@@ -302,7 +324,8 @@ def test_it_gates_a_branch_that_is_not_master(server):
 
 
 def test_it_gates_a_force_push(server):
-    """Rewriting history is the other way to get a bad tree onto the server."""
+    """Rewriting history is the other way to get a bad tree onto the server. It never
+    gets as far as the tree: dropping accepted commits is refused on its own."""
     bare, work = server
     commit(work, "a clean graph")
     push(work)
@@ -313,18 +336,44 @@ def test_it_gates_a_force_push(server):
     r = git("push", "-f", "origin", "master", cwd=work)
 
     assert r.returncode != 0
+    assert "not a fast-forward" in r.stderr
     assert "rewritten" not in history(bare)
 
 
-def test_it_gates_a_tag(server):
-    """A tag carries a tree like any other ref. Skipping tags leaves a published, broken
-    snapshot on the server."""
+def test_a_tag_is_refused_even_before_the_first_branch(server):
+    """The branch count reads `refs/heads/` only and cannot see a tag, so a tag pushed
+    into a repo with no branch was told "none here" and landed -- and the branch still
+    landed after it, which is two refs on a graph that has one. Counting `refs/` instead
+    would be worse: the tag would block the branch forever. A ref that is not a branch is
+    simply not a shape a hosted graph has."""
     bare, work = server
+    commit(work, "a clean graph")
+    git("tag", "v1", cwd=work)
+
+    r = git("push", "origin", "v1", cwd=work)
+
+    assert r.returncode != 0
+    assert "new branches and tags are refused" in r.stderr
+    assert git("tag", cwd=bare).stdout.strip() == ""
+    assert push(work).returncode == 0, "the branch the tag went in front of must still land"
+
+
+def test_it_gates_a_tag(server):
+    """A tag is a second ref on a graph that has one line of history: a published
+    snapshot nobody pulls, whose tree no later push ever revisits. Refused as a ref,
+    whatever it carries."""
+    bare, work = server
+    commit(work, "a clean graph")
+    push(work)
     (work / "g" / "nodes" / "hyp-x.md").write_text(ALIVE_NO_GATE, encoding="utf-8")
     commit(work, "broken")
     git("tag", "v1", cwd=work)
 
-    assert git("push", "origin", "v1", cwd=work).returncode != 0
+    r = git("push", "origin", "v1", cwd=work)
+
+    assert r.returncode != 0
+    assert "new branches and tags are refused" in r.stderr
+    assert "v1" not in git("tag", cwd=bare).stdout
 
 
 # ---------------------------------------------------------------- hostile trees
@@ -367,7 +416,9 @@ def test_a_symlinked_nodes_directory_cannot_read_the_servers_disk(server, tmp_pa
 def test_one_broken_ref_refuses_the_whole_push(server):
     """pre-receive runs once for all refs and its exit status is the verdict on all of
     them. A push carrying a clean branch and a broken one must land neither, or the
-    pusher gets a partial push and the shared repo a branch nobody validated."""
+    pusher gets a partial push and the shared repo a branch nobody validated. Here the
+    broken ref is read first and refused on its contents, the second is refused for being
+    a second: two reasons, one verdict, nothing on the server."""
     bare, work = server
     commit(work, "a clean graph")
     git("branch", "other", cwd=work)
