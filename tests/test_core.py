@@ -142,13 +142,12 @@ def test_question_of_uses_breadth_first_to_find_nearer_question(graph):
     graph.node("idea-i", "id: idea-i\ntype: idea\nstatus: open\nlinks:\n"
                          "  - {rel: prov:wasDerivedFrom, to: q-far}", "# I\n")
     graph.node("finding-f", "id: finding-f\ntype: finding\nstatus: alive\nlinks:\n"
-                            "  - {rel: prov:wasDerivedFrom, to: idea-i}\n"
-                            "  - {rel: prov:wasDerivedFrom, to: q-near}", "# F\n")
+                            "  - {rel: prov:wasDerivedFrom, to: q-near}\n"
+                            "  - {rel: prov:wasDerivedFrom, to: idea-i}", "# F\n")
     nodes = backlink(load(graph.root))
 
-    # q-far is at distance 2 (through idea-i); q-near is at distance 1. The far question's
-    # link comes FIRST in finding-f's links so a depth-first walk would return q-far,
-    # but BFS should return q-near (the nearer one).
+    # q-near is at distance 1, q-far is at distance 2 (through idea-i). The nearer link
+    # comes FIRST so BFS will find q-near first; a stack-based walk would find q-far.
     assert question_of(nodes, "finding-f") == "q-near"
 
 
