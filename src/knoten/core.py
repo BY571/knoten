@@ -526,8 +526,8 @@ def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
             for n in sorted(nodes.values(), key=lambda n: n.id) if n.type == GATE_TYPE]
 
 
-def frontier(nodes: dict[str, Node]) -> dict:
-    """What is worth doing next, in three buckets.
+def frontier(nodes: dict[str, Node], types: tuple[str, ...] = ("finding",)) -> dict:
+    """What is worth doing next, in four buckets.
 
     `## What would reopen this` is the standing offer SPEC §5 insists on, and until now
     the only way to act on one was to re-read every post-mortem and notice the world had
@@ -538,6 +538,7 @@ def frontier(nodes: dict[str, Node]) -> dict:
     """
     ordered = sorted(nodes.values(), key=lambda n: n.id)
     return {
+        "compressible": compressible(nodes, types),
         "open": [n for n in ordered if n.status == OPEN],
         "reopenable": [(n, offer) for n in ordered
                        if n.status in ("dead", "retracted")
@@ -571,6 +572,31 @@ def supersedes(n: Node) -> list[str]:
 def is_general(n: Node) -> bool:
     """A general node covers two or more; one target is a replacement, not a rule."""
     return len(supersedes(n)) >= 2
+
+
+def compressible(nodes: dict[str, Node], types: tuple[str, ...] = ("finding",)) -> list[dict]:
+    """Clusters of alive nodes under one question that share a survived gate or a tag,
+    three or more, with nothing yet generalising them. Deliberately dumb: shared gate
+    or tag, not similarity. It presents cheaply and lets the reader judge what
+    generalises, the bargain the reopen band makes."""
+    # Same guard `shape` applies to its own `covered` set: a self-loop must not count a
+    # node as already covered by itself.
+    covered = {t for n in nodes.values() if n.status == "alive"
+              for t in supersedes(n) if t != n.id}
+    groups: dict[tuple, set] = {}
+    for n in nodes.values():
+        if n.status != "alive" or n.type not in types or n.id in covered:
+            continue
+        if (q := question_of(nodes, n.id)) is None:
+            continue
+        keys = [("gate", l["to"]) for l in n.links if l["rel"] == "kn:survivedGate"]
+        keys += [("tag", str(t)) for t in n.tags]
+        for k in keys:
+            groups.setdefault((q, k), set()).add(n.id)
+    out = [{"question": q, "shared": {kind: key}, "ids": sorted(ids)}
+           for (q, (kind, key)), ids in groups.items() if len(ids) >= 3]
+    out.sort(key=lambda c: (-len(c["ids"]), c["question"], next(iter(c["shared"].items()))))
+    return out
 
 
 def compressible_types(cfg: dict) -> tuple[str, ...]:

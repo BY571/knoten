@@ -9,8 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .core import (GATE_SECTIONS, GATE_TYPE, VERDICT, GraphError, Node,
-                   frontier as _frontier, gates as _gates, load, retrieve, section,
-                   shortest_path)
+                   compressible_types, frontier as _frontier, gates as _gates, load,
+                   retrieve, section, shape, shortest_path)
 from .update import update_with_report
 from .validate import check, load_config
 
@@ -51,8 +51,14 @@ def summarise(n: Node) -> dict:
 
 
 def frontier(root: Path) -> dict:
-    f = _frontier(load(root))
+    nodes = load(root)
+    cfg = load_config(root)
+    f = _frontier(nodes, compressible_types(cfg))
+    s = shape(nodes, cfg)
+    s["clusters"] = len(f["compressible"])
     return {
+        "shape": s,
+        "compressible": f["compressible"],
         "open": [{"id": n.id, "title": n.title} for n in f["open"]],
         "reopenable": [{"id": n.id, "title": n.title, "reopen_if": offer}
                        for n, offer in f["reopenable"]],

@@ -161,8 +161,25 @@ def gates_cmd(root, as_json=False) -> int:
 
 
 def render_frontier(payload: dict) -> None:
+    s = payload["shape"]
+    head = [f"{s['rules']} rules over {s['specifics']} specifics"]
+    if s["clusters"]:
+        head.append(f"{s['clusters']} compressible cluster{'s' if s['clusters'] != 1 else ''}")
+    for b in s["budget"][:3]:
+        head.append(f"{b['free']} of {b['count']} slots free under {b['question']}")
+    print("  " + " · ".join(head))
+    budget = {b["question"]: b for b in s["budget"]}
+    if payload["compressible"]:
+        print("\n  COMPRESSIBLE — do these before the next experiment")
+        for c in payload["compressible"]:
+            kind, key = next(iter(c["shared"].items()))
+            tail = f", budget {budget[c['question']]['count']}" if c["question"] in budget else ""
+            print(f"    {c['question']}  ·  {key}  ·  {len(c['ids'])} alive findings{tail}")
+            ids = c["ids"][:8]
+            more = f", +{len(c['ids']) - 8} more" if len(c["ids"]) > 8 else ""
+            print(f"      {', '.join(ids)}{more}")
     if payload["open"]:
-        print("  OPEN — started, never settled")
+        print("\n  OPEN — started, never settled")
         for n in payload["open"]:
             print(f"    {n['id']:24}  {n['title']}")
     if payload["reopenable"]:

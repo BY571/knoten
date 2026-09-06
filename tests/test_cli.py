@@ -391,3 +391,50 @@ def test_a_hunch_is_a_source_like_any_other(tmp_path, monkeypatch):
     monkeypatch.chdir(root)
 
     assert main(["validate"]) == 0
+
+
+def test_frontier_prints_the_shape_first_and_the_compressible_band_before_open(graph, monkeypatch, capsys):
+    graph.rules("""\
+name: t
+statuses: [open, alive, active]
+node_types: [question, finding, gate, hypothesis]
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {type: finding, per: question, count: 4}
+    message: Compress first.
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
+    graph.node("hyp-open", "id: hyp-open\ntype: hypothesis\nstatus: open", "# Open one\n")
+    for i in range(3):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["frontier"]) == 0
+    out = capsys.readouterr().out
+    head, rest = out.split("\n", 1)
+
+    assert "0 rules over 3 specifics" in head and "1 compressible cluster" in head
+    assert "1 of 4 slots free under question-q" in head
+    assert rest.index("COMPRESSIBLE") < rest.index("OPEN")
+    assert "question-q  ·  gate-h  ·  3 alive findings, budget 4" in rest
+    assert "finding-0, finding-1, finding-2" in rest
+
+
+def test_frontier_lists_at_most_eight_ids_per_cluster(graph, monkeypatch, capsys):
+    graph.rules("name: t\nstatuses: [open, alive, active]\nnode_types: [question, finding, gate]\nrules: []\n")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
+    for i in range(10):
+        graph.node(f"finding-{i:02d}", f"id: finding-{i:02d}\ntype: finding\nstatus: alive\nlinks:\n"
+                                       "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                       "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    monkeypatch.chdir(graph.root)
+
+    main(["frontier"])
+    out = capsys.readouterr().out
+
+    assert "finding-07, +2 more" in out and "finding-08" not in out
+    assert "10 alive findings" in out and "budget" not in out
