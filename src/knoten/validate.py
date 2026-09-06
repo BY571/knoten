@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import GATE_TYPE, GENERATED, INVERSE, GraphError, Node, _yaml
+from .core import GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _yaml, moved, question_of
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -28,10 +28,13 @@ RULE_KEYS = {
     "require_edge_target",   # {rel, type, status, min} — what the edge must POINT AT
     "require_backlink",      # same shape, read from the other side: what must point AT
                              # this node. `rel` is the GENERATED inverse, e.g. kn:testedBy
+    "unless_edge",           # skip this rule for a node that declares this relation
+    "max_alive",             # {type, per: question|graph, count} - a GRAPH-level cap:
+                             # the newest alive nodes past it are the violation
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
-GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules"}
+GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules", "compressible"}
 
 # `GATE_TYPE` was this until the rename. Named only so the migration check below can
 # recognise a graph that predates it; nothing else in the package may use it.
@@ -59,6 +62,16 @@ def load_config(root: Path) -> dict:
             f"graph.yaml: unknown key(s) {', '.join(sorted(unknown))}. "
             f"Known keys: {', '.join(sorted(GRAPH_KEYS))}"
         )
+
+    if (comp := cfg.get("compressible")) is not None:
+        types = {str(t) for t in (cfg.get("node_types") or {})}
+        if not isinstance(comp, list) or not comp or not all(isinstance(t, str) for t in comp):
+            raise GraphError("graph.yaml: `compressible` must be a non-empty list of node "
+                             f"types, got {comp!r}")
+        if types and (unknown := set(comp) - types):
+            raise GraphError(f"graph.yaml: `compressible` names type(s) not in node_types: "
+                             f"{', '.join(sorted(unknown))}")
+
     # `node_types` may also be a MAPPING of type -> what that word means in this graph.
     # Membership is checked against the keys either way — `in` and iteration over a dict
     # give exactly that — so nothing downstream changes. The values are for the reader and
@@ -165,6 +178,30 @@ def _check_values(r: dict) -> None:
                 raise GraphError(
                     f"graph.yaml: rule '{rid}': `require_result_min` floor for '{k}' must "
                     f"be a number, got {v!r}")
+
+    if "unless_edge" in r:
+        u = r["unless_edge"]
+        if not isinstance(u, str) or u not in INVERSE:
+            raise GraphError(f"graph.yaml: rule '{rid}': `unless_edge` must be a relation a "
+                             f"node declares, one of {', '.join(sorted(INVERSE))} — got {u!r}")
+
+    if "max_alive" in r:
+        spec = r["max_alive"]
+        if not isinstance(spec, dict) or not spec.get("type"):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` must be a mapping "
+                             f"{{type, count, per}}, got {spec!r}")
+        cnt = spec.get("count")
+        if isinstance(cnt, bool) or not isinstance(cnt, int) or cnt < 1:
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` `count` must be a "
+                             f"positive whole number, got {cnt!r}")
+        if spec.get("per", "question") not in ("question", "graph"):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` `per` must be "
+                             f"question or graph, got {spec.get('per')!r}")
+        # A cap is a statement about the graph, not about one node; mixing it with the
+        # per-node keys would make `when_type` look like it narrows the count. It does not.
+        if others := sorted(set(r) & (RULE_KEYS - {"id", "message", "max_alive"})):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` stands alone; drop "
+                             f"{', '.join(others)}")
 
 
 def _tags(n: Node, cfg: dict) -> list[Violation]:
@@ -319,13 +356,42 @@ def applies(status: str, ntype: str, r: dict) -> bool:
     return True
 
 
+def _budget(nodes: dict[str, Node], r: dict) -> list[Violation]:
+    """`max_alive`: the newest alive nodes past the cap are the violation. Attributed
+    that way so a `commit` of the one-too-many refuses THAT node, while a general node
+    passes: everything it supersedes has stopped counting before it is counted."""
+    spec = r["max_alive"]
+    types, cap, per = _csv(spec["type"]), spec["count"], spec.get("per", "question")
+    covered = {l["to"] for n in nodes.values() if n.status == "alive"
+               for l in n.links if l["rel"] == SUPERSEDES}
+    groups: dict[str, list[Node]] = {}
+    for n in nodes.values():
+        if n.status != "alive" or n.type not in types or n.id in covered:
+            continue
+        key = "(graph)" if per == "graph" else (question_of(nodes, n.id) or "(no question)")
+        groups.setdefault(key, []).append(n)
+    msg = str(r.get("message", r["id"])).strip()
+    out = []
+    for key, members in sorted(groups.items()):
+        members.sort(key=lambda n: (moved(n), n.id))
+        for n in members[cap:]:
+            out.append(Violation(n.id, r["id"], f"{msg} ({len(members)} alive "
+                                                f"{'/'.join(types)} under {key}, budget {cap})"))
+    return out
+
+
 def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
     cfg = load_config(root)
     out = _structural(nodes, root, cfg)
 
+    for r in cfg.get("rules", []):
+        if "max_alive" in r:
+            out += _budget(nodes, r)
     for n in nodes.values():
         for r in cfg.get("rules", []):
-            if not applies(n.status, n.type, r):
+            if "max_alive" in r or not applies(n.status, n.type, r):
+                continue
+            if (u := r.get("unless_edge")) and u in n.rels():
                 continue
             rid, msg = r["id"], str(r.get("message", r["id"])).strip()
 

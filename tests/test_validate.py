@@ -3,7 +3,7 @@ silently accept instead — the worst possible failure for a validator."""
 import pytest
 
 from knoten.core import GraphError, load
-from knoten.validate import check, load_rules
+from knoten.validate import check, load_config, load_rules
 
 ALIVE_NO_GATE = "id: hyp-x\ntype: hypothesis\nstatus: alive"
 
@@ -496,3 +496,144 @@ def test_a_malformed_require_field_is_a_graph_error(graph):
 
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
+
+
+def _q_graph(graph, n_findings, cap=3, per="question", extra_rules=""):
+    rules(graph, f"""\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, experiment, finding, gate]
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {{type: finding, per: {per}, count: {cap}}}
+    message: Compress first.
+{extra_rules}""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("exp-e", "id: exp-e\ntype: experiment\nstatus: alive\nlinks:\n"
+                        "  - {rel: prov:wasDerivedFrom, to: question-q}", "# E\n")
+    for i in range(n_findings):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\n"
+                                   f"created: 2026-01-0{i + 1}\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: exp-e}", f"# {i}\n")
+    return graph
+
+
+def test_max_alive_fires_on_the_newest_nodes_past_the_cap(graph):
+    _q_graph(graph, 5, cap=3)
+
+    errs = [e for e in check(load(graph.root), graph.root) if e.rule == "compress-before-you-accumulate"]
+
+    assert [e.node for e in errs] == ["finding-3", "finding-4"]
+    assert "5 alive finding under question-q, budget 3" in errs[0].message
+    assert errs[0].message.startswith("Compress first.")
+
+
+def test_max_alive_is_quiet_at_the_cap(graph):
+    _q_graph(graph, 3, cap=3)
+
+    assert not [e for e in check(load(graph.root), graph.root) if "compress" in e.rule]
+
+
+def test_a_node_something_alive_supersedes_stops_counting(graph):
+    _q_graph(graph, 4, cap=3)
+    graph.node("finding-rule", "id: finding-rule\ntype: finding\nstatus: alive\n"
+                               "created: 2026-02-01\nlinks:\n"
+                               "  - {rel: npx:supersedes, to: finding-0}\n"
+                               "  - {rel: npx:supersedes, to: finding-1}\n"
+                               "  - {rel: kn:survivedGate, to: gate-g}",
+               "# rule\n\n## Covers\n- finding-0: a\n- finding-1: b\n")
+    graph.node("gate-g", "id: gate-g\ntype: gate\nstatus: open", "# G\n")
+
+    errs = [e for e in check(load(graph.root), graph.root) if "compress" in e.rule]
+
+    assert not errs, errs          # 4 - 2 + 1 = 3, at the cap
+
+
+def test_superseded_nodes_do_not_count(graph):
+    _q_graph(graph, 3, cap=2)
+    graph.node("finding-0", "id: finding-0\ntype: finding\nstatus: superseded\n"
+                            "created: 2026-01-01\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: exp-e}", "# 0\n")
+
+    assert not [e for e in check(load(graph.root), graph.root) if "compress" in e.rule]
+
+
+def test_unrooted_nodes_share_a_group_of_their_own(graph):
+    _q_graph(graph, 0, cap=1)
+    for i in range(2):
+        graph.node(f"finding-lost-{i}", f"id: finding-lost-{i}\ntype: finding\nstatus: alive\n"
+                                        f"created: 2026-01-0{i + 1}", f"# {i}\n")
+
+    (err,) = [e for e in check(load(graph.root), graph.root) if "compress" in e.rule]
+
+    assert err.node == "finding-lost-1" and "(no question)" in err.message
+
+
+def test_max_alive_per_graph_ignores_questions(graph):
+    _q_graph(graph, 3, cap=2, per="graph")
+    graph.node("question-r", "id: question-r\ntype: question\nstatus: open", "# R\n")
+    graph.node("finding-r", "id: finding-r\ntype: finding\nstatus: alive\ncreated: 2026-03-01\n"
+                            "links:\n  - {rel: prov:wasDerivedFrom, to: question-r}", "# r\n")
+
+    errs = [e for e in check(load(graph.root), graph.root) if "compress" in e.rule]
+
+    assert [e.node for e in errs] == ["finding-2", "finding-r"]
+    assert "under (graph)" in errs[0].message
+
+
+@pytest.mark.parametrize("bad", [
+    "max_alive: 12",
+    "max_alive: {type: finding}",
+    "max_alive: {type: finding, count: 0}",
+    "max_alive: {type: finding, count: 3, per: author}",
+    "max_alive: {type: finding, count: 3}\n    when_type: finding",
+])
+def test_a_malformed_max_alive_rule_is_refused_at_load(graph, bad):
+    rules(graph, f"rules:\n  - id: b\n    {bad}\n    message: m\n")
+
+    with pytest.raises(GraphError, match="max_alive"):
+        load_rules(graph.root)
+
+
+def test_unless_edge_skips_the_rule_for_nodes_that_declare_that_relation(graph):
+    rules(graph, """\
+name: t
+statuses: [alive]
+node_types: [finding, experiment]
+rules:
+  - id: findings-come-from-experiments
+    when_type: finding
+    unless_edge: npx:supersedes
+    require_edge_target: {rel: prov:wasDerivedFrom, type: experiment, min: 1}
+    message: Cite the experiment.
+""")
+    graph.node("finding-a", "id: finding-a\ntype: finding\nstatus: alive", "# a\n")
+    graph.node("finding-b", "id: finding-b\ntype: finding\nstatus: alive", "# b\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-a}\n"
+                            "  - {rel: npx:supersedes, to: finding-b}",
+               "# g\n\n## Covers\n- finding-a\n- finding-b\n")
+
+    hit = {e.node for e in check(load(graph.root), graph.root) if e.rule == "findings-come-from-experiments"}
+
+    assert hit == {"finding-a", "finding-b"}
+
+
+def test_unless_edge_must_name_a_declared_relation(graph):
+    rules(graph, "rules:\n  - id: u\n    unless_edge: kn:supersededBy\n    require_edge: x\n    message: m\n")
+
+    with pytest.raises(GraphError, match="unless_edge"):
+        load_rules(graph.root)
+
+
+def test_compressible_is_a_known_graph_key_and_must_list_declared_types(graph):
+    rules(graph, "name: t\nnode_types: [finding, principle]\ncompressible: [finding, principle]\nrules: []\n")
+    load_config(graph.root)
+
+    rules(graph, "name: t\nnode_types: [finding]\ncompressible: [principle]\nrules: []\n")
+    with pytest.raises(GraphError, match="compressible"):
+        load_config(graph.root)
+
+    rules(graph, "name: t\nnode_types: [finding]\ncompressible: finding\nrules: []\n")
+    with pytest.raises(GraphError, match="compressible"):
+        load_config(graph.root)
