@@ -708,3 +708,127 @@ def test_compressible_does_not_hijack_node_types_own_diagnosis(graph):
 
     with pytest.raises(GraphError, match="node_types"):
         load_config(graph.root)
+
+
+def _bar_graph(graph):
+    rules(graph, """\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, experiment, finding, gate, source]
+rules: []
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("question-r", "id: question-r\ntype: question\nstatus: open", "# R\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n")
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n")
+    return graph
+
+
+GOOD_GENERAL = ("id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                "  - {rel: npx:supersedes, to: finding-1}\n"
+                "  - {rel: npx:supersedes, to: finding-2}\n"
+                "  - {rel: kn:survivedGate, to: gate-a}\n"
+                "  - {rel: kn:survivedGate, to: gate-b}")
+GOOD_COVERS = "# G\n\n## Covers\n- finding-1: the small case\n- finding-2: the large case\n"
+
+
+def _bar(graph):
+    return [e for e in check(load(graph.root), graph.root) if e.rule == "supersession"]
+
+
+def test_a_general_node_that_meets_the_bar_is_accepted(graph):
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+
+    assert _bar(graph) == []
+
+
+def test_a_target_must_be_alive(graph):
+    _bar_graph(graph)
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: dead\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}", "# 2\n")
+    graph.node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+
+    (err,) = _bar(graph)
+    assert err.node == "finding-g" and "finding-2, which is dead, not alive" in err.message
+
+
+def test_a_target_must_be_a_compressible_type(graph):
+    _bar_graph(graph)
+    graph.node("source-s", "id: source-s\ntype: source\nstatus: alive\norigin: x\nlinks:\n"
+                           "  - {rel: prov:wasDerivedFrom, to: question-q}", "# S\n")
+    graph.node("finding-g", GOOD_GENERAL.replace("to: finding-2", "to: source-s"),
+               GOOD_COVERS.replace("finding-2", "source-s"))
+
+    (err,) = _bar(graph)
+    assert "source-s (source); only finding can be superseded" in err.message
+
+
+def test_targets_must_stand_under_one_question(graph):
+    _bar_graph(graph)
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-r}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n")
+    graph.node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+
+    (err,) = _bar(graph)
+    assert "different questions (question-q, question-r)" in err.message
+
+
+def test_an_unrooted_target_is_refused_by_name(graph):
+    _bar_graph(graph)
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n")
+    graph.node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+
+    (err,) = _bar(graph)
+    assert "cannot find the question finding-2 stands under" in err.message
+
+
+def test_the_general_node_faces_the_union_of_the_gates(graph):
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL.replace(
+        "  - {rel: kn:survivedGate, to: gate-b}", ""), GOOD_COVERS)
+
+    (err,) = _bar(graph)
+    assert "must survive gate-b, which finding-2 survived" in err.message
+
+
+def test_covers_must_exist_and_name_every_target(graph):
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL, "# G\n")
+    (err,) = _bar(graph)
+    assert "no '## Covers' section" in err.message
+
+    graph.node("finding-g", GOOD_GENERAL, "# G\n\n## Covers\n- finding-1: only\n")
+    (err,) = _bar(graph)
+    assert "## Covers of finding-g does not mention finding-2" in err.message
+
+
+def test_one_target_faces_the_same_bar(graph):
+    _bar_graph(graph).node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                                        "  - {rel: npx:supersedes, to: finding-1}", "# G\n")
+
+    msgs = " | ".join(e.message for e in _bar(graph))
+    assert "must survive gate-a" in msgs and "no '## Covers'" in msgs
+
+
+def test_a_dangling_target_is_only_a_dangling_edge(graph):
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL.replace("finding-2", "finding-9"),
+                           GOOD_COVERS.replace("finding-2", "finding-9"))
+
+    assert _bar(graph) == []
+    assert any(e.rule == "dangling-edge" for e in check(load(graph.root), graph.root))
+
+
+def test_a_node_that_supersedes_itself_is_refused_by_name(graph):
+    """Controller ruling: a self-target is refused by name and is not run through the
+    other checks (else superseding yourself would spuriously demand you survive your
+    own gates, stand under your own question, and cover yourself)."""
+    _bar_graph(graph).node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                                        "  - {rel: npx:supersedes, to: finding-g}", "# G\n")
+
+    assert [e.message for e in _bar(graph)] == ["finding-g cannot supersede itself"]

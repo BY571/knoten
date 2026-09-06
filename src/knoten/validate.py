@@ -11,7 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _yaml, moved, question_of
+from .core import (GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _yaml,
+                   compressible_types, moved, question_of, section, supersedes)
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -282,6 +283,60 @@ def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
     return out
 
 
+def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
+    """The bar a node clears before it may retire others. Always on: a graph that lets
+    a weaker claim replace stronger ones by declaring one edge has no bar at all.
+
+    One target or many, the checks are the same; the difference between "replaces"
+    and "generalises" is a count, not a rule."""
+    types = compressible_types(cfg)
+    out = []
+    for n in nodes.values():
+        raw = supersedes(n)
+        if not raw:
+            continue
+
+        def vio(m):
+            out.append(Violation(n.id, "supersession", m))
+
+        if n.id in raw:
+            vio(f"{n.id} cannot supersede itself")
+        # dangling: reported already as `dangling-edge`; self: refused above, and a
+        # self-target must not also be run through the checks below.
+        targets = [t for t in raw if t in nodes and t != n.id]
+        if not targets:
+            continue
+        questions = {}
+        for tid in targets:
+            t = nodes[tid]
+            if t.status != "alive":
+                vio(f"{n.id} supersedes {tid}, which is {t.status}, not alive")
+            if t.type not in types:
+                vio(f"{n.id} supersedes {tid} ({t.type}); only {'/'.join(types)} can be superseded")
+            q = question_of(nodes, tid)
+            if q is None:
+                vio(f"cannot find the question {tid} stands under")
+            else:
+                questions[tid] = q
+        mine = question_of(nodes, n.id)
+        seen = sorted(set(questions.values()) | ({mine} if mine else set()))
+        if len(seen) > 1:
+            vio(f"{n.id} and its targets stand under different questions ({', '.join(seen)})")
+        faced = {l["to"] for l in n.links if l["rel"] == "kn:survivedGate"}
+        for tid in targets:
+            for g in sorted({l["to"] for l in nodes[tid].links if l["rel"] == "kn:survivedGate"} - faced):
+                vio(f"{n.id} must survive {g}, which {tid} survived; a general claim faces "
+                    f"the union of the bars")
+        covers = section(n.body, "Covers")
+        if covers is None:
+            vio(f"{n.id} has no '## Covers' section")
+        else:
+            for tid in targets:
+                if tid not in covers:
+                    vio(f"## Covers of {n.id} does not mention {tid}")
+    return out
+
+
 def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation]:
     """Checks the core ALWAYS runs. Structural, not domain."""
     out = []
@@ -330,6 +385,7 @@ def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation
                              f"cited as a gate but typed '{RENAMED_GATE_TYPE}' — the type "
                              f"was renamed to '{GATE_TYPE}', and `knoten gates` only finds "
                              f"that, so this node is invisible to it"))
+    out += _supersession(nodes, cfg)
     return out
 
 
