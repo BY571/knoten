@@ -84,13 +84,14 @@ def commit(root: Path, nid: str, frontmatter: str, body: str) -> dict:
         # lacks it; a `when_status: superseded` rule), or a third node whose own rule
         # depended on a target staying alive, must refuse the commit here — not raise
         # midway through a write that already put the general node and some targets on
-        # disk. Nothing changes on disk between validating `cands` and writing `texts`
-        # below — both are pure reads of the same locked, unmodified graph — so the text
-        # written is exactly the candidate that was validated.
+        # disk. `texts` is computed once; `cands` parses those SAME strings rather than
+        # recomputing them, so the text written below is exactly the candidate that was
+        # validated. `refused` only cascades past this node's own violations when there
+        # are targets to flip — a plain commit (no `npx:supersedes`) is refused on its
+        # own violations alone, same as it always was.
         texts = superseded_texts(root, nodes, candidate) if targets else {}
-        cands = {nid: candidate, **superseded_candidates(root, nodes, candidate)} \
-            if targets else {nid: candidate}
-        if errs := refused(nodes, cands, root):
+        cands = {nid: candidate, **superseded_candidates(root, texts)}
+        if errs := refused(nodes, cands, root, bool(targets)):
             # `node` is no longer redundant with the top-level `nid` now that a flip can
             # break a node that is neither the general node nor one of its targets: the
             # violation must name which node it is on.

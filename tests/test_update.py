@@ -12,6 +12,7 @@ import pytest
 
 from knoten.core import GraphError, load
 from knoten.update import update
+from knoten.validate import check
 
 RULES = """\
 name: t
@@ -261,3 +262,31 @@ def test_a_target_already_superseded_is_left_alone(graph):
     update(graph.root, "finding-g", links=[{"rel": "npx:supersedes", "to": "finding-2"}])
 
     assert graph.read("finding-1") == was
+
+
+def test_a_plain_status_change_does_not_cascade_to_a_dependant(graph):
+    """`knoten update --status dead` on a node others depend on must still succeed: a
+    dependant that now fails because the claim it rested on died is `validate`'s job to
+    report afterwards, not this call's to veto. Only a write that flips targets (a
+    compression) widens the bar past the node's own violations."""
+    graph.rules("""\
+name: t
+statuses: [open, alive, dead]
+node_types: [hypothesis, note]
+rules:
+  - id: needs-an-alive-support
+    when_type: note
+    require_edge_target: {rel: mp:supports, status: alive, min: 1}
+    message: A note needs an alive support.
+""")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive", "# X\n")
+    graph.node("note-x", "id: note-x\ntype: note\nstatus: open\nlinks:\n"
+                        "  - {rel: mp:supports, to: hyp-x}", "# N\n")
+
+    status = update(graph.root, "hyp-x", status="dead")
+
+    assert status == "dead"
+    nodes = load(graph.root)
+    assert nodes["hyp-x"].status == "dead"
+    violations = check(nodes, graph.root)
+    assert any(v.rule == "needs-an-alive-support" and v.node == "note-x" for v in violations)

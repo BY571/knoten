@@ -161,3 +161,46 @@ rules: []
 
     assert res["compressed"]["gates"] == 2
     assert res["compressed"]["gates_bonus"] is False
+
+
+def test_ops_update_refuses_before_write_when_the_flip_breaks_a_third_party_node(graph):
+    """The flip can invalidate a node that is neither the general node nor one of its
+    targets: `note-x` here rests on two alive supports, and flipping both to superseded
+    breaks it. The whole write must refuse before anything lands — `finding-g` and both
+    targets stay byte-identical to what they were before the call."""
+    graph.rules("""\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, finding, gate, note]
+rules:
+  - id: needs-two-alive-supports
+    when_type: note
+    require_edge_target: {rel: mp:supports, status: alive, min: 2}
+    message: A note needs two alive supports.
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n\nThe claim 1.\n")
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n\nThe claim 2.\n")
+    graph.node("note-x", "id: note-x\ntype: note\nstatus: open\nlinks:\n"
+                        "  - {rel: mp:supports, to: finding-1}\n"
+                        "  - {rel: mp:supports, to: finding-2}", "# X\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}",
+               "# G\n\n## Covers\n- finding-1: small\n- finding-2: large\n")
+    before = {nid: graph.read(nid) for nid in ("finding-g", "finding-1", "finding-2", "note-x")}
+
+    res = ops.update(graph.root, "finding-g",
+                     links=[{"rel": "npx:supersedes", "to": "finding-1"},
+                            {"rel": "npx:supersedes", "to": "finding-2"}])
+
+    assert res["status"] == "REJECTED"
+    for nid, text in before.items():
+        assert graph.read(nid) == text

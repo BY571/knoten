@@ -103,28 +103,6 @@ def _candidate(text: str, nid: str, name: str, status, results, links, append, f
     return out
 
 
-def _update(root: Path, nid: str, status, results, links, append, fields) -> str:
-    """Unchanged behaviour for whatever still calls the single-node path directly: the
-    candidate is validated only against itself, exactly as before `_candidate` was split
-    out of this function."""
-    nf = node_path(root, nid)                  # rejects a traversal before it is a path
-    if not nf.exists():
-        raise GraphError(f"no node '{nid}'")
-
-    text = nf.read_text(encoding="utf-8")
-    out = _candidate(text, nid, nf.name, status, results, links, append, fields)
-
-    # Validate the candidate in memory, exactly as knoten commit does: an invalid node
-    # never reaches the filesystem, and a refused update leaves the file untouched.
-    candidate = parse_text(out, nid, nf.name)
-    nodes = backlink({**load(root), nid: candidate})
-    if errs := [e for e in check(nodes, root) if e.node == nid]:
-        raise GraphError("; ".join(f"[{e.rule}] {e.message}" for e in errs))
-
-    write_atomic(nf, out)
-    return candidate.status
-
-
 def superseded_texts(root: Path, nodes: dict[str, Node], node: Node) -> dict[str, str]:
     """The rewritten file text for every target `node` supersedes that exists and is not
     already superseded: `status: superseded`, with the note `superseded by <node.id> on
@@ -142,24 +120,38 @@ def superseded_texts(root: Path, nodes: dict[str, Node], node: Node) -> dict[str
     return out
 
 
-def superseded_candidates(root: Path, nodes: dict[str, Node], node: Node) -> dict[str, Node]:
-    """The parsed candidate for every node `superseded_texts` would rewrite: what the
-    graph looks like once the flip lands, so it can be validated BEFORE any of it is
-    written."""
+def superseded_candidates(root: Path, texts: dict[str, str]) -> dict[str, Node]:
+    """The parsed candidate for every text `superseded_texts` produced: what the graph
+    looks like once the flip lands, so it can be validated BEFORE any of it is written.
+    Parses the given `texts` rather than recomputing them, so what gets validated here is
+    byte-for-byte what `write_atomic` puts on disk afterwards."""
     return {tid: parse_text(text, tid, node_path(root, tid).name)
-            for tid, text in superseded_texts(root, nodes, node).items()}
+            for tid, text in texts.items()}
 
 
-def refused(nodes: dict[str, Node], cands: dict[str, Node], root: Path) -> list:
+def refused(nodes: dict[str, Node], cands: dict[str, Node], root: Path,
+           cascade: bool) -> list:
     """Violations that must block writing `cands` (the candidate for the node just
-    written, plus every superseded target): one on a changed node, or one that appears
-    anywhere in the graph that was not there before. `before` isolates the two from a
-    violation that predates this write and has nothing to do with it — a target that
-    fails once it is `superseded` (a `graph.yaml` whose `statuses:` lacks it; a
-    `when_status: superseded` rule), or a third node whose own rule depended on a target
-    staying alive, must refuse the write; an already-broken, unrelated node must not."""
-    before = check(backlink(nodes), root)
+    written, plus every superseded target, when this write flips any).
+
+    Without `cascade` — a plain update that touches only its own node — the bar is the
+    node's own violations, same as always: a dependant that now fails because the claim
+    it rested on changed status is `validate`'s job to report, not this call's to veto.
+    `knoten update --status dead` on a node others depend on must still succeed; the
+    graph now has a violation, and that is what `validate` is for.
+
+    With `cascade` — a write that flips targets — the bar widens to anything that
+    appears anywhere in the graph that was not there before: a target that only fails
+    once it is `superseded` (a `graph.yaml` whose `statuses:` lacks it; a `when_status:
+    superseded` rule), or a third node whose own rule depended on a target staying
+    alive, must refuse the write here, not land it and let `validate` discover the
+    breakage after the fact — the whole point of flipping status INSIDE the same
+    validated write as the edge that causes it.
+    """
     after = check(backlink({**nodes, **cands}), root)
+    if not cascade:
+        return [e for e in after if e.node in cands]
+    before = check(backlink(nodes), root)
     return [e for e in after if e.node in cands or e not in before]
 
 
@@ -189,11 +181,10 @@ def update_with_report(root: Path, nid: str, status: str | None = None,
         adds_supersedes = bool(links) and any(l.get("rel") == SUPERSEDES for l in links)
         targets = supersedes(candidate) if adds_supersedes else []
         texts = superseded_texts(root, nodes, candidate) if targets else {}
-        cands = {nid: candidate, **superseded_candidates(root, nodes, candidate)} \
-            if targets else {nid: candidate}
+        cands = {nid: candidate, **superseded_candidates(root, texts)}
 
-        if errs := refused(nodes, cands, root):
-            raise GraphError("; ".join(f"[{e.rule}] {e.message}" for e in errs))
+        if errs := refused(nodes, cands, root, bool(targets)):
+            raise GraphError("; ".join(f"{e.node}: [{e.rule}] {e.message}" for e in errs))
 
         write_atomic(nf, out)
         for tid, ttext in texts.items():
