@@ -25,7 +25,7 @@ from .validate import _csv, applies, load_config
 
 # Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
 # lowercase and includes values (open, active, …) this table has no symbol for.
-MARK = {"ALIVE": "✓ ALIVE", "DEAD": "✗ DEAD", "RETRACTED": "⊘ RETRACTED"}
+MARK = {"ALIVE": "✓ ALIVE", "DEAD": "✗ DEAD", "RETRACTED": "⊘ RETRACTED", "rule": "◆ rule"}
 
 
 # ---------------------------------------------------------------- read commands
@@ -124,16 +124,19 @@ def render_index(payload: dict) -> None:
     if payload["truncated"]:
         # Never a silent cap: a truncated list reads as the whole graph.
         print("  (truncated — narrow with --tag/--status/--type, or raise --limit)")
+    if payload.get("hidden"):
+        print(f"  {payload['hidden']} superseded hidden; --all shows them")
     if note := payload.get("note"):
         print(f"\n  {note}")
 
 
-def index(root, tags, status, ntype, where, since, limit, query=None, as_json=False) -> int:
+def index(root, tags, status, ntype, where, since, limit, query=None, as_json=False,
+         all=False) -> int:
     """The whole graph, one line per node. The answer to "have we done anything LIKE
     this?" that keyword search cannot give: a reader — human or agent — judges
     relatedness from the claims themselves."""
     payload = ops.index(root, query=query, tags=tags, status=status, type=ntype,
-                        where=_where(where), since=since, limit=limit)
+                        where=_where(where), since=since, limit=limit, all=all)
     _emit(payload, as_json, render_index)
     return 0
 
@@ -337,6 +340,10 @@ def render_get(payload: dict) -> None:
         print(f"  {l['rel']:22} -> {l['to']}")
     for b in payload["backlinks"]:
         print(f"  {b['rel']:22} <- {b['to']}")
+    if covers := payload.get("covers"):
+        print("\n  covers:")
+        for line in covers.splitlines():
+            print(f"    {line}")
     for label, d in [("repro", payload.get("repro")), ("results", payload.get("results"))]:
         if d:
             print(f"\n  {label}:")
@@ -676,6 +683,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int,
                    help=f"0 = the default cap ({ops.INDEX_LIMIT}); never uncapped, so a "
                         f"truncated list can't silently read as the whole graph")
+    s.add_argument("--all", action="store_true",
+                   help="include superseded nodes (hidden by default)")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
 
     s = sub.add_parser("frontier", help="what should I work on next?")
@@ -837,7 +846,7 @@ def main(argv=None) -> int:
             "gates":  lambda: gates_cmd(root, args.json),
             "index":  lambda: index(root, tags=args.tag, status=args.status, ntype=args.type,
                                     where=args.where, since=args.since, limit=args.limit,
-                                    query=args.query, as_json=args.json),
+                                    query=args.query, as_json=args.json, all=args.all),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node, args.json),
             "commit": lambda: commit_cmd(root, nid=args.id, frontmatter=args.frontmatter,

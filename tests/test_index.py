@@ -116,3 +116,55 @@ def test_index_filters_on_an_arbitrary_frontmatter_field(cwd):
     res = index(where={"cause": ["weak_baseline"]})
 
     assert [r["id"] for r in res["nodes"]] == ["hyp-w"]
+
+
+def _layered(graph):
+    (graph.root / "graph.yaml").write_text(
+        "name: t\nnode_types: [question, finding, gate]\n"
+        "statuses: [open, alive, superseded, active]\nrules: []\n", encoding="utf-8")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
+    for i in (1, 2):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: superseded\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    graph.node("finding-3", "id: finding-3\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}", "# 3\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}",
+               "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+
+
+def test_superseded_nodes_are_hidden_by_default_and_counted(graph):
+    _layered(graph)
+
+    p = index()
+
+    # The autouse `cwd` fixture already wrote hyp-alpha/hyp-beta/gate-cost to this same
+    # tmp_path before `_layered` ran; `_layered` only overwrites graph.yaml, so those
+    # three node FILES are still on disk and `load()` reads every file in nodes/
+    # regardless of what graph.yaml currently declares. None of them is superseded, so
+    # they survive the hiding step alongside the four nodes this test is actually about.
+    assert [n["id"] for n in p["nodes"]] == [
+        "finding-g", "finding-3", "gate-cost", "gate-h", "hyp-alpha", "hyp-beta", "question-q"]
+    assert p["hidden"] == 2 and p["total"] == 7
+
+
+def test_all_shows_them_and_so_does_asking_for_the_status(graph):
+    _layered(graph)
+
+    assert {n["id"] for n in index(all=True)["nodes"]} >= {"finding-1", "finding-2"}
+    assert index(all=True)["hidden"] == 0
+    assert [n["id"] for n in index(status=["superseded"])["nodes"]] == ["finding-1", "finding-2"]
+
+
+def test_a_general_node_is_listed_first_with_the_verdict_rule(graph):
+    _layered(graph)
+
+    rows = index()["nodes"]
+
+    assert rows[0]["id"] == "finding-g" and rows[0]["verdict"] == "rule"
+    assert rows[1]["verdict"] == "ALIVE"

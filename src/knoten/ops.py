@@ -9,8 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .core import (GATE_SECTIONS, GATE_TYPE, VERDICT, GraphError, Node,
-                   compressible_types, frontier as _frontier, gates as _gates, load,
-                   retrieve, section, shape, shortest_path)
+                   compressible_types, frontier as _frontier, gates as _gates, is_general,
+                   load, retrieve, section, shape, shortest_path, supersedes)
 from .update import update_with_report
 from .validate import check, load_config
 
@@ -69,16 +69,25 @@ def frontier(root: Path) -> dict:
 
 
 def index(root: Path, query=None, tags=None, status=None, type=None,
-          where=None, since=None, limit=None) -> dict:
+          where=None, since=None, limit=None, all=False) -> dict:
     nodes = load(root)
     hits = retrieve(nodes, query, tags=tags, status=status, type=type,
                     where=where, since=since)
+    # The superseded layer is what compression retired. Hidden unless asked for, so the
+    # graph reads as small as it has become; never silently, so the footer counts it.
+    hidden = 0
+    if not all and not status:
+        kept = [n for n in hits if n.status != "superseded"]
+        hidden, hits = len(hits) - len(kept), kept
+    # A general node is the graph's top layer: it goes first, and says so.
+    hits = [n for n in hits if is_general(n)] + [n for n in hits if not is_general(n)]
     cap = max(1, int(limit or INDEX_LIMIT))
     out = {
         "total": len(hits),
+        "hidden": hidden,
         "truncated": len(hits) > cap,
         "nodes": [{"id": n.id, "type": n.type,
-                   "verdict": VERDICT.get(n.status, n.status or "-"),
+                   "verdict": "rule" if is_general(n) else VERDICT.get(n.status, n.status or "-"),
                    "tags": n.tags, "title": n.title} for n in hits[:cap]],
         "declared_tags": [str(t) for t in (load_config(root).get("tags") or [])],
     }
@@ -128,6 +137,8 @@ def get(root: Path, nid: str) -> dict:
         return {"error": f"no node '{nid}'", "available": sorted(nodes)}
     out = {**summarise(n), "frontmatter": n.frontmatter,
            "links": n.links, "backlinks": n.backlinks, "body": n.body}
+    if supersedes(n):
+        out["covers"] = section(n.body, "Covers")
     if n.attachments:
         # A path string alone can't tell a reader whether the file is still there —
         # `show` used to print size / MISSING from the filesystem directly; additive

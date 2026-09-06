@@ -438,3 +438,35 @@ def test_frontier_lists_at_most_eight_ids_per_cluster(graph, monkeypatch, capsys
 
     assert "finding-07, +2 more" in out and "finding-08" not in out
     assert "10 alive findings" in out and "budget" not in out
+
+
+def test_index_footer_says_how_many_superseded_are_hidden(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [finding]\nstatuses: [alive, superseded]\nrules: []\n")
+    graph.node("finding-old", "id: finding-old\ntype: finding\nstatus: superseded", "# old\n")
+    graph.node("finding-new", "id: finding-new\ntype: finding\nstatus: alive", "# new\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["index"]) == 0
+    out = capsys.readouterr().out
+    assert "finding-old" not in out and "1 superseded hidden; --all shows them" in out
+
+    assert main(["index", "--all"]) == 0
+    assert "finding-old" in capsys.readouterr().out
+
+
+def test_show_prints_covers_before_the_body_of_a_general_node(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [question, finding]\nstatuses: [alive, superseded, open]\nrules: []\n")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    for i in (1, 2):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: superseded\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}", f"# {i}\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}",
+               "# G\n\nThe general claim.\n\n## Covers\n- finding-1: small\n- finding-2: large\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["show", "finding-g"]) == 0
+    out = capsys.readouterr().out
+    assert out.index("covers:") < out.index("finding-1: small")
+    assert "finding-1: small" in out
