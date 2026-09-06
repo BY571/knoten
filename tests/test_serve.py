@@ -7,6 +7,7 @@ import base64
 import http.client
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 
@@ -1091,7 +1092,17 @@ def test_a_failure_after_the_headers_are_sent_does_not_answer_twice(hub, trading
 
     assert r.status == 200
     assert body == b"ok", "a second response was appended to the first"
-    err = capfd.readouterr().err
+    # The client returns the moment the 2-byte body lands; the handler's except block
+    # prints its line after that, on the server thread. Give it a moment, then insist
+    # on exactly one line: zero is the race, two is the double answer this test is for.
+    err = ""
+    for _ in range(50):
+        err += capfd.readouterr().err
+        if "knoten serve:" in err:
+            break
+        time.sleep(0.02)
+    time.sleep(0.05)
+    err += capfd.readouterr().err
     assert len([l for l in err.splitlines() if "knoten serve:" in l]) == 1, err
 
 
