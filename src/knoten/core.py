@@ -100,6 +100,15 @@ REOPEN_SECTION = "What would reopen this"
 GATE_TYPE = "gate"
 GATE_SECTIONS = ("The rule", "Why it exists")
 
+SUPERSEDES = "npx:supersedes"
+QUESTION_TYPE = "question"
+# The edges that lead from a node back towards the question it serves. `question_of`
+# follows them breadth-first and stops at the first question. A node no such walk
+# reaches is unrooted, and compression refuses it, because "under the same question"
+# cannot be decided for it.
+ROOTING_RELS = ("prov:wasDerivedFrom", "kn:tests", "kn:explains", "kn:followsFrom",
+                "kn:generalises", SUPERSEDES, "mp:supports", "mp:challenges")
+
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
 # An id becomes a filename, so anything else is a path traversal. Go through node_path()
@@ -536,3 +545,34 @@ def frontier(nodes: dict[str, Node]) -> dict:
         "untested_gates": [n for n, killed, survived in gates(nodes)
                            if not killed and not survived],
     }
+
+
+def question_of(nodes: dict[str, Node], nid: str) -> str | None:
+    """The question `nid` stands under, or None when no rooting walk reaches one."""
+    seen, queue = {nid}, [nid]
+    while queue:
+        cur = nodes.get(queue.pop(0))
+        if cur is None:
+            continue
+        if cur.type == QUESTION_TYPE:
+            return cur.id
+        for l in cur.links:
+            if l["rel"] in ROOTING_RELS and l["to"] not in seen:
+                seen.add(l["to"])
+                queue.append(l["to"])
+    return None
+
+
+def supersedes(n: Node) -> list[str]:
+    """Distinct ids this node supersedes, in id order."""
+    return sorted({l["to"] for l in n.links if l["rel"] == SUPERSEDES})
+
+
+def is_general(n: Node) -> bool:
+    """A general node covers two or more; one target is a replacement, not a rule."""
+    return len(supersedes(n)) >= 2
+
+
+def compressible_types(cfg: dict) -> tuple[str, ...]:
+    """What a general node may supersede. `graph.yaml: compressible:` or findings."""
+    return tuple(str(t) for t in (cfg.get("compressible") or ["finding"]))
