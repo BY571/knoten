@@ -163,6 +163,67 @@ knoten invites                          # who was invited and has not arrived
 knoten revoke maria                     # ends her access; what she pushed stays
 ```
 
+### A team in three places
+
+Seb runs the graph and the server. Maria contributes from another city. An agent works in
+Maria's clone. Nothing below needs a shared machine, a VPN, or an account anywhere.
+
+Seb, once, on a small VPS with a reverse proxy terminating TLS in front of it:
+
+```bash
+knoten serve --data ~/knoten-remotes           # localhost:8899; put caddy or nginx in front
+```
+
+Seb, once, in the graph on his laptop:
+
+```bash
+knoten remote create trading --on https://graphs.example --as seb
+knoten invite maria --role write               # a one-time code, good for 7 days; send it
+```
+
+Maria, once:
+
+```bash
+knoten join https://graphs.example/trading --invite 7f3a9c...
+cd trading                                     # a clone that signs as maria
+```
+
+Maria, or her agent, every session:
+
+```bash
+knoten pull                                    # what arrived; her own commits go on top
+knoten frontier                                # the loop is unchanged from here
+knoten commit hyp-14 --frontmatter fm.yaml --body body.md
+git add -A && git commit -m "hyp-14: batch size does not close the gap"
+knoten push                                    # signed as maria, checked by the gate
+```
+
+`knoten commit` files a node; git commits it; `knoten push` sends the commits and refuses
+while anything is still uncommitted, so it never reports a push that sent nothing.
+
+When two people push the same afternoon, the second one sees `the graph moved on since
+your last pull; run knoten pull, then push again`, does that, and pushes. There is never
+a merge commit: `knoten pull` replays your commits on top of theirs, and the server
+refuses a merge if you make one by hand. A conflict needs two people editing the same
+file, which a graph where every correction is a new node never asks for.
+
+Seb, whenever:
+
+```bash
+knoten pull                                    # maria's nodes, into his
+knoten invites                                 # who has a code and has not arrived
+knoten revoke maria                            # a signed mark in the graph, then her token
+```
+
+Maria, on a second laptop, after copying `~/.config/knoten/keys/maria` and
+`~/.config/knoten/credentials` over:
+
+```bash
+git clone -c credential.helper='!knoten credential' -c credential.useHttpPath=true \
+    https://graphs.example/trading.git
+cd trading && knoten remote add https://graphs.example/trading   # signs as maria from here
+```
+
 Every push runs `knoten validate` on the server before the ref moves, so a node that
 breaks the graph's rules is refused for everyone, including whoever wrote the rules, and
 including anyone who never installed `knoten hook`. That matters more here than it

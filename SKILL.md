@@ -73,10 +73,7 @@ or retracts the old one, never an edit to it.
 If the graph has a remote, `knoten pull` FIRST. Every read below answers from the files
 on disk, so a stale clone reports work a collaborator settled days ago as still open.
 That is the exact failure this graph exists to prevent, arriving through the back door.
-
-On a signed graph every commit you make is signed by the clone's own configuration;
-nothing to do, but a refused push that says `not signed` means this clone was not set up
-by `knoten join` or `knoten remote create`.
+See "In a shared graph" below for the rest of what a remote changes.
 
 1. `knoten frontier` says what is worth doing next: open work, dead ends whose stated
    reopen condition may now hold, and gates nothing has been through.
@@ -96,8 +93,30 @@ by `knoten join` or `knoten remote create`.
    --append <file> --field cause=<value>` instead if you opened the node earlier.
 6. `knoten attach <id> <files...>`: the script that ran it and the plot that shows it.
    A claim nobody can re-run is a claim nobody trusts in six months. If the graph has a
-   remote, `knoten push` when the node is filed; the server runs the same rules and
-   refuses what this clone would have.
+   remote, git commit the node and `knoten push` now, not at the end of the session; the
+   server runs the same rules and refuses what this clone would have.
+
+## In a shared graph
+
+A graph with a remote is one line of history that several people and their agents push
+to. Three things change, and nothing else does:
+
+- `knoten pull` before step 1, every session. Your own unpushed commits are replayed on
+  top of what arrived; there is never a merge commit, because the server refuses one.
+- `knoten commit` writes a node to disk and git has not seen it. Filing is finished when
+  you run `git add -A && git commit -m "<id>: what was found"`; the clone signs the
+  commit for you. `knoten push` refuses while anything is uncommitted, so it cannot
+  claim to have sent what it did not.
+- `knoten push` after each filed node. Three refusals to know:
+  `moved on since your last pull` means somebody was faster: `knoten pull`, then push
+  again. A rule violation is the refusal step 5 would have given you, applied on the
+  server for everyone: fix the node, push again. `not signed` means this clone was not
+  set up by `knoten join`, `knoten remote create` or `knoten remote add`; stop and say
+  so rather than working around it.
+
+Never edit a node somebody else filed, not even to fix it: supersede or retract it with a
+new node, as above. Two people editing one file is the only way a pull ends in a
+conflict here, and `knoten pull` then names the file and what to run next.
 
 ## When you run out of ideas
 
