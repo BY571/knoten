@@ -2,7 +2,8 @@
 could not understand, so a broken node looked like a valid one."""
 import pytest
 
-from knoten.core import GraphError, load
+from knoten.core import (GraphError, backlink, compressible_types, is_general, load,
+                         question_of, supersedes)
 
 FM = """\
 id: hyp-x
@@ -89,10 +90,6 @@ def test_real_numbers_still_parse_as_numbers(graph):
     assert r == {"acc": 0.741, "n": 1319, "neg": -3, "exp": 1.2e-3, "big": 0}
 
 
-from knoten.core import (backlink, compressible_types, is_general, load, question_of,
-                         supersedes)
-
-
 def _rooted(graph):
     graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
     graph.node("source-s", "id: source-s\ntype: source\nstatus: alive\norigin: x", "# S\n")
@@ -131,6 +128,28 @@ def test_question_of_survives_a_cycle(graph):
                     "  - {rel: prov:wasDerivedFrom, to: a}", "# b\n")
 
     assert question_of(backlink(load(graph.root)), "a") is None
+
+
+def test_question_of_returns_none_for_missing_node(graph):
+    nodes = _rooted(graph)
+
+    assert question_of(nodes, "nonexistent-node") is None
+
+
+def test_question_of_uses_breadth_first_to_find_nearer_question(graph):
+    graph.node("q-far", "id: q-far\ntype: question\nstatus: open", "# Far\n")
+    graph.node("q-near", "id: q-near\ntype: question\nstatus: open", "# Near\n")
+    graph.node("idea-i", "id: idea-i\ntype: idea\nstatus: open\nlinks:\n"
+                         "  - {rel: prov:wasDerivedFrom, to: q-far}", "# I\n")
+    graph.node("finding-f", "id: finding-f\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: idea-i}\n"
+                            "  - {rel: prov:wasDerivedFrom, to: q-near}", "# F\n")
+    nodes = backlink(load(graph.root))
+
+    # q-far is at distance 2 (through idea-i); q-near is at distance 1. The far question's
+    # link comes FIRST in finding-f's links so a depth-first walk would return q-far,
+    # but BFS should return q-near (the nearer one).
+    assert question_of(nodes, "finding-f") == "q-near"
 
 
 def test_supersedes_lists_distinct_targets_and_two_make_a_general_node(graph):

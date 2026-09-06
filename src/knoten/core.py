@@ -549,9 +549,9 @@ def frontier(nodes: dict[str, Node]) -> dict:
 
 def question_of(nodes: dict[str, Node], nid: str) -> str | None:
     """The question `nid` stands under, or None when no rooting walk reaches one."""
-    seen, queue = {nid}, [nid]
+    seen, queue = {nid}, deque([nid])
     while queue:
-        cur = nodes.get(queue.pop(0))
+        cur = nodes.get(queue.popleft())
         if cur is None:
             continue
         if cur.type == QUESTION_TYPE:
@@ -575,4 +575,8 @@ def is_general(n: Node) -> bool:
 
 def compressible_types(cfg: dict) -> tuple[str, ...]:
     """What a general node may supersede. `graph.yaml: compressible:` or findings."""
-    return tuple(str(t) for t in (cfg.get("compressible") or ["finding"]))
+    # `load_config` refuses anything but a list of declared types; this coercion guards
+    # direct callers that may pass a bare string (e.g., from YAML that was parsed elsewhere).
+    v = cfg.get("compressible") or ["finding"]
+    v = [v] if isinstance(v, str) else v
+    return tuple(str(t) for t in v)
