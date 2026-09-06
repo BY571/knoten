@@ -264,3 +264,124 @@ def test_a_single_replacement_reports_one_line_worth(graph):
 
     assert res["compressed"]["targets"] == ["finding-1"]
     assert load(graph.root)["finding-1"].status == "superseded"
+
+
+def test_a_graph_without_superseded_status_refuses_the_compression(graph):
+    """The flip is validated BEFORE anything is written: a `graph.yaml` that never
+    declared `superseded` makes every target invalid the instant it is flipped, and that
+    must refuse the whole commit, not land the general node with a broken target beside
+    it."""
+    graph.rules("""\
+name: t
+statuses: [open, alive, dead]
+node_types: [question, finding, gate]
+rules: []
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n\nThe claim 1.\n")
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n\nThe claim 2.\n")
+
+    res = commit(graph.root, "finding-g", GENERAL, COVERS)
+
+    assert res["status"] == "REJECTED"
+    assert not (graph.root / "nodes" / "finding-g.md").exists()
+    nodes = load(graph.root)
+    assert nodes["finding-1"].status == "alive" and nodes["finding-2"].status == "alive"
+
+
+SECTION_RULES = """\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, finding, gate]
+rules:
+  - id: superseded-explains-itself
+    when_status: superseded
+    require_sections: [Why it was superseded]
+    message: A superseded claim must say why.
+"""
+
+
+def test_a_rule_that_only_fires_on_superseded_refuses_the_compression(graph):
+    """A target that is perfectly fine ALIVE can still fail once flipped, if a rule
+    fires only on `superseded` (e.g. demanding a post-mortem section). That failure must
+    be caught before the write, not raised after the general node is already on disk."""
+    _specifics(graph)
+    graph.rules(SECTION_RULES)   # neither finding-1 nor finding-2 has the section
+
+    res = commit(graph.root, "finding-g", GENERAL, COVERS)
+
+    assert res["status"] == "REJECTED"
+    assert any(v["rule"] == "superseded-explains-itself" for v in res["violations"])
+    assert not (graph.root / "nodes" / "finding-g.md").exists()
+    nodes = load(graph.root)
+    assert nodes["finding-1"].status == "alive" and nodes["finding-2"].status == "alive"
+
+
+THIRD_PARTY_RULES = """\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, finding, gate, note]
+rules:
+  - id: needs-two-alive-supports
+    when_type: note
+    require_edge_target: {rel: mp:supports, status: alive, min: 2}
+    message: A note needs two alive supports.
+"""
+
+
+def test_a_third_party_node_broken_by_the_flip_refuses_the_compression(graph):
+    """The flip can invalidate a node that is neither the general node nor one of its
+    targets: `note-x` here rests on two alive supports, and flipping both to superseded
+    breaks it. That must refuse the compression, naming `note-x` — not go through and
+    leave a rule violation nobody was told about."""
+    _specifics(graph)
+    graph.rules(THIRD_PARTY_RULES)
+    graph.node("note-x", "id: note-x\ntype: note\nstatus: open\nlinks:\n"
+                         "  - {rel: mp:supports, to: finding-1}\n"
+                         "  - {rel: mp:supports, to: finding-2}", "# X\n")
+
+    res = commit(graph.root, "finding-g", GENERAL, COVERS)
+
+    assert res["status"] == "REJECTED"
+    assert any(v["rule"] == "needs-two-alive-supports" and v["node"] == "note-x"
+              for v in res["violations"])
+    assert not (graph.root / "nodes" / "finding-g.md").exists()
+    nodes = load(graph.root)
+    assert nodes["finding-1"].status == "alive" and nodes["finding-2"].status == "alive"
+
+
+PRINCIPLE_RULES = """\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, finding, gate, principle]
+compressible: [finding, principle]
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {type: finding, per: question, count: 4}
+    message: Compress first.
+"""
+
+
+def test_a_principle_general_node_reports_the_finding_budget(graph):
+    """`compression_report`'s budget slot is matched on what the TARGETS are typed, not
+    what the general node itself is typed: a `principle` node generalising `finding`s
+    must find the finding budget, not come up empty looking for a principle one."""
+    _specifics(graph, n=4)
+    graph.rules(PRINCIPLE_RULES)
+    principle = ("type: principle\nstatus: alive\nlinks:\n"
+                "  - {rel: npx:supersedes, to: finding-1}\n"
+                "  - {rel: npx:supersedes, to: finding-2}\n"
+                "  - {rel: kn:survivedGate, to: gate-a}\n"
+                "  - {rel: kn:survivedGate, to: gate-b}")
+
+    res = commit(graph.root, "principle-g", principle, COVERS)
+
+    assert res["status"] == "COMMITTED"
+    c = res["compressed"]
+    assert c["free"] == 2 and c["count"] == 4

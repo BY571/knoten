@@ -582,21 +582,34 @@ def compressible_types(cfg: dict) -> tuple[str, ...]:
     return tuple(str(t) for t in v)
 
 
+def _csv(v) -> list[str]:
+    """A rule value that may be written as a YAML list or a comma-separated string,
+    read the same way everywhere: `shape` and `validate._budget` parse `max_alive.type`
+    from the same rule dict, and a hand-rolled split in one of them is how they drift."""
+    if not v:
+        return []
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    return [x.strip() for x in str(v).split(",") if x.strip()]
+
+
 def shape(nodes: dict[str, Node], cfg: dict) -> dict:
     """The graph's compression state: rules over specifics, and the budget per question
     when a `max_alive` rule exists. The same numbers reward a commit and head `frontier`."""
     types = compressible_types(cfg)
     alive = [n for n in nodes.values() if n.status == "alive"]
     rules = [n for n in alive if is_general(n)]
-    covered = {t for n in alive for t in supersedes(n)}
+    # Same guard `validate._budget` applies to its own `covered` set: a self-loop must not
+    # count a node as already covered by itself.
+    covered = {l["to"] for n in alive for l in n.links
+              if l["rel"] == SUPERSEDES and l["to"] != n.id}
     specifics = [n for n in alive if n.type in types and not is_general(n) and n.id not in covered]
     out = {"rules": len(rules), "specifics": len(specifics), "budget": []}
     for r in cfg.get("rules", []):
         spec = r.get("max_alive")
         if not spec or spec.get("per", "question") != "question":
             continue
-        rtypes = tuple(str(t).strip() for t in str(spec["type"]).split(",")) \
-            if isinstance(spec["type"], str) else tuple(spec["type"])
+        rtypes = tuple(_csv(spec["type"]))
         counts: dict[str, int] = {}
         for n in alive:
             if n.type in rtypes and n.id not in covered:

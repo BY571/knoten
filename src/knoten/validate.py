@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import (GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _yaml,
+from .core import (GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _csv, _yaml,
                    compressible_types, moved, question_of, section, supersedes)
 
 # A rule key that is not in here is a typo. Refuse it.
@@ -399,14 +399,6 @@ def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation
                              f"that, so this node is invisible to it"))
     out += _supersession(nodes, cfg)
     return out
-
-
-def _csv(v) -> list[str]:
-    if not v:
-        return []
-    if isinstance(v, list):
-        return [str(x).strip() for x in v if str(x).strip()]
-    return [x.strip() for x in str(v).split(",") if x.strip()]
 
 
 def _matching(spec: dict, edges: list, nodes: dict) -> int:

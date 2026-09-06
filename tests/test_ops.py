@@ -28,3 +28,136 @@ def test_get_reports_an_attachments_size_from_disk(graph):
     by_path = {a["path"]: a for a in res["attachment_files"]}
     assert by_path["attachments/hyp-x/plot.png"]["size_kb"] == 2.0
     assert by_path["attachments/hyp-x/gone.png"]["missing"] is True
+
+
+COMP_RULES = """\
+name: t
+statuses: [open, alive, dead, superseded]
+node_types: [question, finding, gate]
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {type: finding, per: question, count: 4}
+    message: Compress first.
+"""
+
+
+def _findings(graph, n=2):
+    graph.rules(COMP_RULES)
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
+    for i in range(1, n + 1):
+        gate = "gate-a" if i % 2 else "gate-b"
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\n"
+                                   f"created: 2026-01-{i:02d}\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                   f"  - {{rel: kn:survivedGate, to: {gate}}}",
+                   f"# {i}\n\nThe claim {i}.\n")
+    return graph
+
+
+def test_ops_update_that_adds_a_supersedes_link_reports_the_compression(graph):
+    """`ops.update` gains the same `compressed` key `ops.commit`-equivalent (`commit()`)
+    already carries, once the update itself is what adds the `npx:supersedes` edge."""
+    _findings(graph, n=4)
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}",
+               "# G\n\n## Covers\n- finding-1: small\n- finding-2: large\n")
+
+    res = ops.update(graph.root, "finding-g",
+                     links=[{"rel": "npx:supersedes", "to": "finding-1"},
+                            {"rel": "npx:supersedes", "to": "finding-2"}])
+
+    assert res["status"] == "UPDATED"
+    assert res["compressed"]["targets"] == ["finding-1", "finding-2"]
+
+
+def test_ops_update_omits_an_already_superseded_target_from_flipped(graph):
+    """A target that is already superseded is left alone, and does not appear in
+    `flipped` -- but it still counts as one of the general node's `targets`."""
+    graph.rules("""\
+name: t
+statuses: [open, alive, superseded]
+node_types: [question, finding, gate]
+rules: []
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: superseded\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}", "# 1\n")
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 2\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}",
+               "# G\n\n## Covers\n- finding-1: it\n- finding-2: it\n")
+
+    res = ops.update(graph.root, "finding-g",
+                     links=[{"rel": "npx:supersedes", "to": "finding-1"},
+                            {"rel": "npx:supersedes", "to": "finding-2"}])
+
+    assert res["compressed"]["targets"] == ["finding-1", "finding-2"]
+    assert res["compressed"]["flipped"] == ["finding-2"]
+
+
+def test_ops_update_reports_no_budget_without_a_max_alive_rule(graph):
+    """`free`/`count` are None when the graph declares no `max_alive` rule for the
+    target's type: there is no budget to report against."""
+    graph.rules("""\
+name: t
+statuses: [open, alive, superseded]
+node_types: [question, finding, gate]
+rules: []
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}",
+               "# G\n\n## Covers\n- finding-1: it\n")
+
+    res = ops.update(graph.root, "finding-g",
+                     links=[{"rel": "npx:supersedes", "to": "finding-1"}])
+
+    assert res["compressed"]["free"] is None and res["compressed"]["count"] is None
+
+
+def test_ops_update_gates_bonus_is_false_when_the_union_does_not_exceed_the_richest_target(graph):
+    """`gates_bonus` rewards SURPASSING the richest single target's gate count, not
+    merely matching it. A general node that survives exactly the union its targets
+    already forced it to (the bar itself requires the union, never more) earns no
+    bonus when that union equals the single richest target's own count."""
+    graph.rules("""\
+name: t
+statuses: [open, alive, superseded]
+node_types: [question, finding, gate]
+rules: []
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 1\n")
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 2\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}",
+               "# G\n\n## Covers\n- finding-1: it\n- finding-2: it\n")
+
+    res = ops.update(graph.root, "finding-g",
+                     links=[{"rel": "npx:supersedes", "to": "finding-1"},
+                            {"rel": "npx:supersedes", "to": "finding-2"}])
+
+    assert res["compressed"]["gates"] == 2
+    assert res["compressed"]["gates_bonus"] is False

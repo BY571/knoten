@@ -58,48 +58,18 @@ def _rewrite(fm: str, changed: dict) -> str:
     return "\n".join(lines)
 
 
-def update_with_report(root: Path, nid: str, status: str | None = None,
-                       results: dict | None = None, links: list | None = None,
-                       append: str | None = None,
-                       fields: dict | None = None) -> tuple[str, dict | None]:
-    """Append to a node, move its status, set its fields. Raises GraphError, having
-    written nothing.
-
-    Returns (the status the node now carries, what a compression freed — or None when
-    this update did not add a `npx:supersedes` edge).
+def _candidate(text: str, nid: str, name: str, status, results, links, append, fields) -> str:
+    """The rewritten file text for `nid`, given its current on-disk `text`. Pure — parses
+    nothing, validates nothing, writes nothing; the caller decides what happens with the
+    result. Raises GraphError for a request that changes nothing, or a `results` clash —
+    the two failures that are about the request itself, not about the graph it lands in.
     """
-    with graph_lock(root):
-        now = _update(root, nid, status=status, results=results, links=links,
-                      append=append, fields=fields)
-        report = None
-        if links and any(l.get("rel") == SUPERSEDES for l in links):
-            node = load(root)[nid]
-            report = compression_report(root, node, flip_superseded(root, node))
-        return now, report
-
-
-def update(root: Path, nid: str, status: str | None = None, results: dict | None = None,
-           links: list | None = None, append: str | None = None,
-           fields: dict | None = None) -> str:
-    """Append to a node, move its status, set its fields. Raises GraphError, having
-    written nothing.
-
-    Returns the status the node now carries.
-    """
-    return update_with_report(root, nid, status, results, links, append, fields)[0]
-
-
-def _update(root: Path, nid: str, status, results, links, append, fields) -> str:
-    nf = node_path(root, nid)                  # rejects a traversal before it is a path
-    if not nf.exists():
-        raise GraphError(f"no node '{nid}'")
     if not any([status, results, links, append, fields]):
         raise GraphError(f"'{nid}': nothing to change — pass status, results, links, "
                          f"fields or append.")
 
-    text = nf.read_text(encoding="utf-8")
     fm_text, body = FM_RE.match(text).groups()
-    fm, _ = split(text, nf.name)
+    fm, _ = split(text, name)
 
     changed = {"updated": today()}
     if status:
@@ -130,6 +100,19 @@ def _update(root: Path, nid: str, status, results, links, append, fields) -> str
     out = f"---\n{_rewrite(fm_text, changed)}\n---\n{body}"
     if append:
         out = out.rstrip("\n") + "\n\n" + append.strip("\n") + "\n"
+    return out
+
+
+def _update(root: Path, nid: str, status, results, links, append, fields) -> str:
+    """Unchanged behaviour for whatever still calls the single-node path directly: the
+    candidate is validated only against itself, exactly as before `_candidate` was split
+    out of this function."""
+    nf = node_path(root, nid)                  # rejects a traversal before it is a path
+    if not nf.exists():
+        raise GraphError(f"no node '{nid}'")
+
+    text = nf.read_text(encoding="utf-8")
+    out = _candidate(text, nid, nf.name, status, results, links, append, fields)
 
     # Validate the candidate in memory, exactly as knoten commit does: an invalid node
     # never reaches the filesystem, and a refused update leaves the file untouched.
@@ -142,20 +125,93 @@ def _update(root: Path, nid: str, status, results, links, append, fields) -> str
     return candidate.status
 
 
-def flip_superseded(root: Path, node: Node) -> list[str]:
-    """Mark everything `node` supersedes as superseded. Called by the op that just wrote
-    `node`, inside its lock, AFTER the graph validated with `node` in it: by then the bar
-    has been met and the only thing left is the status the lifecycle promises."""
-    flipped = []
-    nodes = load(root)
+def superseded_texts(root: Path, nodes: dict[str, Node], node: Node) -> dict[str, str]:
+    """The rewritten file text for every target `node` supersedes that exists and is not
+    already superseded: `status: superseded`, with the note `superseded by <node.id> on
+    <today>` appended. Pure — reads the graph, writes nothing."""
+    out = {}
+    stamp = today()
     for tid in supersedes(node):
         t = nodes.get(tid)
         if t is None or t.status == "superseded":
             continue
-        _update(root, tid, status="superseded", results=None, links=None,
-                append=f"superseded by {node.id} on {today()}", fields=None)
-        flipped.append(tid)
-    return flipped
+        nf = node_path(root, tid)
+        out[tid] = _candidate(nf.read_text(encoding="utf-8"), tid, nf.name,
+                              status="superseded", results=None, links=None,
+                              append=f"superseded by {node.id} on {stamp}", fields=None)
+    return out
+
+
+def superseded_candidates(root: Path, nodes: dict[str, Node], node: Node) -> dict[str, Node]:
+    """The parsed candidate for every node `superseded_texts` would rewrite: what the
+    graph looks like once the flip lands, so it can be validated BEFORE any of it is
+    written."""
+    return {tid: parse_text(text, tid, node_path(root, tid).name)
+            for tid, text in superseded_texts(root, nodes, node).items()}
+
+
+def refused(nodes: dict[str, Node], cands: dict[str, Node], root: Path) -> list:
+    """Violations that must block writing `cands` (the candidate for the node just
+    written, plus every superseded target): one on a changed node, or one that appears
+    anywhere in the graph that was not there before. `before` isolates the two from a
+    violation that predates this write and has nothing to do with it — a target that
+    fails once it is `superseded` (a `graph.yaml` whose `statuses:` lacks it; a
+    `when_status: superseded` rule), or a third node whose own rule depended on a target
+    staying alive, must refuse the write; an already-broken, unrelated node must not."""
+    before = check(backlink(nodes), root)
+    after = check(backlink({**nodes, **cands}), root)
+    return [e for e in after if e.node in cands or e not in before]
+
+
+def update_with_report(root: Path, nid: str, status: str | None = None,
+                       results: dict | None = None, links: list | None = None,
+                       append: str | None = None,
+                       fields: dict | None = None) -> tuple[str, dict | None]:
+    """Append to a node, move its status, set its fields — and, when the update adds an
+    `npx:supersedes` edge, flip every target to `superseded` in the same validated write.
+    The whole post-write graph is validated BEFORE anything reaches disk, so a target that
+    cannot survive being `superseded`, or a third node the flip breaks, refuses the whole
+    write rather than raising with the general node already on disk. Raises GraphError,
+    having written nothing.
+
+    Returns (the status the node now carries, what a compression freed — or None when
+    this update did not add a `npx:supersedes` edge).
+    """
+    with graph_lock(root):
+        nf = node_path(root, nid)
+        if not nf.exists():
+            raise GraphError(f"no node '{nid}'")
+        text = nf.read_text(encoding="utf-8")
+        out = _candidate(text, nid, nf.name, status, results, links, append, fields)
+        candidate = parse_text(out, nid, nf.name)
+
+        nodes = load(root)
+        adds_supersedes = bool(links) and any(l.get("rel") == SUPERSEDES for l in links)
+        targets = supersedes(candidate) if adds_supersedes else []
+        texts = superseded_texts(root, nodes, candidate) if targets else {}
+        cands = {nid: candidate, **superseded_candidates(root, nodes, candidate)} \
+            if targets else {nid: candidate}
+
+        if errs := refused(nodes, cands, root):
+            raise GraphError("; ".join(f"[{e.rule}] {e.message}" for e in errs))
+
+        write_atomic(nf, out)
+        for tid, ttext in texts.items():
+            write_atomic(node_path(root, tid), ttext)
+
+        report = compression_report(root, candidate, list(texts.keys())) if targets else None
+        return candidate.status, report
+
+
+def update(root: Path, nid: str, status: str | None = None, results: dict | None = None,
+           links: list | None = None, append: str | None = None,
+           fields: dict | None = None) -> str:
+    """Append to a node, move its status, set its fields. Raises GraphError, having
+    written nothing.
+
+    Returns the status the node now carries.
+    """
+    return update_with_report(root, nid, status, results, links, append, fields)[0]
 
 
 def compression_report(root: Path, node: Node, flipped: list[str]) -> dict | None:
@@ -170,7 +226,12 @@ def compression_report(root: Path, node: Node, flipped: list[str]) -> dict | Non
                 for t in targets if t in nodes), default=0)
     q = question_of(nodes, node.id)
     s = shape(nodes, cfg)
-    slot = next((b for b in s["budget"] if b["question"] == q and node.type in b["type"].split("/")), None)
+    # Matched on what the TARGETS are typed, not what the general node is typed: a
+    # `principle` general node over `finding` targets must find the finding budget, not
+    # come up empty looking for a (nonexistent) principle one.
+    target_types = {nodes[t].type for t in targets if t in nodes}
+    slot = next((b for b in s["budget"]
+                if b["question"] == q and target_types & set(b["type"].split("/"))), None)
     return {"targets": targets, "flipped": flipped, "gates": len(faced),
             "gates_bonus": len(faced) > most, "question": q,
             "free": slot["free"] if slot else None, "count": slot["count"] if slot else None,

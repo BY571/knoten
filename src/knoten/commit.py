@@ -13,11 +13,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .core import (VERDICT, GraphError, Node, backlink, fields, graph_lock, load,
+from .core import (VERDICT, GraphError, Node, fields, graph_lock, load,
                    node_path, parse_text, retrieve, section, supersedes, today,
                    write_atomic)
-from .update import compression_report, flip_superseded
-from .validate import check
+from .update import compression_report, refused, superseded_candidates, superseded_texts
 
 
 def _similar(nodes: dict[str, Node], candidate: Node, keep: int = 3) -> list[dict]:
@@ -78,21 +77,40 @@ def commit(root: Path, nid: str, frontmatter: str, body: str) -> dict:
         except GraphError as e:
             return {"status": "REJECTED", "node": nid, "reason": str(e)}
 
-        if errs := [e for e in check(backlink({**nodes, nid: candidate}), root)
-                    if e.node == nid]:
+        targets = supersedes(candidate)
+
+        # The whole post-write graph is validated BEFORE anything is written: a target
+        # that fails once its OWN status is `superseded` (a `graph.yaml` whose `statuses:`
+        # lacks it; a `when_status: superseded` rule), or a third node whose own rule
+        # depended on a target staying alive, must refuse the commit here — not raise
+        # midway through a write that already put the general node and some targets on
+        # disk. Nothing changes on disk between validating `cands` and writing `texts`
+        # below — both are pure reads of the same locked, unmodified graph — so the text
+        # written is exactly the candidate that was validated.
+        texts = superseded_texts(root, nodes, candidate) if targets else {}
+        cands = {nid: candidate, **superseded_candidates(root, nodes, candidate)} \
+            if targets else {nid: candidate}
+        if errs := refused(nodes, cands, root):
+            # `node` is no longer redundant with the top-level `nid` now that a flip can
+            # break a node that is neither the general node nor one of its targets: the
+            # violation must name which node it is on.
             return {"status": "REJECTED", "node": nid,
-                    "violations": [{"rule": e.rule, "message": e.message} for e in errs],
+                    "violations": [{"node": e.node, "rule": e.rule, "message": e.message}
+                                   for e in errs],
                     "hint": "Fix the violations and commit again. The gate is the point."}
 
         write_atomic(path, text)
+        for tid, ttext in texts.items():
+            write_atomic(node_path(root, tid), ttext)
+        flipped = list(texts.keys())
 
-        flipped = flip_superseded(root, candidate) if supersedes(candidate) else []
+        report = compression_report(root, candidate, flipped) if targets else None
 
     out = {"status": "COMMITTED", "node": nid, "path": f"nodes/{nid}.md",
            "graph_size": len(nodes) + 1,
            "next": "git add + commit to version this."}
-    if supersedes(candidate):
-        out["compressed"] = compression_report(root, candidate, flipped)
+    if report is not None:
+        out["compressed"] = report
     if similar := _similar(nodes, candidate):
         out["similar"] = similar
         out["warning"] = (
