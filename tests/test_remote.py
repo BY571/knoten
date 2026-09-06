@@ -639,7 +639,10 @@ def test_remote_create_does_not_stage_unrelated_files_in_the_enclosing_repo(hub,
 
 def test_remote_create_bootstrap_commit_failure_is_one_line(hub, local_graph, monkeypatch, capsys):
     """git's "Please tell me who you are" refusal is several lines; only the first, plus
-    a hint, belongs in the one line every other refusal here gives."""
+    a hint, belongs in the one line every other refusal here gives. `useConfigOnly`
+    stops git guessing `user@host` where the host has a domain (CI runners do), which
+    would turn this refusal into a quiet success."""
+    git("config", "user.useConfigOnly", "true", cwd=local_graph)
     git("config", "--unset", "user.email", cwd=local_graph)
     monkeypatch.chdir(local_graph)
 
