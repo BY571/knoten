@@ -2,7 +2,8 @@
 silently accept instead — the worst possible failure for a validator."""
 import pytest
 
-from knoten.core import GraphError, load
+from knoten.commit import commit
+from knoten.core import GraphError, load, today
 from knoten.validate import check, load_config, load_rules
 
 ALIVE_NO_GATE = "id: hyp-x\ntype: hypothesis\nstatus: alive"
@@ -587,6 +588,7 @@ def test_max_alive_per_graph_ignores_questions(graph):
     "max_alive: {type: finding, count: 0}",
     "max_alive: {type: finding, count: 3, per: author}",
     "max_alive: {type: finding, count: 3}\n    when_type: finding",
+    "max_alive: {type: finding,principle, per: graph, count: 3}",
 ])
 def test_a_malformed_max_alive_rule_is_refused_at_load(graph, bad):
     rules(graph, f"rules:\n  - id: b\n    {bad}\n    message: m\n")
@@ -636,4 +638,73 @@ def test_compressible_is_a_known_graph_key_and_must_list_declared_types(graph):
 
     rules(graph, "name: t\nnode_types: [finding]\ncompressible: finding\nrules: []\n")
     with pytest.raises(GraphError, match="compressible"):
+        load_config(graph.root)
+
+
+def test_a_same_day_tie_at_the_cap_blames_the_whole_tied_block(graph):
+    rules(graph, """\
+name: t
+statuses: [alive]
+node_types: [finding]
+rules:
+  - id: cap
+    max_alive: {type: finding, per: graph, count: 2}
+    message: Compress first.
+""")
+    graph.node("finding-a", "id: finding-a\ntype: finding\nstatus: alive\ncreated: 2026-01-01")
+    graph.node("finding-m", "id: finding-m\ntype: finding\nstatus: alive\ncreated: 2026-01-01")
+    graph.node("finding-z", "id: finding-z\ntype: finding\nstatus: alive\ncreated: 2026-01-01")
+
+    errs = [e for e in check(load(graph.root), graph.root) if e.rule == "cap"]
+
+    assert {e.node for e in errs} == {"finding-a", "finding-m", "finding-z"}
+
+
+def test_a_same_day_one_too_many_with_an_early_id_is_rejected_at_commit(graph):
+    """The bug the reviewer found: `moved` is date-granular, so a same-day cohort ties.
+    Blaming only `members[cap:]` let an early-sorting id (here 'finding-a', committed
+    after two same-day incumbents already at the cap) slip through uncounted while its
+    same-day siblings carried the violation."""
+    rules(graph, """\
+name: t
+statuses: [alive]
+node_types: [finding]
+rules:
+  - id: cap
+    max_alive: {type: finding, per: graph, count: 2}
+    message: Compress first.
+""")
+    graph.node("finding-m", f"id: finding-m\ntype: finding\nstatus: alive\ncreated: {today()}")
+    graph.node("finding-z", f"id: finding-z\ntype: finding\nstatus: alive\ncreated: {today()}")
+
+    res = commit(graph.root, "finding-a", "type: finding\nstatus: alive", "# a\n")
+
+    assert res["status"] == "REJECTED"
+
+
+def test_a_node_that_supersedes_itself_still_counts(graph):
+    """Superseding yourself would otherwise be a free pass out of the budget: `covered`
+    must not let a node exempt itself by naming its own id."""
+    rules(graph, """\
+name: t
+statuses: [alive]
+node_types: [finding]
+rules:
+  - id: cap
+    max_alive: {type: finding, per: graph, count: 1}
+    message: Compress first.
+""")
+    graph.node("finding-inc", "id: finding-inc\ntype: finding\nstatus: alive\ncreated: 2026-01-01")
+    graph.node("finding-self", "id: finding-self\ntype: finding\nstatus: alive\ncreated: 2026-01-02\n"
+                              "links:\n  - {rel: npx:supersedes, to: finding-self}")
+
+    errs = [e for e in check(load(graph.root), graph.root) if e.rule == "cap"]
+
+    assert [e.node for e in errs] == ["finding-self"]
+
+
+def test_compressible_does_not_hijack_node_types_own_diagnosis(graph):
+    rules(graph, "name: t\nnode_types: finding\ncompressible: [finding]\nrules: []\n")
+
+    with pytest.raises(GraphError, match="node_types"):
         load_config(graph.root)

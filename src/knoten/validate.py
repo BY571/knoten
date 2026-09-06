@@ -29,7 +29,7 @@ RULE_KEYS = {
     "require_backlink",      # same shape, read from the other side: what must point AT
                              # this node. `rel` is the GENERATED inverse, e.g. kn:testedBy
     "unless_edge",           # skip this rule for a node that declares this relation
-    "max_alive",             # {type, per: question|graph, count} - a GRAPH-level cap:
+    "max_alive",             # {type, per: question|graph, count} — a GRAPH-level cap:
                              # the newest alive nodes past it are the violation
 }
 
@@ -63,15 +63,6 @@ def load_config(root: Path) -> dict:
             f"Known keys: {', '.join(sorted(GRAPH_KEYS))}"
         )
 
-    if (comp := cfg.get("compressible")) is not None:
-        types = {str(t) for t in (cfg.get("node_types") or {})}
-        if not isinstance(comp, list) or not comp or not all(isinstance(t, str) for t in comp):
-            raise GraphError("graph.yaml: `compressible` must be a non-empty list of node "
-                             f"types, got {comp!r}")
-        if types and (unknown := set(comp) - types):
-            raise GraphError(f"graph.yaml: `compressible` names type(s) not in node_types: "
-                             f"{', '.join(sorted(unknown))}")
-
     # `node_types` may also be a MAPPING of type -> what that word means in this graph.
     # Membership is checked against the keys either way — `in` and iteration over a dict
     # give exactly that — so nothing downstream changes. The values are for the reader and
@@ -98,6 +89,19 @@ def load_config(root: Path) -> dict:
                 raise GraphError(
                     f"graph.yaml: `node_types` entry {t!r} is not a type name. To write "
                     f"meanings, drop the `- ` and make `node_types` a mapping.")
+
+    # Read the same way `_vocabulary` reads it: membership against a dict checks its
+    # keys, against a list its items — either way `in` gives what we want. By now
+    # `node_types` has already passed its own shape checks, so this cannot misfire on a
+    # bare string or a list of dicts and blame `compressible` for `node_types`' mistake.
+    if (comp := cfg.get("compressible")) is not None:
+        if not isinstance(comp, list) or not comp or not all(isinstance(t, str) for t in comp):
+            raise GraphError("graph.yaml: `compressible` must be a non-empty list of node "
+                             f"types, got {comp!r}")
+        if (declared := cfg.get("node_types")) and (
+                unknown := sorted({t for t in comp if t not in declared})):
+            raise GraphError(f"graph.yaml: `compressible` names type(s) not in node_types: "
+                             f"{', '.join(unknown)}")
 
     rules = cfg.get("rules") or []
     if not isinstance(rules, list):
@@ -197,6 +201,12 @@ def _check_values(r: dict) -> None:
         if spec.get("per", "question") not in ("question", "graph"):
             raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` `per` must be "
                              f"question or graph, got {spec.get('per')!r}")
+        # An unknown subkey is silently dropped by `dict.get` everywhere above it, so
+        # `type: finding,principle` (a flow-style typo for a list) would parse as a
+        # `principle: None` key and quietly narrow the cap to one type.
+        if extra := sorted(set(spec) - {"type", "per", "count"}):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` does not take "
+                             f"{', '.join(extra)}")
         # A cap is a statement about the graph, not about one node; mixing it with the
         # per-node keys would make `when_type` look like it narrows the count. It does not.
         if others := sorted(set(r) & (RULE_KEYS - {"id", "message", "max_alive"})):
@@ -359,11 +369,17 @@ def applies(status: str, ntype: str, r: dict) -> bool:
 def _budget(nodes: dict[str, Node], r: dict) -> list[Violation]:
     """`max_alive`: the newest alive nodes past the cap are the violation. Attributed
     that way so a `commit` of the one-too-many refuses THAT node, while a general node
-    passes: everything it supersedes has stopped counting before it is counted."""
+    passes: everything it supersedes has stopped counting before it is counted.
+
+    `moved` is date-granular — a day is the finest stamp we have — so several nodes
+    committed the same day tie. When the node at the cap boundary ties with nodes
+    before it, the whole tied block is blamed: an id that happens to sort early must not
+    get to walk through a full cap while its same-day siblings do not.
+    """
     spec = r["max_alive"]
     types, cap, per = _csv(spec["type"]), spec["count"], spec.get("per", "question")
     covered = {l["to"] for n in nodes.values() if n.status == "alive"
-               for l in n.links if l["rel"] == SUPERSEDES}
+               for l in n.links if l["rel"] == SUPERSEDES and l["to"] != n.id}
     groups: dict[str, list[Node]] = {}
     for n in nodes.values():
         if n.status != "alive" or n.type not in types or n.id in covered:
@@ -374,7 +390,12 @@ def _budget(nodes: dict[str, Node], r: dict) -> list[Violation]:
     out = []
     for key, members in sorted(groups.items()):
         members.sort(key=lambda n: (moved(n), n.id))
-        for n in members[cap:]:
+        if len(members) <= cap:
+            continue
+        i = cap
+        while i > 0 and moved(members[i - 1]) == moved(members[cap]):
+            i -= 1
+        for n in members[i:]:
             out.append(Violation(n.id, r["id"], f"{msg} ({len(members)} alive "
                                                 f"{'/'.join(types)} under {key}, budget {cap})"))
     return out
