@@ -8,6 +8,7 @@ silently enforces nothing is worse than no rule, because you believe you are cov
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,7 @@ GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules", 
 # recognise a graph that predates it; nothing else in the package may use it.
 RENAMED_GATE_TYPE = "method"
 GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
+SURVIVED_GATE = GATE_RELS[0]  # a killed gate is not a bar survived
 
 
 @dataclass
@@ -309,30 +311,40 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
         questions = {}
         for tid in targets:
             t = nodes[tid]
-            if t.status != "alive":
+            # A target is spent, not disqualified, once Task 4's `knoten update
+            # --status superseded` runs: it stays clear of the bar as long as THIS
+            # node is the (sole) one that retired it. A target already claimed by
+            # some other node's `npx:supersedes` is refused by naming that node.
+            backers = {b["to"] for b in t.backlinks if b["rel"] == "npx:supersededBy"}
+            other = next(iter(sorted(backers - {n.id})), None)
+            if t.status == "alive" or (t.status == "superseded" and other is None):
+                pass
+            elif t.status == "superseded" and other:
+                vio(f"{n.id} supersedes {tid}, which {other} already superseded")
+            else:
                 vio(f"{n.id} supersedes {tid}, which is {t.status}, not alive")
             if t.type not in types:
                 vio(f"{n.id} supersedes {tid} ({t.type}); only {'/'.join(types)} can be superseded")
             q = question_of(nodes, tid)
             if q is None:
-                vio(f"cannot find the question {tid} stands under")
+                vio(f"{n.id} supersedes {tid}, and cannot find the question {tid} stands under")
             else:
                 questions[tid] = q
         mine = question_of(nodes, n.id)
         seen = sorted(set(questions.values()) | ({mine} if mine else set()))
         if len(seen) > 1:
             vio(f"{n.id} and its targets stand under different questions ({', '.join(seen)})")
-        faced = {l["to"] for l in n.links if l["rel"] == "kn:survivedGate"}
+        faced = {l["to"] for l in n.links if l["rel"] == SURVIVED_GATE}
         for tid in targets:
-            for g in sorted({l["to"] for l in nodes[tid].links if l["rel"] == "kn:survivedGate"} - faced):
+            for g in sorted({l["to"] for l in nodes[tid].links if l["rel"] == SURVIVED_GATE} - faced):
                 vio(f"{n.id} must survive {g}, which {tid} survived; a general claim faces "
                     f"the union of the bars")
         covers = section(n.body, "Covers")
         if covers is None:
-            vio(f"{n.id} has no '## Covers' section")
+            vio(f"{n.id} has no '## Covers' section, or it is empty")
         else:
             for tid in targets:
-                if tid not in covers:
+                if not re.search(rf"(?<![a-z0-9_-]){re.escape(tid)}(?![a-z0-9_-])", covers):
                     vio(f"## Covers of {n.id} does not mention {tid}")
     return out
 

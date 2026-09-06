@@ -832,3 +832,50 @@ def test_a_node_that_supersedes_itself_is_refused_by_name(graph):
                                         "  - {rel: npx:supersedes, to: finding-g}", "# G\n")
 
     assert [e.message for e in _bar(graph)] == ["finding-g cannot supersede itself"]
+
+
+def test_a_target_the_general_node_already_superseded_stays_clear_of_the_bar(graph):
+    """Task 4 flips a target's status to `superseded` once the compression that
+    retired it lands (`knoten update --status superseded`). The bar must not then
+    refuse the very pair it just approved — a general node stays valid after the
+    compression it caused, forever."""
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: superseded\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n")
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: superseded\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n")
+
+    assert _bar(graph) == []
+
+
+def test_a_target_already_superseded_by_another_node_is_refused(graph):
+    _bar_graph(graph)
+    graph.node("finding-3", "id: finding-3\ntype: finding\nstatus: superseded\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 3\n")
+    graph.node("finding-h", "id: finding-h\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-3}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}",
+               "# H\n\n## Covers\n- finding-3: x\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-3}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}",
+               "# G\n\n## Covers\n- finding-1: x\n- finding-3: y\n")
+
+    msgs = [e.message for e in _bar(graph) if e.node == "finding-g"]
+    assert any("finding-g supersedes finding-3, which finding-h already superseded" in m for m in msgs)
+
+
+def test_covers_matching_is_whole_token_not_substring(graph):
+    """`finding-10` in a `## Covers` line must not satisfy `finding-1` — a substring
+    test would let a wrong id stand in for the right one."""
+    _bar_graph(graph).node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                                        "  - {rel: npx:supersedes, to: finding-1}\n"
+                                        "  - {rel: kn:survivedGate, to: gate-a}",
+                            "# G\n\n## Covers\n- finding-10: not the same node\n")
+
+    msgs = [e.message for e in _bar(graph)]
+    assert any("## Covers of finding-g does not mention finding-1" in m for m in msgs)
