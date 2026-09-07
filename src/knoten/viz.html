@@ -57,7 +57,19 @@ body.metrics footer{display:none}
 body.metrics #viewport{cursor:default}
 .chart{max-width:1100px;margin:0 0 26px}
 .chart h3{margin:0 0 3px;font-size:14px;font-weight:620;letter-spacing:-.01em}
-.chart .best{margin:0 0 9px;font:11.5px var(--mono);color:var(--ink-2)}
+.chart .best{margin:0 0 4px;font:600 11.5px var(--mono);color:var(--ink)}
+.chart .what{margin:0 0 6px;font-size:11.5px;color:var(--ink-2);max-width:70ch}
+.chart .legend{display:flex;gap:18px;margin:0 0 9px;font:11px var(--sans);color:var(--ink-2)}
+.chart .legend .item{display:inline-flex;align-items:center;gap:6px}
+.chart .legend svg{width:26px;height:14px;background:none;border:0;box-shadow:none;border-radius:0}
+#panel .files{display:flex;flex-direction:column;gap:4px}
+#panel .file{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;
+  padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);
+  font:11px var(--mono);color:var(--ink);text-align:left;cursor:copy}
+#panel .file code{font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#panel .file .kind{flex:none;font:600 9px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+#panel .file.missing{border-color:var(--dead)} #panel .file.missing .kind{color:var(--dead)}
+#panel .file.copied{border-color:var(--alive)} #panel .file.copied .kind{color:var(--alive)}
 .chart svg{display:block;width:100%;height:auto;background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r)}
 .chart .axis{stroke:var(--line-2);stroke-width:1}
@@ -700,6 +712,25 @@ function relations(title, list, mark){
     panel.append(g);
   }
 }
+function files(n){
+  // The panel is a preview; the markdown file and the script are the record. Each row
+  // is the path relative to the graph, and a click copies the absolute one.
+  panel.append(el("h3", null, "files"));
+  const box = el("div", "files");
+  const rows = [{path: n.path, kind: "record", exists: true}, ...(n.files || [])];
+  for (const f of rows){
+    const row = el("button", "file" + (f.exists ? "" : " missing"));
+    row.append(el("code", null, f.path), el("span", "kind", f.exists ? f.kind : f.kind + " · missing"));
+    row.title = DATA.root_path + "/" + f.path;
+    row.onclick = () => {
+      const abs = DATA.root_path + "/" + f.path;
+      const done = () => { row.classList.add("copied"); setTimeout(() => row.classList.remove("copied"), 900); };
+      if (navigator.clipboard) navigator.clipboard.writeText(abs).then(done, done); else done();
+    };
+    box.append(row);
+  }
+  panel.append(box);
+}
 function facts(title, obj){
   if (!obj || !Object.keys(obj).length) return;
   panel.append(el("h3", null, title));
@@ -826,6 +857,7 @@ function select(id){
   // Those same edges under `cites` too would read as a second, longer set of targets.
   relations("cites", covers ? n.links.filter(l => l.rel !== "npx:supersedes") : n.links);
   relations("cited by", n.backlinks);
+  files(n);
   if (VIEW === "map"){
     const i = trail.indexOf(id);
     trail = i >= 0 ? trail.slice(0, i + 1) : [...trail, id];
@@ -915,8 +947,20 @@ function chart(m){
   const vals = pts.map(p => p.value), lo = Math.min(...vals), hi = Math.max(...vals);
   const top = (DATA.shape.metrics || []).find(r => r.name === m.name) || {};
   const set = pts.find(p => p.id === top.best_id) || pts[0];
-  box.append(el("p", "best", `best ${set.value} · ${set.id} · ${set.created}   `
-                           + `ring: best so far · red: dead · dashed: builds on`));
+  box.append(el("p", "best", `best ${set.value} · ${set.id} · ${set.created}`));
+  box.append(el("p", "what", `Every point is a node that recorded ${m.name}, placed at the date it was `
+    + `created. Hover a point for its change against the best before it; click it to open the run.`));
+  const key = el("div", "legend");
+  for (const [glyph, words] of [["ring", "best so far"], ["dead", "the claim it tested died"],
+                                ["dash", "built on an earlier run"]]){
+    const item = el("span", "item");
+    const g = mk("svg", {viewBox: "0 0 26 14", width: 26, height: 14});
+    if (glyph === "ring") g.append(mk("circle", {class:"ring", cx:13, cy:7, r:6}), mk("circle", {class:"pt", cx:13, cy:7, r:3}));
+    if (glyph === "dead") g.append(mk("circle", {class:"pt dead", cx:13, cy:7, r:3.5}));
+    if (glyph === "dash") g.append(mk("path", {class:"lineage", d:"M2,11 Q13,-2 24,11"}));
+    item.append(g, el("span", null, words)); key.append(item);
+  }
+  box.append(key);
   // Time on the x axis when the points carry dates; a run made a week after another
   // sits a week away, not one slot. Index order is the fallback for undated nodes.
   const days = pts.map(p => day(p.created)), dated = days.every(d => d !== null) && new Set(days).size > 1;

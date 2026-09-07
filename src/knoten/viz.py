@@ -227,6 +227,19 @@ def _lead(body: str) -> str:
     return text if len(text) <= SUMMARY_LIMIT else text[:SUMMARY_LIMIT].rsplit(" ", 1)[0] + "…"
 
 
+def _files(root: Path, n) -> list:
+    """The script a node's `repro` names and the attachments it lists, with whether each
+    is actually on disk. Relative to the graph root, which is how a reader will open them."""
+    out = []
+    script = (n.repro or {}).get("script") if isinstance(n.repro, dict) else None
+    if isinstance(script, str) and script.strip():
+        out.append({"path": script, "kind": "script", "exists": (root / script).exists()})
+    for a in n.attachments:
+        rel = f"attachments/{n.id}/{a}"
+        out.append({"path": rel, "kind": "attachment", "exists": (root / rel).exists()})
+    return out
+
+
 def _clip(text: str) -> str:
     """Say when the section is cut. The panel folds long prose behind "show more", which
     would otherwise present a truncated section as the whole of it."""
@@ -259,6 +272,7 @@ def payload(root: Path) -> dict:
     types = cfg.get("node_types")
     return {
         "root": root.name,
+        "root_path": str(root.resolve()),
         "count": len(nodes),
         "columns": cols,
         "gate_types": sorted(gates),
@@ -291,6 +305,11 @@ def payload(root: Path) -> dict:
             "sections": [{"title": t, "text": _clip(section(n.body, t, collapse=False) or "")}
                          for t in n.sections],
             "results": n.results, "repro": n.repro, "attachments": n.attachments,
+            # Where the record lives and what it points at: the card is a preview, the
+            # markdown file and the script are the thing. `exists` is checked here, once,
+            # so the page can say "missing" without reaching the filesystem.
+            "path": f"nodes/{n.id}.md",
+            "files": _files(root, n),
             "columns": columns[n.id], "map": pos[n.id],
             # `rule` is a badge, not a shape. A general node that has stopped being
             # alive has stopped standing for what it retired -- `validate` names its
