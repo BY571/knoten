@@ -411,6 +411,43 @@ def test_the_payload_says_who_covers_whom(compressed):
     assert by["finding-3"]["rule"] is False and by["finding-3"]["covers"] == []
 
 
+def test_a_rule_that_is_no_longer_alive_is_no_longer_badged(compressed):
+    """`rule` is the badge on the card and the eyebrow on the record. A retracted general
+    node stands for nothing -- validate reports the orphans it left behind -- and a page
+    that still badges it says the compression holds when it does not."""
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: retracted\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-1}\n"
+                                 "  - {rel: npx:supersedes, to: finding-2}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+
+    by = {n["id"]: n for n in viz.payload(compressed.root)["nodes"]}
+
+    assert by["finding-g"]["rule"] is False
+    # It still says what it claimed, and hangs none of it: the record marks the entries.
+    assert by["finding-g"]["covers"] == ["finding-1", "finding-2"]
+    assert by["finding-1"]["under"] is None and by["finding-2"]["under"] is None
+
+
+def test_the_folded_view_still_holds_the_rule_when_every_specific_is_covered(compressed):
+    """The fold must never leave the page with nothing to draw. A rule covers what it
+    retired and nothing covers the rule, so it is there to be opened."""
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-4", _finding(4, "superseded"), "# 4\n")
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 + "".join(f"  - {{rel: npx:supersedes, to: finding-{i}}}\n"
+                                           for i in (1, 2, 3, 4)) +
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1\n- finding-2\n- finding-3\n- finding-4\n")
+
+    p = viz.payload(compressed.root)
+
+    assert "finding-g" in p["folded"]
+    assert not {"finding-1", "finding-2", "finding-3", "finding-4"} & set(p["folded"])
+
+
 def test_a_rule_over_a_rule_hangs_the_whole_chain(compressed):
     """Recursive compression: the outer rule retires the inner, the inner keeps its own
     findings. Reading only alive superseders drew the inner rule's two findings loose on

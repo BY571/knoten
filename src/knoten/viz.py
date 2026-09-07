@@ -340,7 +340,11 @@ def payload(root: Path) -> dict:
                          for t in n.sections],
             "results": n.results, "repro": n.repro, "attachments": n.attachments,
             "columns": columns[n.id], "map": pos[n.id],
-            "rule": is_general(n), "covers": supersedes(n), "under": covered.get(n.id),
+            # `rule` is a badge, not a shape. A general node that has stopped being
+            # alive has stopped standing for what it retired -- `validate` names its
+            # orphans -- so the page must not go on calling it the rule over them.
+            "rule": is_general(n) and n.status == "alive",
+            "covers": supersedes(n), "under": covered.get(n.id),
         } for n in _order(nodes)],
     }
 
