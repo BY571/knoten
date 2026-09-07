@@ -453,6 +453,42 @@ def test_the_payload_carries_the_shape_and_the_clusters(compressed):
     assert p["clusters"][0]["ids"] == ["finding-3", "finding-5", "finding-6", "finding-g"]
 
 
+def test_the_folded_layout_equals_the_full_layout_when_nothing_is_compressed(small):
+    """`_inherited` and the folded columns' basis are both no-ops on an uncompressed
+    graph: nothing is `under` anything, so `visible` is every node, and the folded
+    positions must be exactly the full ones."""
+    p = viz.payload(small.root)
+
+    full = {n["id"]: (n["columns"], n["map"]) for n in p["nodes"]}
+    folded = {nid: (v["columns"], v["map"]) for nid, v in p["folded"].items()}
+
+    assert folded == full
+
+
+def test_the_folded_columns_share_the_full_views_headers(graph):
+    """A type entirely covered still gets its column, and everything after it keeps its
+    x, so a rule that just finished retiring the last hypothesis does not also shove
+    every finding one column to the left."""
+    graph.rules("name: t\nnode_types: [question, hypothesis, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules: []\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2):
+        graph.node(f"hyp-{i}",
+                   f"id: hyp-{i}\ntype: hypothesis\nstatus: superseded\ncreated: 2026-01-0{i}\nlinks:\n"
+                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\ncreated: 2026-01-05\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: hyp-1}\n"
+                            "  - {rel: npx:supersedes, to: hyp-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}", "# G\n")
+
+    p = viz.payload(graph.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert p["columns"] == ["question", "hypothesis", "finding", "gate"]
+    assert p["folded"]["finding-g"]["columns"][0] == by["finding-g"]["columns"][0]
+
+
 def test_a_max_alive_rule_reaches_the_page(compressed):
     (compressed.root / "graph.yaml").write_text(
         "name: t\nnode_types: [question, finding, gate]\nstatuses: [open, alive, superseded, active]\n"

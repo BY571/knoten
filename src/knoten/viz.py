@@ -113,10 +113,17 @@ def roles(nodes: dict) -> tuple:
     return ordered, set(gates), set(shelves)
 
 
-def _columns(nodes: dict) -> dict:
+def _columns(nodes: dict, basis: tuple | None = None) -> dict:
     """Stack each column top-down, accumulating heights rather than counting rows, so a
-    type whose card is taller does not overlap the one beneath it."""
-    cols, gates, _ = roles(nodes)
+    type whose card is taller does not overlap the one beneath it.
+
+    `basis`, when given, is `(cols, gates)` from a prior `roles()` call, used instead of
+    deriving them from `nodes`. The folded view passes the full view's: `roles()` reads
+    what the edges DO, and a covered type with every member hidden would otherwise vanish
+    from a smaller node set's own `roles()`, shifting every column after it. Same headers,
+    a shorter stack under some of them — not a page that renumbers itself when a rule
+    covers the last node of a type."""
+    cols, gates = basis if basis is not None else roles(nodes)[:2]
     at = {c: 0.0 for c in cols}
     pos = {}
     for n in _order(nodes):
@@ -219,11 +226,18 @@ def _visible(nodes: dict, under: dict) -> dict:
 
 
 def _inherited(nodes: dict, visible: dict, under: dict) -> dict:
-    """`visible`, with a coverer also carrying what it covers' links. `_map` clusters on
-    degree, and a covered node's edges do not vanish when it is folded away — they are
-    now the coverer's business. Without this, appending a leaf that happens to touch a
-    node the covered layer used to touch could tip the folded map's hub selection, since
-    a handful of survivors is a much smaller graph than the one `_map` was tuned on."""
+    """`visible`, with a coverer also carrying what it covers' links. A rule inherits the
+    pull of everything it retired, so on the folded map it is drawn as a landmark: its
+    degree jumps from its own edges to its own plus every covered node's — a gate or
+    question the covered layer shared gains one edge per covered node, undeduped, on
+    purpose, since each covered node really did survive that gate or serve that question
+    and a repeated edge is a real vote, not noise to collapse.
+
+    This buys degree SEPARATION between anchors and leaves; it is not immunity from
+    `_map`'s documented `round(sqrt(n))` hub-count step, which still applies — and applies
+    more often here, since folding is what makes a graph small enough to cross it in the
+    first place. On an uncompressed graph `under` is empty and this is the identity: no
+    coverer, nothing inherited, `folded` equals the full map."""
     covers = {}
     for covered, coverer in under.items():
         covers.setdefault(coverer, []).append(covered)
@@ -291,7 +305,10 @@ def payload(root: Path) -> dict:
     under = _under(nodes)
     visible = _visible(nodes, under)
     fpos, fwalls = _map(_inherited(nodes, visible, under))
-    fcols = _columns(visible)
+    # Columns stay the plain visible set, not the inherited one: `_inherited`'s extra
+    # links are only for `_map`'s degree count, and feeding them to `_columns` would risk
+    # entering `roles()`'s citing/cited sets and flipping a shelf classification.
+    fcols = _columns(visible, basis=(cols, gates))
     # The same clusters `knoten frontier` shows: recursive compression is allowed, so an
     # alive rule that shares a gate or tag with loose specifics is a candidate too.
     clusters = compressible(nodes, compressible_types(cfg))
