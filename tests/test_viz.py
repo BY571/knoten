@@ -499,3 +499,25 @@ def test_a_max_alive_rule_reaches_the_page(compressed):
 
     assert p["graph"]["rules"][0]["max_alive"] == {"type": "finding", "per": "question", "count": 4}
     assert p["shape"]["budget"] == [{"question": "question-q", "type": "finding", "free": 2, "count": 4}]
+
+
+def test_the_template_folds_covers_and_shows_the_shape(small):
+    html = viz.render(small.root)
+
+    for needle in ["DATA.folded", "DATA.shape", "DATA.clusters", 'id=f-folded', 'id=f-all',
+                   'id=strip', 'id=clusters', 'id=cllegend', "function visible", "function posOf"]:
+        assert needle in html, needle
+
+
+def test_the_folded_switch_and_cluster_button_are_pressable_buttons(small):
+    html = viz.render(small.root)
+
+    assert re.search(r'<button id=f-folded aria-pressed=true>', html)
+    assert re.search(r'<button id=f-all aria-pressed=false>', html)
+    assert re.search(r'<button id=clusters aria-pressed=false>', html)
+
+
+def test_the_watch_seat_remembers_the_fold(small):
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "fold: FOLD" in html and "open: [...open]" in html
