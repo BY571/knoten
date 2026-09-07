@@ -1,10 +1,10 @@
-# {name} — a knoten research graph.
+# rl-reward — a knoten research graph.
 #
 # The core knows NOTHING about this domain. Every rule below is declared HERE, as
 # data. Write a rule only when you have a corpse: a rule without a body behind it is
 # just friction.
-name: {name}
-description: TODO — what question is this graph about?
+name: rl-reward
+description: what gets a PPO agent past return 15 on the hopper task within 1M steps
 
 # Enforced. A node whose type or status is not declared here is a typo — and a claim with
 # a typo'd status silently drops out of every query. Edit these for YOUR topic.
@@ -24,13 +24,13 @@ statuses:   [open, alive, dead, retracted, superseded, active]
 
 # The axis `knoten index --tag` filters on. Declare them and a typo is a violation;
 # declare none and tagging is free. Add tags as the topic tells you what they are.
-# tags: [decoding, evaluation]
+tags: [ppo, variance, exploration, batch, seeds]
 
 # The number this graph is trying to move, if there is one. `knoten metric` reads it back
 # out of the `results:` your nodes already record, oldest first. `goal` says which
 # direction counts as better and defaults to max; declare none and nothing changes.
-# metrics:
-#   accuracy: {goal: max}
+metrics:
+  return: {goal: max}
 
 # Reused standards: mp:supports / mp:challenges (Micropublications),
 #   npx:retracts / npx:supersedes (Nanopublications),
