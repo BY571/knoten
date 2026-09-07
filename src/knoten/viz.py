@@ -9,6 +9,7 @@ function of the graph, and a persisted `layout.json` would be a merge conflict g
 """
 import hashlib
 import json
+import re
 import math
 import time
 from pathlib import Path
@@ -21,7 +22,7 @@ HERE = Path(__file__).parent
 
 # Columns: no vertical centring. Centring would make every column shift when any one of
 # them grows, which is the reflow this whole design exists to avoid.
-COLW, CARDH, GAP, TOP = 300, 74, 12, 58
+COLW, CARDH, GAP, TOP = 300, 108, 12, 58
 # A gate card carries the tally rail — what it killed, what it passed — which makes it
 # taller than every other card. Stepping every column by one fixed row height overlapped
 # them by about the height of that rail.
@@ -210,6 +211,22 @@ PANEL_SECTIONS = [
 ]
 
 
+SUMMARY_LIMIT = 180
+
+
+def _lead(body: str) -> str:
+    """The first paragraph after the title and before the first `##`: what the card can
+    say about a node in two lines. Falls back to the first section's text."""
+    m = re.match(r"\s*#[^\n]*\n(.*?)(?=\n## |\Z)", body, re.S)
+    text = " ".join((m.group(1) if m else "").split())
+    if not text:
+        for sec in re.split(r"^## .*$", body, flags=re.M)[1:]:
+            text = " ".join(sec.split())
+            if text:
+                break
+    return text if len(text) <= SUMMARY_LIMIT else text[:SUMMARY_LIMIT].rsplit(" ", 1)[0] + "…"
+
+
 def _clip(text: str) -> str:
     """Say when the section is cut. The panel folds long prose behind "show more", which
     would otherwise present a truncated section as the whole of it."""
@@ -267,7 +284,7 @@ def payload(root: Path) -> dict:
         },
         "nodes": [{
             "id": n.id, "type": n.type, "status": n.status,
-            "title": n.title, "tags": n.tags,
+            "title": n.title, "tags": n.tags, "summary": _lead(n.body),
             "created": str(n.frontmatter.get("created") or ""),
             "links": [{"rel": l["rel"], "to": l["to"]} for l in n.links],
             "backlinks": [{"rel": b["rel"], "to": b["to"]} for b in n.backlinks],

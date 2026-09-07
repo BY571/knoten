@@ -240,3 +240,24 @@ def test_a_supersedes_cycle_cannot_hang_the_page(small):
     assert html.count("seen.has") >= 3          # visible, posOf, the walk up to the card
 
 
+
+
+def test_a_card_gets_the_nodes_first_paragraph_as_its_summary(graph):
+    graph.rules("name: t\nnode_types: [finding]\nstatuses: [alive]\nrules: []\n")
+    graph.node("finding-a", "id: finding-a\ntype: finding\nstatus: alive",
+               "# Title\n\nThe lead, in one line.\nStill the lead.\n\n## Evidence\nnumbers\n")
+    graph.node("finding-b", "id: finding-b\ntype: finding\nstatus: alive",
+               "# Title\n\n## Evidence\n" + "word " * 60 + "\n")
+
+    by = {n["id"]: n["summary"] for n in viz.payload(graph.root)["nodes"]}
+
+    assert by["finding-a"] == "The lead, in one line. Still the lead."
+    assert by["finding-b"].startswith("word word") and by["finding-b"].endswith("…")
+    assert len(by["finding-b"]) <= viz.SUMMARY_LIMIT + 1
+
+
+def test_the_views_are_cards_graph_and_metrics_only_when_declared(small):
+    html = viz.render(small.root)
+
+    assert ">cards</button>" in html and ">graph</button>" in html
+    assert 'getElementById("v-metrics").hidden = true' in html
