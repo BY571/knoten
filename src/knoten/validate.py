@@ -344,6 +344,45 @@ def _chain_top(nodes: dict[str, Node], n: Node, orphans: set) -> bool:
     return n.id == min(up)
 
 
+def _rings(nodes: dict[str, Node]) -> list[list[str]]:
+    """Every ring of alive supersessions: A retires B, B retires C, C retires A.
+
+    A pair is refused where the pair is read (below, by name). A longer ring passed every
+    check and stands for nothing: each member is covered by another member, so the whole
+    ring folds into itself, the page draws none of it and no budget counts any of it.
+    `under` will not let a cycle stand for anything, which leaves the ring standing for
+    nothing at all -- three findings gone from the graph, and validate silent.
+
+    Read off the nodes that carry an alive-to-alive `npx:supersedes` edge, which on any
+    real graph is a handful, so walking reachability from each of them is cheap.
+    """
+    edges: dict[str, list[str]] = {}
+    for n in nodes.values():
+        if n.status != "alive":
+            continue
+        out = [t for t in supersedes(n) if t != n.id
+               and (m := nodes.get(t)) is not None and m.status == "alive"]
+        if out:
+            edges[n.id] = out
+    reach = {}
+    for start in edges:
+        seen, queue = set(), deque(edges[start])
+        while queue:
+            cur = queue.popleft()
+            if cur not in seen:
+                seen.add(cur)
+                queue.extend(edges.get(cur, ()))
+        reach[start] = seen
+    rings, done = [], set()
+    for a in sorted(reach):
+        if a in done or a not in reach[a]:      # not on a ring: nothing reaches back
+            continue
+        ring = sorted({b for b in reach if a in reach[b] and b in reach[a]} | {a})
+        done |= set(ring)
+        rings.append(ring)
+    return rings
+
+
 def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
     """The bar a node clears before it may retire others. Always on: a graph that lets
     a weaker claim replace stronger ones by declaring one edge has no bar at all.
@@ -435,6 +474,13 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
             for tid in targets:
                 if not re.search(rf"(?<![a-z0-9_-]){re.escape(tid)}(?![a-z0-9_-])", covers):
                     vio(f"## Covers of {n.id} does not mention {tid}")
+    # Reported once, on the smallest id: every member holds the same ring, and naming it
+    # from each of them in turn says a graph with one ring in it has three problems. A
+    # pair is already named above, by the node that reads the edge back.
+    for ring in _rings(nodes):
+        if len(ring) > 2:
+            out.append(Violation(ring[0], "supersession",
+                                 f"{', '.join(ring)} supersede each other in a ring"))
     return out
 
 

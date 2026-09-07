@@ -614,8 +614,16 @@ def under(nodes: dict[str, Node]) -> dict[str, str]:
             if t not in standing and nodes[t].status == "superseded":
                 standing.add(t)
                 queue.append(t)
+    def stands_for(t: str, c: str) -> bool:
+        """A superseded-but-covered claimer keeps holding what it had already retired --
+        that is recursive compression -- but it may not retire a node that is still
+        alive. `index` lists that node and its question still has it, so the budget has
+        to count it: a rule the graph has itself retired must not go on shrinking a
+        budget from inside another rule's fold."""
+        return c in standing and (nodes[t].status != "alive" or nodes[c].status == "alive")
+
     return {t: min(held) for t, cs in claims.items()
-            if (held := [c for c in cs if c in standing])}
+            if (held := [c for c in cs if stands_for(t, c)])}
 
 
 def counted(nodes: dict[str, Node], types: tuple[str, ...],
