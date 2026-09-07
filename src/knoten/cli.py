@@ -113,6 +113,10 @@ def _where(pairs) -> dict:
     return out
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
 def render_index(payload: dict) -> None:
     shown = payload["nodes"]
     width = max((len(n["id"]) for n in shown), default=0)
@@ -165,11 +169,15 @@ def gates_cmd(root, as_json=False) -> int:
 
 def render_frontier(payload: dict) -> None:
     s = payload["shape"]
-    head = [f"{s['rules']} rules over {s['specifics']} specifics"]
+    head = [f"{_plural(s['rules'], 'rule')} over {_plural(s['specifics'], 'specific')}"]
     if s["clusters"]:
-        head.append(f"{s['clusters']} compressible cluster{'s' if s['clusters'] != 1 else ''}")
+        head.append(_plural(s["clusters"], "compressible cluster"))
     for b in s["budget"][:3]:
-        head.append(f"{b['free']} of {b['count']} slots free under {b['question']}")
+        # A group past its cap has negative slots, and "-1 of 3 slots free" is a sum the
+        # reader has to do before they know they are over. Say the overdraft instead.
+        head.append(f"{-b['free']} over the {b['count']} budget under {b['question']}"
+                    if b["free"] < 0 else
+                    f"{b['free']} of {b['count']} slots free under {b['question']}")
     print("  " + " · ".join(head))
     budget = {b["question"]: b for b in s["budget"]}
     if payload["compressible"]:
@@ -177,7 +185,8 @@ def render_frontier(payload: dict) -> None:
         for c in payload["compressible"]:
             kind, key = next(iter(c["shared"].items()))
             tail = f", budget {budget[c['question']]['count']}" if c["question"] in budget else ""
-            print(f"    {c['question']}  ·  {key}  ·  {len(c['ids'])} alive findings{tail}")
+            print(f"    {c['question']}  ·  {key}  ·  "
+                  f"{_plural(len(c['ids']), 'alive ' + c['type'])}{tail}")
             ids = c["ids"][:8]
             more = f", +{len(c['ids']) - 8} more" if len(c["ids"]) > 8 else ""
             print(f"      {', '.join(ids)}{more}")
@@ -409,10 +418,6 @@ def _links(pairs) -> list[dict]:
     for rel, to in _pairs(pairs, "--link takes rel=to, got '{}'"):
         out.append({"rel": rel, "to": to.strip()})
     return out
-
-
-def _plural(n: int, word: str) -> str:
-    return f"{n} {word}{'' if n == 1 else 's'}"
 
 
 def render_reward(c: dict) -> None:
