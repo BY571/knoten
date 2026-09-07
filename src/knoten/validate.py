@@ -38,6 +38,18 @@ RULE_KEYS = {
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
 GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules", "compressible"}
 
+# The rule ids the engine emits on its own, whatever the graph declares. A graph rule may
+# not take one of these names: the write gate filters `max_alive` violations out by rule id
+# so it can measure the budget on the delta instead, and a `max_alive` rule called
+# `supersession` would have silenced the supersession bar at exactly the moment it matters.
+# A shadowed check is a check that reports green forever.
+STRUCTURAL_RULES = frozenset({
+    "authored-backlink", "dangling-edge", "malformed-repro", "malformed-results",
+    "malformed-tags", "mismatched-id", "missing-attachment", "missing-status",
+    "missing-type", "not-a-gate", "supersession", "unknown-relation", "unknown-status",
+    "unknown-tag", "unknown-type",
+})
+
 # `GATE_TYPE` was this until the rename. Named only so the migration check below can
 # recognise a graph that predates it; nothing else in the package may use it.
 RENAMED_GATE_TYPE = "method"
@@ -114,6 +126,9 @@ def load_config(root: Path) -> dict:
             raise GraphError(f"graph.yaml: each rule must be a mapping, got {r!r}")
         if "id" not in r:
             raise GraphError(f"graph.yaml: rule is missing `id`: {r!r}")
+        if r["id"] in STRUCTURAL_RULES:
+            raise GraphError(f"graph.yaml: rule '{r['id']}' takes the name of a check knoten "
+                             f"always runs, which would shadow it. Pick another id.")
         if unknown := set(r) - RULE_KEYS:
             raise GraphError(
                 f"graph.yaml: rule '{r['id']}' has unknown key(s) "
@@ -306,10 +321,15 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
         # is a claim nothing stands in for: hidden from `index`, counted by no budget,
         # and answering no question. The graph must not lose a finding that quietly.
         if n.status == "superseded" and not _alive_backers(nodes, n):
+            # Name the node still holding the edge when there is one: dropping it is the
+            # other half of the fix, and without it the author revives the target and the
+            # dead superseder's own `npx:supersedes` keeps pointing at a live claim.
+            held = sorted(b["to"] for b in n.backlinks if b["rel"] == "npx:supersededBy")
+            fix = (f"drop the npx:supersedes edge from {held[0]}" if held
+                   else "restore what superseded it")
             out.append(Violation(n.id, "supersession",
                                  f"{n.id} is superseded by nothing alive; `knoten update "
-                                 f"{n.id} --status alive` brings it back, or restore what "
-                                 f"superseded it"))
+                                 f"{n.id} --status alive` brings it back, or {fix}"))
         raw = supersedes(n)
         if not raw:
             continue
@@ -331,8 +351,8 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
         questions = {}
         for tid in targets:
             t = nodes[tid]
-            # A target is spent, not disqualified, once Task 4's `knoten update
-            # --status superseded` runs: it stays clear of the bar as long as THIS
+            # A target is spent, not disqualified, once the engine's own flip has
+            # retired it: it stays clear of the bar as long as THIS
             # node is the (sole) one that retired it. A target already claimed by
             # some other node's `npx:supersedes` is refused by naming that node --
             # unless this node has itself stopped being alive, in which case it is a

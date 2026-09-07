@@ -244,7 +244,13 @@ def update_with_report(root: Path, nid: str, status: str | None = None,
         # sets the edge just as truly, and a supersession that flips nothing leaves the
         # general node claiming to have retired a finding the graph still counts.
         targets = supersedes(candidate)
-        texts = superseded_texts(root, nodes, candidate) if targets else {}
+        # Only a node that is ALIVE retires anything. A general node being retracted still
+        # declares its edges, and re-flipping there would re-retire the very targets the
+        # author revived in order to retract it -- `knoten update finding-g --status
+        # retracted` could then never succeed. The cascade still widens on `targets`
+        # though: this status move is exactly what can leave them orphaned.
+        retires = targets if candidate.status == "alive" else []
+        texts = superseded_texts(root, nodes, candidate) if retires else {}
         cands = {nid: candidate, **superseded_candidates(root, texts)}
 
         if errs := refused(nodes, cands, root, bool(targets)):
@@ -254,7 +260,7 @@ def update_with_report(root: Path, nid: str, status: str | None = None,
         for tid, ttext in texts.items():
             write_atomic(node_path(root, tid), ttext)
 
-        report = compression_report(root, candidate, list(texts.keys())) if targets else None
+        report = compression_report(root, candidate, list(texts.keys())) if retires else None
         return candidate.status, report
 
 

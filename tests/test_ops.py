@@ -4,6 +4,7 @@ from conftest import compressible_graph
 
 from knoten import ops
 from knoten.core import load
+from knoten.validate import check
 
 
 def test_index_returns_one_shape_both_renderings_share(graph):
@@ -221,3 +222,33 @@ def test_a_supersedes_edge_written_through_fields_flips_its_targets_too(graph):
     assert res["compressed"]["flipped"] == ["finding-1", "finding-2"]
     nodes = load(graph.root)
     assert nodes["finding-1"].status == nodes["finding-2"].status == "superseded"
+
+
+def test_a_general_node_can_be_retracted_once_its_targets_are_back(graph):
+    """A general node still declares `npx:supersedes` after it is retracted. Flipping on
+    that alone re-retired the targets the author had just revived, so the retraction could
+    never land -- and the orphan check then fired on the write that was fixing it."""
+    compressible_graph(graph, n=2, cap=4)
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}",
+               "# G\n\n## Covers\n- finding-1: small\n- finding-2: large\n")
+    ops.update(graph.root, "finding-g", append="a line")      # flips both targets
+
+    refused = ops.update(graph.root, "finding-g", status="retracted")
+
+    assert refused["status"] == "REJECTED"
+    assert "finding-1 is superseded by nothing alive" in refused["reason"]
+    assert "drop the npx:supersedes edge from finding-g" in refused["reason"]
+
+    for tid in ("finding-1", "finding-2"):
+        assert ops.update(graph.root, tid, status="alive")["status"] == "UPDATED"
+    res = ops.update(graph.root, "finding-g", status="retracted")
+
+    assert res["status"] == "UPDATED"
+    assert res.get("compressed") is None
+    nodes = load(graph.root)
+    assert nodes["finding-1"].status == nodes["finding-2"].status == "alive"
+    assert check(nodes, graph.root) == []

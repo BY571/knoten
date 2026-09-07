@@ -433,7 +433,12 @@ def render_reward(c: dict) -> None:
     else:
         print(f"    survived the {_plural(c['gates'], 'gate')} they faced")
     if c["free"] is not None:
-        print(f"    {c['free']} of {c['count']} slots free under this question again")
+        # A partial compression on an over-cap graph is a real gain that still leaves the
+        # question over budget. "-1 of 3 slots free" reads as a bug; say the overdraft, in
+        # the words `frontier` uses for the same number.
+        print(f"    {-c['free']} still over the {c['count']} budget under this question"
+              if c["free"] < 0 else
+              f"    {c['free']} of {c['count']} slots free under this question again")
     print(f"    this graph now stands on {_plural(c['rules'], 'rule')} and {_plural(c['specifics'], 'specific')}")
 
 

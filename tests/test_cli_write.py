@@ -328,3 +328,28 @@ def test_a_compression_of_principles_names_its_own_type(graph, monkeypatch, tmp_
     out = capsys.readouterr().out
 
     assert "compressed 2 principles into 1 under question-q" in out
+
+
+def test_a_compression_that_leaves_the_question_over_budget_says_so(graph, monkeypatch,
+                                                                   tmp_path, capsys):
+    """Six alive under a cap of three: compressing three of them is a real gain that still
+    leaves the question over. `-1 of 3 slots free` reads as a bug, so the reward says the
+    overdraft in the words `frontier` uses for the same number."""
+    compressible_graph(graph, n=6, cap=3)
+    fm = tmp_path / "fm.yaml"
+    fm.write_text("type: finding\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: finding-1}\n"
+                  "  - {rel: npx:supersedes, to: finding-2}\n"
+                  "  - {rel: npx:supersedes, to: finding-3}\n"
+                  "  - {rel: kn:survivedGate, to: gate-a}\n"
+                  "  - {rel: kn:survivedGate, to: gate-b}\n", encoding="utf-8")
+    body = tmp_path / "body.md"
+    body.write_text("# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n- finding-3: c\n",
+                    encoding="utf-8")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["commit", "finding-g", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "1 still over the 3 budget under this question" in out
+    assert "slots free" not in out

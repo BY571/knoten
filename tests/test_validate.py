@@ -610,6 +610,17 @@ def test_unless_edge_must_name_a_declared_relation(graph):
         load_rules(graph.root)
 
 
+def test_a_rule_may_not_take_the_name_of_a_structural_check(graph):
+    """The write gate filters cap violations out by rule id so it can measure the budget on
+    the delta instead. A `max_alive` rule called `supersession` would have taken the
+    supersession bar out with it, at exactly the write where the bar matters."""
+    rules(graph, "name: t\nrules:\n  - id: supersession\n"
+                 "    max_alive: {type: finding, count: 3}\n    message: m\n")
+
+    with pytest.raises(GraphError, match="always runs"):
+        load_config(graph.root)
+
+
 def test_compressible_is_a_known_graph_key_and_must_list_declared_types(graph):
     rules(graph, "name: t\nnode_types: [finding, principle]\ncompressible: [finding, principle]\nrules: []\n")
     load_config(graph.root)
