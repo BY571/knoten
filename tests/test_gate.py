@@ -528,3 +528,106 @@ def test_a_compression_by_a_writer_passes_the_gate(signed, keys_dir):
     for nid in ("finding-1", "finding-2"):
         blob = git("show", f"master:g/nodes/{nid}.md", cwd=origin).stdout
         assert "status: superseded" in blob, blob
+
+
+# ------------------------------------------- guards that lost their only test in the cut
+
+def test_a_tag_into_a_branchless_gated_repo_is_refused(bare):
+    """No branch exists yet, so the one-branch count cannot catch it; the ref rule must."""
+    origin, work = bare
+    git("tag", "v1", cwd=work)
+    assert git("push", "origin", "v1", cwd=work).returncode != 0
+
+
+def test_moving_a_tag_that_predates_the_gate_is_refused(tmp_path, rules_yaml):
+    origin = tmp_path / "o.git"
+    git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+    work = tmp_path / "w"
+    git("clone", "-q", str(origin), str(work), cwd=tmp_path)
+    for c in (["config", "user.email", "t@t.t"], ["config", "user.name", "t"]):
+        git(*c, cwd=work)
+    (work / "a.txt").write_text("1", encoding="utf-8")
+    git("add", "-A", cwd=work); git("commit", "-qm", "one", cwd=work)
+    git("tag", "v1", cwd=work)
+    assert git("push", "-q", "origin", "master", "v1", cwd=work).returncode == 0
+    install_server(origin)                                   # gated only now
+    (work / "a.txt").write_text("2", encoding="utf-8")
+    git("add", "-A", cwd=work); git("commit", "-qm", "two", cwd=work)
+    git("tag", "-f", "v1", cwd=work)
+
+    assert git("push", "-f", "origin", "v1", cwd=work).returncode != 0
+
+
+def test_deleting_a_branch_git_itself_would_not_protect_is_refused(bare):
+    """`receive.denyDeleteCurrent` covers the branch HEAD names and nothing else."""
+    origin, work = bare
+    git("add", "-A", cwd=work); git("commit", "-qm", "seed", cwd=work)
+    assert push(work).returncode == 0
+    git("symbolic-ref", "HEAD", "refs/heads/elsewhere", cwd=origin)
+
+    assert git("push", "origin", ":master", cwd=work).returncode != 0
+    assert git("rev-parse", "--verify", "master", cwd=origin).returncode == 0
+
+
+def test_one_push_may_create_only_one_branch(bare):
+    """git's ref list is the same for every line mid-push, so the gate keeps the count."""
+    origin, work = bare
+    git("add", "-A", cwd=work); git("commit", "-qm", "seed", cwd=work)
+    git("branch", "second", cwd=work)
+
+    assert git("push", "origin", "master", "second", cwd=work).returncode != 0
+    assert len(git("branch", "--list", cwd=origin).stdout.split()) <= 1
+
+
+def test_a_reader_listed_in_contributors_may_not_sign_a_commit(signed, keys_dir):
+    origin, work, keys = signed
+    rea = make_key(keys_dir, "rea")
+    add_person(work, "rea", rea, "read")
+    commit_signed(work, "seb lists a reader", keys["seb"])
+    assert push(work).returncode == 0
+    (work / "g" / "nodes" / "hyp-r.md").write_text(
+        "---\nid: hyp-r\ntype: hypothesis\nstatus: open\n---\n\n# r\n", encoding="utf-8")
+    commit_signed(work, "the reader writes", rea)
+
+    assert push(work).returncode != 0
+
+
+def test_a_join_naming_a_different_inviter_is_refused(signed, keys_dir):
+    origin, work, keys = signed
+    ann = make_key(keys_dir, "ann")
+    add_person(work, "ann", ann, "admin")
+    commit_signed(work, "seb adds ann", keys["seb"])
+    assert push(work).returncode == 0
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write", invited_by="ann",     # the entry credits ann...
+               invite=invite_for(keys["seb"], "test", "maria", "write"))   # ...but seb signed
+    commit_signed(work, "maria joins, crediting ann", maria)
+
+    assert push(work).returncode != 0
+
+
+def test_a_graph_whose_every_writer_is_revoked_accepts_nothing(signed):
+    origin, work, keys = signed
+    c = C.load(work / "g"); c["seb"]["revoked"] = "2026-01-01"; C.dump(work / "g", c)
+    commit_signed(work, "seb steps down", keys["seb"])
+    assert push(work).returncode == 0
+    commit_node(work / "g", "hyp-x.md", "---\nid: hyp-x\ntype: hypothesis\nstatus: open\n---\n\n# x\n")
+
+    assert push(work).returncode != 0          # an unsigned commit with no live writer
+
+
+def test_check_ref_fails_closed_on_a_rev_list_error(bare, monkeypatch):
+    """A git error is a refusal, not "nothing to check"."""
+    origin, work = bare
+    monkeypatch.chdir(origin)
+
+    with pytest.raises(gate.GraphError, match="cannot list commits"):
+        gate.check_ref("0" * 40, "a" * 40, "refs/heads/master")
+
+
+def test_git_gives_children_no_access_to_the_hooks_stdin(bare, monkeypatch):
+    """The hook's stdin IS git's ref list; a child that read it would starve main()."""
+    origin, work = bare
+    monkeypatch.chdir(work)
+
+    assert gate._git("hash-object", "--stdin").stdout.strip() == b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
