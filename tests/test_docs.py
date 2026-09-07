@@ -115,8 +115,9 @@ def test_the_readmes_reward_block_is_what_the_command_actually_prints(readme_com
     documents a rule the engine does not implement."""
     quoted = next(b for b in blocks("README.md") if b.startswith("  + nodes/"))
 
-    for line in quoted.strip("\n").splitlines():
-        assert line in readme_compression, line
+    # One contiguous slice, not line by line: a block whose lines all appear somewhere is
+    # still a block nobody ever saw, and the order and the blank line are part of it.
+    assert quoted.rstrip("\n") in readme_compression
 
 
 def test_a_compression_is_not_warned_about_resembling_what_it_just_superseded(readme_compression):

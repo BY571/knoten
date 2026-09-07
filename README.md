@@ -209,11 +209,19 @@ says what you freed:
 
 ```
   + nodes/finding-sc-needs-scale.md  (8 nodes)
+
+  ! This resembles 2 settled claim(s). If it is the same question, supersede or retract that node (npx:supersedes / npx:retracts) rather than leaving two answers in the graph.
+    exp-self-consistency-budget  [✓ ALIVE]  Self-consistency against a compute-matched baseline, at three model sizes
+    hyp-self-consistency  [✗ DEAD]  Self-consistency (sample 5, majority vote) beats greedy decoding
     compressed 2 findings into 1 under question-what-improves-reasoning
     survived the 1 gate they faced
     11 of 12 slots free under this question again
     this graph now stands on 1 rule and 0 specifics
 ```
+
+That is the whole of what the command prints. The resemblance warning never names what
+the node just superseded, since resembling them is the point; it names the experiment and
+the dead hypothesis still standing behind them, and leaves the judgement to you.
 
 ## A shared graph
 

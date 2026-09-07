@@ -99,12 +99,16 @@ The engine applies the superseded arrow: a node that supersedes another flips it
 first face every gate it survived. The node doing the superseding is itself of a
 compressible type (§6); every target is alive, or already superseded by that same node.
 And a `superseded` node always has an alive node superseding it: retract the general claim
-and the graph says so, rather than leaving findings standing for nothing.
+without reviving them first and the graph says so, rather than leaving findings standing
+for nothing.
 
 Every arrow is walkable via `knoten update`, which appends and moves the status but cannot
-rewrite a claim. Immutability protects **what was claimed**, never the status: the status
-*is* the lifecycle, and git holds the before and after (§7). Without it an agent could open
-a hypothesis and never close it, leaving a settled question `open` on every frontier.
+rewrite a claim. Every arrow but the superseded one: only the engine draws that, inside the
+write that declares the edge, so setting it by hand leaves a node nothing alive supersedes,
+and that is refused. Immutability protects **what was claimed**, never the status: the
+status *is* the lifecycle, and git holds the before and after (§7). Without it an agent
+could open a hypothesis and never close it, leaving a settled question `open` on every
+frontier.
 
 `retracted` is first-class. Three claims in the source session were withdrawn. **A
 graph that records only conclusions and never corrections lies to you in six months.**
