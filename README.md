@@ -187,7 +187,7 @@ revoked person keeps their clone; only their token and future signatures stop wo
 
 [`SKILL.md`](SKILL.md) teaches the loop; [`src/knoten/prompts/`](src/knoten/prompts)
 says how to write each kind of node, and where to look when there are no ideas left.
-[`examples/llm-research/`](examples/llm-research) is a worked graph;
+[`examples/llm-research/`](examples/llm-research) and [`examples/rl-reward/`](examples/rl-reward) (a return climbing 2 to 15 over five experiments) are worked graphs;
 [SPEC.md](SPEC.md) the design.
 
 MIT. One dependency: PyYAML. No framework, no database, no build step, and no server until

@@ -1,5 +1,6 @@
 """The CLI is the first thing a new user touches."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -240,3 +241,29 @@ def test_show_prints_covers_before_the_body_of_a_general_node(graph, monkeypatch
     assert "finding-1: small" in out
 
 
+
+
+def test_a_fresh_graph_accepts_an_idea_that_came_from_a_finding(tmp_path, monkeypatch, capsys):
+    """`type: source, finding` in YAML flow syntax parsed as `type: source` plus a stray
+    key, so the rule's own message promised something it refused. The value is quoted now."""
+    root = _init(tmp_path, monkeypatch)
+    (root / "nodes" / "finding-f.md").write_text(
+        "---\nid: finding-f\ntype: finding\nstatus: alive\nlinks:\n"
+        "  - {rel: prov:wasDerivedFrom, to: question-t}\n---\n\n# f\n", encoding="utf-8")
+    (tmp_path / "fm.yaml").write_text(
+        "type: idea\nstatus: open\nlinks:\n  - {rel: prov:wasDerivedFrom, to: question-t}\n"
+        "  - {rel: prov:wasDerivedFrom, to: finding-f}\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# an idea from a finding\n", encoding="utf-8")
+
+    assert main(["commit", "idea-x", "--frontmatter", str(tmp_path / "fm.yaml"),
+                 "--body", str(tmp_path / "b.md")]) == 0, capsys.readouterr().err
+
+
+def test_the_rl_example_validates_and_tracks_its_return(monkeypatch, capsys):
+    root = Path(__file__).resolve().parents[1] / "examples" / "rl-reward"
+    monkeypatch.chdir(root)
+
+    assert main(["validate"]) == 0
+    assert main(["metric", "return"]) == 0
+    out = capsys.readouterr().out
+    assert "best 15.4" in out and "builds on exp-reward-scale" in out
