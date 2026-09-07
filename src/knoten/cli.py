@@ -547,9 +547,7 @@ rules:
   - id: ideas-must-cite-what-prompted-them
     when_type: idea
     require_edge_target: {{rel: prov:wasDerivedFrom, type: question, min: 1}}
-    message: >
-      An idea that cites nothing cannot be traced back to the question it serves.
-      Cite the question, or the source you read.
+    message: Cite the question this idea serves.
 
   - id: hypotheses-must-say-what-they-do-not-test
     when_type: hypothesis
@@ -563,6 +561,36 @@ rules:
     when_type: experiment
     require_sections: Setup, How to reproduce, Result
     message: An experiment I cannot rerun is an anecdote.
+
+  # --- the round, and its ceiling ---------------------------------------------------
+  # Each step names the one before it, so a claim can always be walked back to what was
+  # read. The last rule is the ceiling: past it, the graph asks for a rule, not a result.
+  - id: ideas-come-from-sources
+    when_type: idea
+    require_edge_target: {{rel: prov:wasDerivedFrom, type: source, min: 1}}
+    message: >
+      An idea that cites no source came from nowhere. Cite what you read, or a
+      source node that says "own intuition".
+
+  - id: hypotheses-come-from-ideas
+    when_type: hypothesis
+    require_edge_target: {{rel: prov:wasDerivedFrom, type: idea, min: 1}}
+    message: A hypothesis that came from no idea came from a mood. Cite the idea.
+
+  - id: experiments-test-a-hypothesis
+    when_type: experiment
+    require_edge_target: {{rel: kn:tests, type: hypothesis, min: 1}}
+    message: An experiment that tests nothing cannot fail. Say which hypothesis.
+
+  - id: findings-come-from-experiments
+    when_type: finding
+    unless_edge: npx:supersedes
+    require_edge_target: {{rel: prov:wasDerivedFrom, type: experiment, min: 1}}
+    message: A finding that no experiment produced is an opinion. Cite the experiment.
+
+  - id: compress-before-you-accumulate
+    max_alive: {{type: finding, per: question, count: 12}}
+    message: Twelve live findings under one question and no rule above them. Compress first.
 """
 
 TEMPLATE_QUESTION = """\

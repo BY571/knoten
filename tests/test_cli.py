@@ -135,6 +135,44 @@ def test_init_creates_a_graph_that_validates(tmp_path, monkeypatch):
     assert main(["validate"]) == 0
 
 
+def _init(tmp_path, monkeypatch, name="t"):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", name]) == 0
+    root = tmp_path / name
+    monkeypatch.chdir(root)
+    return root
+
+
+def test_a_fresh_graph_validates_clean_and_declares_the_round(tmp_path, monkeypatch):
+    root = _init(tmp_path, monkeypatch)
+
+    assert main(["validate"]) == 0
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+    for rid in ["ideas-come-from-sources", "hypotheses-come-from-ideas",
+                "experiments-test-a-hypothesis", "findings-come-from-experiments",
+                "compress-before-you-accumulate"]:
+        assert f"id: {rid}" in text
+    assert "Cite the question this idea serves." in text
+
+
+def test_a_fresh_graph_refuses_a_finding_no_experiment_produced(tmp_path, monkeypatch, capsys):
+    _init(tmp_path, monkeypatch)
+    (tmp_path / "fm.yaml").write_text("type: finding\nstatus: open\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# f\n", encoding="utf-8")
+
+    assert main(["commit", "finding-x", "--frontmatter", str(tmp_path / "fm.yaml"),
+                 "--body", str(tmp_path / "b.md")]) == 1
+    assert "findings-come-from-experiments" in capsys.readouterr().err
+
+
+def test_a_fresh_graph_lets_a_general_finding_skip_the_experiment_rule(tmp_path, monkeypatch):
+    """`unless_edge` in the shipped rule: a general finding derives from findings."""
+    root = _init(tmp_path, monkeypatch)
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+
+    assert "unless_edge: npx:supersedes" in text
+
+
 def test_init_refuses_a_name_that_escapes_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
