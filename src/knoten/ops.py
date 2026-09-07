@@ -1,8 +1,7 @@
 """Every question the graph answers, as a dict.
 
-One implementation per operation. The CLI renders these dicts as prose and `--json`
-dumps them verbatim, so the two renderings cannot disagree — they did, repeatedly, when
-the read paths were written twice, once per surface.
+One implementation per operation. The CLI renders these dicts as prose and `--json` dumps
+them verbatim, so the two renderings cannot disagree.
 """
 from __future__ import annotations
 
@@ -14,13 +13,12 @@ from .core import (GATE_SECTIONS, GATE_TYPE, VERDICT, GraphError, Node,
 from .update import update_with_report
 from .validate import check, load_config
 
-# A row is ~45 tokens once JSON key overhead is counted, so 200 rows is ~9k — readable
-# in one go, where the same graph's broad query was 83k. It is a CAP, never a silent one:
+# ~45 tokens a row, so 200 rows is ~9k: readable in one go. A CAP, never a silent one --
 # `truncated` and `total` always say what was left out.
 INDEX_LIMIT = 200
 
-# A query returns FULL summaries (post-mortem, results, repro) — a few hundred tokens
-# each. Twenty is a read; sixty is a context flood that buries the top hit.
+# A query returns FULL summaries — a few hundred tokens each. Twenty is a read; sixty is
+# a context flood that buries the top hit.
 QUERY_LIMIT = 20
 
 
@@ -30,8 +28,7 @@ def summarise(n: Node) -> dict:
                      ("npx:retracts", "retracts"), ("kn:blockedBy", "blocked_by")]:
         if ts := [l["to"] for l in n.links if l["rel"] == rel]:
             out[key] = ts
-    # A claim someone later WITHDREW is invisible unless we say so: we reported what a node
-    # retracts, never that it WAS retracted.
+    # A claim someone later WITHDREW is invisible unless we say so.
     for rel, key in [("npx:retractedBy", "retracted_by"), ("npx:supersededBy", "superseded_by")]:
         if ts := [b["to"] for b in n.backlinks if b["rel"] == rel]:
             out[key] = ts
@@ -74,8 +71,8 @@ def index(root: Path, query=None, tags=None, status=None, type=None,
     nodes = load(root)
     hits = retrieve(nodes, query, tags=tags, status=status, type=type,
                     where=where, since=since)
-    # The superseded layer is what compression retired. Hidden unless asked for, so the
-    # graph reads as small as it has become; never silently, so the footer counts it.
+    # The layer compression retired: hidden unless asked for, so the graph reads as small
+    # as it has become; never silently, so the footer counts it.
     hidden = 0
     if not all and not status:
         kept = [n for n in hits if n.status != "superseded"]
@@ -93,8 +90,7 @@ def index(root: Path, query=None, tags=None, status=None, type=None,
         "declared_tags": [str(t) for t in (load_config(root).get("tags") or [])],
     }
     if out["truncated"]:
-        # A silent cap reads as "that is the whole graph" — the same false negative the
-        # AND-query bug produced, arriving by a different route.
+        # A silent cap reads as "that is the whole graph": the same false negative.
         out["note"] = (f"Showing {cap} of {len(hits)}. Narrow with tags/status/type, or "
                        f"pass a query to rank by relevance, before concluding anything "
                        f"about what is NOT here.")
@@ -107,12 +103,10 @@ def query(root: Path, term: str) -> dict:
     out = {"query": term, "total": len(claims),
            "truncated": len(claims) > QUERY_LIMIT,
            "claims": [summarise(n) for n in claims[:QUERY_LIMIT]],
-           # Do not narrow: agents key on this shape, and dropping a key is invisible
-           # to the caller until something it needed is quietly missing.
+           # Do not narrow: agents key on this shape, and a dropped key is invisible to
+           # the caller until something it needed is quietly missing.
            "related_gates": [n.id for n in hits if n.type == GATE_TYPE],
-           # Everything else that matched but isn't a claim: sources, open work, whatever
-           # types this graph declares. The CLI's "also:" line used to show these before
-           # it was rewired onto this dict; losing them was silent narrowing, not a fix.
+           # Everything else that matched but is not a claim: sources, open work.
            "related": [n.id for n in hits if n.status not in VERDICT]}
     if out["truncated"]:
         out["note"] = (f"Showing the {QUERY_LIMIT} closest of {len(claims)} matching "
@@ -122,9 +116,8 @@ def query(root: Path, term: str) -> dict:
         out["note"] = ("Claims marked DEAD or RETRACTED have already been tested. Read "
                        "'what_would_reopen_this' before re-running them.")
     else:
-        # Keyword search cannot find an idea phrased in words the node never used. Saying
-        # "untested" here without that caveat is how an agent re-runs a dead experiment —
-        # the exact failure this tool exists to prevent.
+        # Keyword search cannot find an idea phrased in words the node never used, and
+        # saying "untested" without that caveat is how a dead experiment gets re-run.
         out["note"] = ("No keyword match. This is NOT proof the idea is untested — a "
                        "differently-worded node will not match. List the whole graph, "
                        "one line per node, and read the claims yourself before "
@@ -141,9 +134,7 @@ def get(root: Path, nid: str) -> dict:
     if supersedes(n):
         out["covers"] = section(n.body, "Covers")
     if n.attachments:
-        # A path string alone can't tell a reader whether the file is still there —
-        # `show` used to print size / MISSING from the filesystem directly; additive
-        # here so both surfaces (not just the CLI) can see it.
+        # A path string alone cannot say whether the file is still there.
         details = []
         for a in n.attachments:
             p = root / "attachments" / nid / a
@@ -184,7 +175,7 @@ def path(root: Path, start: str, end: str) -> dict:
     p = shortest_path(load(root), start, end)
     if p is None:
         return {"path": None, "note": f"no path {start} -> {end}"}
-    # WITH the relation on each hop. Without it an agent learns two nodes are connected
+    # WITH the relation on each hop: without it an agent learns two nodes are connected
     # but not HOW, which is useless for reasoning about falsification.
     return {"path": [{"node": nid, "via": rel} if rel else {"node": nid}
                      for nid, rel in p],
@@ -195,11 +186,7 @@ def update(root: Path, nid: str, status: str | None = None, results: dict | None
           links: list | None = None, append: str | None = None,
           fields: dict | None = None) -> dict:
     """Move a node through its lifecycle, or report why it was refused — ONE shape for
-    both outcomes. Update used to be built twice, once per surface: one success omitted
-    `status` entirely and its refusal had no `hint`, while the other carried both. That
-    drift is the bug this module exists to prevent, so this mirrors `commit()`'s
-    convention rather than inventing a third shape.
-    """
+    both outcomes, mirroring `commit()`'s convention."""
     try:
         now, report = update_with_report(root, nid, status=status, results=results,
                                          links=links, append=append, fields=fields)

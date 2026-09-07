@@ -169,48 +169,35 @@ def gates_cmd(root, as_json=False) -> int:
     return 0
 
 
+BANDS = [("open", "OPEN — started, never settled"),
+         ("unchecked", "UNCHECKED — alive, but no gate has ruled on them"),
+         ("reopenable", "REOPENABLE — died, but said what would bring them back"),
+         ("untested_gates", "UNTESTED GATES — no claim has been through them")]
+
+
 def render_frontier(payload: dict) -> None:
     s = payload["shape"]
     head = [f"{_plural(s['rules'], 'rule')} over {_plural(s['specifics'], 'specific')}"]
     if s["clusters"]:
         head.append(_plural(s["clusters"], "compressible cluster"))
-    for b in s["budget"][:3]:
-        # A group past its cap has negative slots, and "-1 of 3 slots free" is a sum the
-        # reader has to do before they know they are over. Say the overdraft instead.
-        head.append(f"{-b['free']} over the {b['count']} budget under {b['question']}"
-                    if b["free"] < 0 else
-                    f"{b['free']} of {b['count']} slots free under {b['question']}")
     print("  " + " · ".join(head))
-    budget = {b["question"]: b for b in s["budget"]}
     if payload["compressible"]:
         print("\n  COMPRESSIBLE — do these before the next experiment")
         for c in payload["compressible"]:
-            kind, key = next(iter(c["shared"].items()))
-            tail = f", budget {budget[c['question']]['count']}" if c["question"] in budget else ""
+            key = next(iter(c["shared"].values()))
             print(f"    {c['question']}  ·  {key}  ·  "
-                  f"{_plural(len(c['ids']), 'alive ' + c['type'])}{tail}")
-            ids = c["ids"][:8]
+                  f"{_plural(len(c['ids']), 'alive ' + c['type'])}")
             more = f", +{len(c['ids']) - 8} more" if len(c["ids"]) > 8 else ""
-            print(f"      {', '.join(ids)}{more}")
-    if payload["open"]:
-        print("\n  OPEN — started, never settled")
-        for n in payload["open"]:
+            print(f"      {', '.join(c['ids'][:8])}{more}")
+    for key, heading in BANDS:
+        if not payload[key]:
+            continue
+        print(f"\n  {heading}")
+        for n in payload[key]:
             print(f"    {n['id']:24}  {n['title']}")
-    if payload["unchecked"]:
-        print("\n  UNCHECKED — alive, but no gate has ruled on them")
-        for n in payload["unchecked"]:
-            print(f"    {n['id']:24}  {n['title']}")
-    if payload["reopenable"]:
-        print("\n  REOPENABLE — died, but said what would bring them back")
-        for n in payload["reopenable"]:
-            print(f"    {n['id']:24}  {n['title']}")
-            print(f"      reopen if : {n['reopen_if'][:120]}…")
-    if payload["untested_gates"]:
-        print("\n  UNTESTED GATES — no claim has been through them")
-        for n in payload["untested_gates"]:
-            print(f"    {n['id']:24}  {n['title']}")
-    if not (payload["open"] or payload["unchecked"] or payload["reopenable"]
-            or payload["untested_gates"]):
+            if offer := n.get("reopen_if"):
+                print(f"      reopen if : {offer[:120]}…")
+    if not any(payload[key] for key, _ in BANDS):
         print("  nothing open, nothing reopenable, every gate has fired.")
     if note := payload.get("note"):
         print(f"\n  {note}")
@@ -458,25 +445,19 @@ def _links(pairs) -> list[dict]:
 
 
 def render_reward(c: dict) -> None:
-    """What a compression freed, in the numbers a reader would praise. Printed by both
-    commit and update, so a general node built either way is told the same thing."""
+    """What a compression freed. Printed by both commit and update, so a general node
+    built either way is told the same thing."""
     if len(c["targets"]) == 1:
         t = c["targets"][0]
         print(f"    replaces {t}; {t} is now superseded")
         return
-    print(f"    compressed {_plural(len(c['targets']), c['type'])} into 1 under {c['question'] or '(no question)'}")
-    if c["gates_bonus"]:
-        print(f"    survived {_plural(c['gates'], 'gate')}, one more than any of them faced alone")
-    else:
-        print(f"    survived the {_plural(c['gates'], 'gate')} they faced")
-    if c["free"] is not None:
-        # A partial compression on an over-cap graph is a real gain that still leaves the
-        # question over budget. "-1 of 3 slots free" reads as a bug; say the overdraft, in
-        # the words `frontier` uses for the same number.
-        print(f"    {-c['free']} still over the {c['count']} budget under this question"
-              if c["free"] < 0 else
-              f"    {c['free']} of {c['count']} slots free under this question again")
-    print(f"    this graph now stands on {_plural(c['rules'], 'rule')} and {_plural(c['specifics'], 'specific')}")
+    print(f"    compressed {_plural(len(c['targets']), c['type'])} into 1 under "
+          f"{c['question'] or '(no question)'}")
+    print(f"    survived {_plural(c['gates'], 'gate')}, one more than any of them faced alone"
+          if c["gates_bonus"] else
+          f"    survived the {_plural(c['gates'], 'gate')} they faced")
+    print(f"    this graph now stands on {_plural(c['rules'], 'rule')} and "
+          f"{_plural(c['specifics'], 'specific')}")
 
 
 def render_commit(payload: dict) -> None:
@@ -627,9 +608,9 @@ rules:
     require_sections: Setup, How to reproduce, Result
     message: An experiment I cannot rerun is an anecdote.
 
-  # --- the round, and its ceiling ---------------------------------------------------
+  # --- the round -------------------------------------------------------------------
   # Each step names the one before it, so a claim can always be walked back to what was
-  # read. The last rule is the ceiling: past it, the graph asks for a rule, not a result.
+  # read. When `knoten frontier` reports a COMPRESSIBLE cluster, write the rule.
   - id: ideas-come-from-sources
     when_type: idea
     require_edge_target: {{rel: prov:wasDerivedFrom, type: source, finding, min: 1}}
@@ -678,9 +659,6 @@ rules:
       How to rerun it belongs on the experiment. A finding that carries its own `repro`
       is a second copy that will drift from the first.
 
-  - id: compress-before-you-accumulate
-    max_alive: {{type: finding, per: question, count: 12}}
-    message: Twelve live findings under one question and no rule above them. Compress first.
 """
 
 TEMPLATE_QUESTION = """\
