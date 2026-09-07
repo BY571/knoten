@@ -128,13 +128,14 @@ conflict here, and `knoten pull` then names the file and what to run next.
 ## Compress before you accumulate
 
 A graph that only grows is a notebook. Every few findings, and always when
-`knoten frontier` lists a `compressible` cluster, stop and ask what single statement
+`knoten frontier` lists a `COMPRESSIBLE` cluster, stop and ask what single statement
 would make several of them unnecessary. Write that statement as a new node that
-`npx:supersedes` each of them, cite every gate any of them survived, and say in
-`## Covers` what each specific result contributed and what the general one drops. The
-specifics stay, superseded, with their numbers; `knoten index` stops listing them. A
-general node is held to the union of the bars its specifics faced, so a compression is
-not a summary, it is a stronger claim.
+`npx:supersedes` each of them, cite every gate any of them survived, and give it a
+`## Covers` section that names each superseded node by its id, one per line, with what
+that specific result contributed and what the general one drops. The specifics stay,
+superseded, with their numbers; `knoten index` stops listing them. A general node is held
+to the union of the bars its specifics faced, so a compression is not a summary, it is a
+stronger claim.
 
 The graph will refuse a new finding once a question holds more live findings than its
 budget. That refusal is not an error; it is the graph telling you it has learned enough

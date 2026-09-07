@@ -96,7 +96,10 @@ open ──► alive ──────► superseded
 ```
 
 The engine applies the superseded arrow: a node that supersedes another flips it, and must
-first face every gate it survived.
+first face every gate it survived. The node doing the superseding is itself of a
+compressible type (§6); every target is alive, or already superseded by that same node.
+And a `superseded` node always has an alive node superseding it: retract the general claim
+and the graph says so, rather than leaving findings standing for nothing.
 
 Every arrow is walkable via `knoten update`, which appends and moves the status but cannot
 rewrite a claim. Immutability protects **what was claimed**, never the status: the status
@@ -230,7 +233,7 @@ rules:
 | `message` | what the human reads when it fires. |
 | `when_status` / `when_type` | only apply to these statuses / types (comma-separated). |
 | `unless_edge` | `<rel>`: skip the rule for a node that declares that relation. |
-| `max_alive` | `{type, per, count}`: a graph-level ceiling, attributed to the newest nodes past it. |
+| `max_alive` | `{type, per, count}`: a graph-level ceiling, attributed to the newest nodes past it. `per` is `question` (the default) or `graph`. |
 | `require_edge` | node must declare this relation. |
 | `require_sections` | body must contain these `## ` headings. |
 | `require_field` | frontmatter must carry this key, with any non-empty value. |
@@ -277,9 +280,10 @@ would silently vanish from every query.
 Always-on structural checks, which no graph declares: `dangling-edge`,
 `missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
 `unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`, `mismatched-id`,
-`malformed-results`, `malformed-repro`, `supersession` (the bar of §3: alive targets of a
-compressible type, one shared question, the union of the gates they survived, and a
-`## Covers` section naming each), and `not-a-gate` (a migration aid, deletable once
+`malformed-results`, `malformed-repro`, `supersession` (the bar of §3: a superseder of a
+compressible type over alive targets of a compressible type, one shared question, the
+union of the gates they survived, a `## Covers` section naming each, and no superseded
+node left without an alive superseder), and `not-a-gate` (a migration aid, deletable once
 graphs written before the gate rename have moved).
 
 A biology graph declares entirely different rules. The core never changes.

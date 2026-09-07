@@ -8,10 +8,10 @@ links:
   - {rel: kn:tests, to: hyp-self-consistency}
   - {rel: prov:wasDerivedFrom, to: question-what-improves-reasoning}
 repro:
-  script: attachments/exp-self-consistency-budget/budget_sweep.py
+  script: experiments/budget_sweep.py
   model: Qwen3-1.7B, Qwen3-8B, Qwen3-32B
   data: GSM8K test, 40 held-out questions per arm
-  cmd: python attachments/exp-self-consistency-budget/budget_sweep.py --arms matched --n 40
+  cmd: python experiments/budget_sweep.py --arms matched --n 40
 ---
 
 # Self-consistency against a compute-matched baseline, at three model sizes
@@ -33,7 +33,7 @@ comparison measures the aggregation and not the spend.
 ## How to reproduce
 
 ```bash
-python attachments/exp-self-consistency-budget/budget_sweep.py --arms matched --n 40
+python experiments/budget_sweep.py --arms matched --n 40
 ```
 
 The script prints one row per model with both arms and the token count it actually

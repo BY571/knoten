@@ -192,7 +192,8 @@ available:
 
 Three or more alive findings under one question that share a gate or a tag are a
 `COMPRESSIBLE` cluster, printed above the open work: the graph pointing at the rule it is
-ready for. The slots are yours to declare:
+ready for. The header above names none because this example is one finding short of a
+cluster. The slots are yours to declare:
 
 ```yaml
 rules:
