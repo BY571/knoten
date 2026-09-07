@@ -226,4 +226,5 @@ def compression_report(root: Path, node: Node, flipped: list[str]) -> dict | Non
     return {"targets": targets, "flipped": flipped, "gates": len(faced),
             "gates_bonus": len(faced) > most, "question": q,
             "free": slot["free"] if slot else None, "count": slot["count"] if slot else None,
-            "rules": s["rules"], "specifics": s["specifics"]}
+            "rules": s["rules"], "specifics": s["specifics"],
+            "type": "/".join(sorted(target_types)) if target_types else "finding"}

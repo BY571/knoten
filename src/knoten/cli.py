@@ -422,7 +422,7 @@ def render_reward(c: dict) -> None:
         t = c["targets"][0]
         print(f"    replaces {t}; {t} is now superseded")
         return
-    print(f"    compressed {_plural(len(c['targets']), 'finding')} into 1 under {c['question'] or '(no question)'}")
+    print(f"    compressed {_plural(len(c['targets']), c['type'])} into 1 under {c['question'] or '(no question)'}")
     if c["gates_bonus"]:
         print(f"    survived {_plural(c['gates'], 'gate')}, one more than any of them faced alone")
     else:

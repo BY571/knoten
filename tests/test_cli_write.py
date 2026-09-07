@@ -294,6 +294,7 @@ def test_the_reward_is_in_the_json_payload_too(four_findings, capsys):
 
     assert c["targets"] == ["finding-1", "finding-2", "finding-3"]
     assert c["gates"] == 2 and c["gates_bonus"] and (c["free"], c["count"]) == (4, 6)
+    assert c["type"] == "finding"
 
 
 def test_a_single_replacement_says_so_in_one_line(four_findings, tmp_path, capsys):
@@ -308,3 +309,37 @@ def test_a_single_replacement_says_so_in_one_line(four_findings, tmp_path, capsy
 
     assert "replaces finding-4; finding-4 is now superseded" in out
     assert "compressed" not in out
+
+
+PRINCIPLE_COMP = """\
+name: t
+statuses: [open, alive, superseded]
+node_types: [question, principle, gate]
+compressible: [principle]
+rules: []
+"""
+
+
+def test_a_compression_of_principles_names_its_own_type(graph, monkeypatch, tmp_path, capsys):
+    graph.rules(PRINCIPLE_COMP)
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("principle-1", "id: principle-1\ntype: principle\nstatus: alive\nlinks:\n"
+                              "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                              "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n")
+    graph.node("principle-2", "id: principle-2\ntype: principle\nstatus: alive\nlinks:\n"
+                              "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                              "  - {rel: kn:survivedGate, to: gate-a}", "# 2\n")
+    fm = tmp_path / "fm.yaml"
+    fm.write_text("type: principle\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: principle-1}\n"
+                  "  - {rel: npx:supersedes, to: principle-2}\n"
+                  "  - {rel: kn:survivedGate, to: gate-a}\n", encoding="utf-8")
+    body = tmp_path / "body.md"
+    body.write_text("# G\n\n## Covers\n- principle-1: a\n- principle-2: b\n", encoding="utf-8")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["commit", "principle-g", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "compressed 2 principles into 1 under question-q" in out
