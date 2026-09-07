@@ -578,6 +578,33 @@ def test_the_folded_switch_and_cluster_button_are_pressable_buttons(small):
     assert re.search(r'<button id=clusters aria-pressed=false>', html)
 
 
+def test_the_page_leaves_the_browsers_own_shortcuts_alone(small):
+    """ctrl+F is find, cmd+A selects the page, alt+v opens a menu. Reading the letter and
+    ignoring the modifier answered shortcuts nobody aimed at the page."""
+    html = viz.render(small.root)
+
+    assert "if (e.ctrlKey || e.metaKey || e.altKey) return;" in html
+
+
+def test_the_cluster_ring_does_not_overwrite_the_selection(small):
+    """The second cluster's ring was written as an inline `box-shadow`, the same property
+    the selection and the broken outline use: whichever was set last won, so a card in two
+    clusters could not be shown as selected. They compose through `--ring2` instead."""
+    html = viz.render(small.root)
+
+    assert "box-shadow:var(--ring2,0 0 #0000),var(--shadow)" in html
+    assert 'setProperty("--ring2"' in html
+    assert "style.boxShadow" not in html
+
+
+def test_the_record_says_what_a_rule_claims_but_does_not_hang(small):
+    """A rule whose target another rule claimed first hangs nothing, and the card says
+    `covers 0` over a list of two. The record marks which entries are outside the fold."""
+    html = viz.render(small.root)
+
+    assert "not hung: claimed by " in html and "not hung: missing" in html
+
+
 def test_the_watch_seat_remembers_the_fold(small):
     html = viz.render(small.root, reload_ms=2000)
 

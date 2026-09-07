@@ -87,15 +87,20 @@ body.map .card,body.map .colhead{display:none}
 .colhead .role{display:block;margin-top:2px;font:600 9px var(--mono);letter-spacing:.11em;
   text-transform:uppercase;color:var(--ink-3)}
 
+/* Two shadows, composed: `--shadow` is the card's state (selected, broken, hovered) and
+   `--ring2` is the second cluster a card belongs to. Written as one `box-shadow` each,
+   the cluster ring overwrote the selection and the broken outline -- a card in two
+   clusters could not be shown as selected. */
 .card{position:absolute;width:250px;text-align:left;background:var(--surface);
   border:1px solid var(--line);border-left:3px solid var(--edge,var(--line-2));
   border-radius:var(--r);padding:9px 11px 9px 10px;font:inherit;color:inherit;cursor:pointer;
-  box-shadow:0 1px 1px #15161a08;transition:box-shadow .13s,border-color .13s,transform .13s}
-.card:hover{box-shadow:0 3px 10px #15161a12;transform:translateY(-1px)}
+  --shadow:0 1px 1px #15161a08;box-shadow:var(--ring2,0 0 #0000),var(--shadow);
+  transition:box-shadow .13s,border-color .13s,transform .13s}
+.card:hover{--shadow:0 3px 10px #15161a12;transform:translateY(-1px)}
 .card:focus-visible{outline:2px solid var(--active);outline-offset:2px}
-.card.on{border-color:var(--ink);box-shadow:0 4px 14px #15161a1f}
+.card.on{border-color:var(--ink);--shadow:0 4px 14px #15161a1f}
 .card.faded{opacity:.34}
-.card.broken{border-color:var(--dead);box-shadow:0 0 0 1px var(--dead) inset}
+.card.broken{border-color:var(--dead);--shadow:0 0 0 1px var(--dead) inset}
 .card .broke{display:block;margin-top:7px;padding-top:6px;border-top:1px solid var(--line);
   font:600 10px var(--mono);letter-spacing:.03em;color:var(--dead)}
 #dots circle.cell.broken{stroke:var(--dead);stroke-width:2.5}
@@ -106,12 +111,15 @@ body.map .card,body.map .colhead{display:none}
 .card .ttl{display:-webkit-box;font-size:12.5px;line-height:1.35;font-weight:520;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card.closed .ttl{text-decoration:line-through;text-decoration-color:var(--dead);color:var(--ink-2)}
-.card .id{display:block;margin-top:5px;font:10.5px/1 var(--mono);color:var(--ink-3)}
+/* A row, not a line: the id sits left and the `covers N` chip right, so a rule card is
+   exactly as tall as every other card and the column layout's rows still line up. */
+.card .id{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  margin-top:5px;font:10.5px/1 var(--mono);color:var(--ink-3)}
 .card .verdict{float:right;margin-left:8px;font:600 9.5px/1 var(--sans);letter-spacing:.07em;
   text-transform:uppercase;color:var(--edge)}
 /* A span, not a button: a button inside the card's button is invalid HTML, and the
    browser that flattens it drops the card's own click. */
-.card .covers{display:inline-block;margin-top:8px;padding:3px 8px;border-radius:99px;
+.card .covers{flex:none;padding:2px 7px;border-radius:99px;
   background:#F0F0EC;font:600 10px/1.3 var(--mono);letter-spacing:.04em;color:var(--ink-2)}
 .card .covers:hover{background:#E6E5DE;color:var(--ink)}
 .rail{display:flex;gap:2px;align-items:center;margin-top:8px;padding-top:7px;
@@ -169,6 +177,7 @@ dd{margin:0;font-variant-numeric:tabular-nums}
 .link:hover{background:#F2F2EE}
 .link:focus-visible{outline:2px solid var(--active);outline-offset:-2px}
 .link small{display:block;color:var(--ink-3);font-size:11px}
+.link small.mark{color:var(--dead);font:600 10px var(--mono);letter-spacing:.03em}
 .blank{margin-top:64px;text-align:center;color:var(--ink-3);font-size:13px}
 #panel h3.field{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;
   color:var(--ink-3);margin:.7em 0 .25em}
@@ -341,6 +350,16 @@ DATA.columns.forEach((c, i) => {
   stage.append(h);
 });
 
+// What actually hangs under a node. `covers` is what it CLAIMS to supersede; `under` is
+// who the payload settled on when two rules claimed the same node, and only the second
+// decides where a card is drawn.
+const hung = r => (r.covers || []).filter(id => byId[id] && byId[id].under === r.id);
+// What can be opened: anything with cards hanging under it. Not `rule`, which is the
+// badge -- a general node still alive and still standing for what it retired. The two
+// part company on a rule that was itself retired by an outer rule: it keeps its own
+// findings inside it, and a card with no chip is a fold with no handle.
+const opens = n => hung(n).length > 0 || n.rule;
+
 const cardOf = {}, dotOf = {}, chipOf = {};
 for (const n of DATA.nodes){
   const bad = (DATA.violations || {})[n.id] || [];
@@ -350,8 +369,9 @@ for (const n of DATA.nodes){
   b.style.setProperty("--edge", vc(n));
   // A rule's verdict slot says `rule`, not `alive`. Every rule is alive — that is what
   // makes it a rule — so the status is the one word on the card that says nothing.
+  const idline = el("span","id", n.id);
   b.append(el("span","verdict", n.rule ? "rule" : (n.status || "?")),
-           el("span","ttl", n.title || n.id), el("span","id", n.id));
+           el("span","ttl", n.title || n.id), idline);
   if (DATA.gate_types.includes(n.type)){
     const killed = n.backlinks.filter(x => x.rel === "kn:gateKilled").length;
     const kept = n.backlinks.filter(x => x.rel === "kn:gateSurvivedBy").length;
@@ -367,13 +387,15 @@ for (const n of DATA.nodes){
   }
   if (bad.length) b.append(el("span", "broke",
     `✗ ${bad.length} rule${bad.length > 1 ? "s" : ""} this graph declared`));
-  if (n.rule){
+  if (opens(n)){
     // The chip opens the fold; the rest of the card still selects. `data-toggle` is what
-    // the `o` key reads, so the fold is reachable without a pointer.
+    // the `o` key reads, so the fold is reachable without a pointer. It goes on the id's
+    // row, not under it: a line of its own made a rule card taller than the 86 px slot
+    // the column layout leaves, and every card below it overlapped.
     const chip = el("span", "covers");
     chip.onclick = e => { e.stopPropagation(); toggle(n.id); };
     b.dataset.toggle = n.id;
-    b.append(chip); chipOf[n.id] = chip;
+    idline.append(chip); chipOf[n.id] = chip;
   }
   b.onclick = () => select(n.id);
   b.onmouseenter = () => focus(n.id); b.onmouseleave = () => focus(sel);
@@ -382,10 +404,10 @@ for (const n of DATA.nodes){
   const g = mk("g", {}); g.style.cursor = "pointer";
   const halo = mk("circle", {class:"halo", r:0});
   const cell = mk("circle", {class:"cell" + ((DATA.violations||{})[n.id] ? " broken" : ""), r:6});
-  // A rule's dot wears a second ring and says what it covers, so the map has landmarks
-  // you can read without hovering every one of them.
-  const ring = n.rule ? mk("circle", {class:"ring", r:0}) : null;
-  const t = mk("text", {y:19}), sub = n.rule ? mk("text", {}) : null;
+  // A dot that holds a fold wears a second ring and says what it covers, so the map has
+  // landmarks you can read without hovering every one of them.
+  const ring = opens(n) ? mk("circle", {class:"ring", r:0}) : null;
+  const t = mk("text", {y:19}), sub = opens(n) ? mk("text", {}) : null;
   g.append(halo, cell); if (ring) g.append(ring);
   g.append(t); if (sub) g.append(sub);
   g.onclick = () => select(n.id);
@@ -417,11 +439,6 @@ let VIEW = "columns", sel = null;
 // specifics are inside it until you ask. `open` is the set of rules a reader has opened.
 let FOLD = true, CLUSTERS = false;
 const open = new Set();
-
-// What actually hangs under a rule. `covers` is what the node CLAIMS to supersede;
-// `under` is who the payload settled on when two alive rules claimed the same node, and
-// only the second decides where a card is drawn.
-const hung = r => (r.covers || []).filter(id => byId[id] && byId[id].under === r.id);
 
 // Every rule's hung rows, once per frame. For each rule: which row each hung card takes
 // (leaving room for the subtree of an opened rule in front of it), which slot it has on
@@ -555,6 +572,10 @@ function place(){
       p.classList.toggle("back", back);
     }
   }
+  // Every node covered by another takes a ring of alive supersessions, which `validate`
+  // refuses -- but the page draws graphs that break their own rules, and Math.min() of
+  // nothing is Infinity. Keep the last frame's box and leave `all` to get the reader out.
+  if (!ids.length) return;
   const xs = ids.map(id => P[id][0]), ys = ids.map(id => P[id][1]);
   const pad = map ? 120 : 60;
   const x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - (map ? pad : TOPPAD);
@@ -640,7 +661,7 @@ const shared = c => Object.values(c.shared)[0];
 function drawClusters(P){
   for (const n of DATA.nodes){
     cardOf[n.id].style.outline = "";
-    cardOf[n.id].style.boxShadow = "";
+    cardOf[n.id].style.removeProperty("--ring2");
     delete cardOf[n.id].dataset.cluster;
   }
   if (!CLUSTERS) return;
@@ -657,7 +678,8 @@ function drawClusters(P){
       const card = cardOf[id], had = card.dataset.cluster;
       card.dataset.cluster = had ? had + " " + i : String(i);
       if (!had) card.style.outline = "2px solid " + col;
-      else if (!card.style.boxShadow) card.style.boxShadow = "0 0 0 5px " + col;
+      else if (!card.style.getPropertyValue("--ring2"))
+        card.style.setProperty("--ring2", "0 0 0 5px " + col);
     }
     if (VIEW !== "map") return;
     const cx = ids.reduce((t, id) => t + P[id][0], 0) / ids.length;
@@ -683,7 +705,7 @@ function setClusters(on){
 }
 
 // ---------------- the record ----------------
-function relations(title, list){
+function relations(title, list, mark){
   if (!list.length) return;
   panel.append(el("h3", null, title));
   const groups = {};
@@ -696,6 +718,8 @@ function relations(title, list){
     for (const to of groups[rel]){
       const b = el("button", "link", to);
       if (byId[to]) b.append(el("small", null, byId[to].title.slice(0, 60)));
+      const m = mark && mark(to);
+      if (m) b.append(el("small", "mark", m));
       b.onclick = () => select(to); g.append(b);
     }
     panel.append(g);
@@ -739,13 +763,27 @@ function lifecycle(n){
   }
   return st;
 }
+// Why an entry a node claims is not one the page hangs under it. `under` is what the
+// payload settled: a target another rule claimed first hangs there, and a target that has
+// left the graph hangs nowhere. Unmarked, the record listed three ids under `covers 2`
+// and left the reader to work out which one was not in the fold.
+const notHung = n => to => {
+  const t = byId[to];
+  if (!t) return "not hung: missing";
+  if (t.under === n.id) return "";
+  if (t.under) return "not hung: claimed by " + t.under;
+  if (to === n.id) return "not hung: itself";
+  return "not hung: " + (t.status === "alive" ? "not retired" : "not alive");
+};
 const CALLOUT = ["Why it died", "What would reopen this"];
 function select(id){
   sel = id; const n = byId[id];
   panel.textContent = ""; panel.scrollTop = 0;
   // `hung`, not `covers`: the same count the chip and the dot show, so the record cannot
-  // say 3 where the page folds 2.
-  const eyebrow = n.rule ? `${n.type} · rule · covers ${hung(n).length}` : n.type;
+  // say 3 where the page folds 2. `rule` is the badge and is not the same question as
+  // whether anything hangs here, so the eyebrow says each part only when it is true.
+  const eyebrow = [n.type, n.rule ? "rule" : null,
+                   opens(n) ? `covers ${hung(n).length}` : null].filter(Boolean).join(" · ");
   panel.append(el("div", "eyebrow", eyebrow), el("h2", null, n.title || n.id), lifecycle(n));
   const broke = (DATA.violations || {})[n.id] || [];
   if (broke.length){
@@ -793,9 +831,14 @@ function select(id){
   facts("results", n.results); facts("repro", n.repro);
   if (n.attachments.length) facts("attachments", Object.fromEntries(n.attachments.map(a => [a, ""])));
   // Before `cites`: what a rule retired is the first thing to know about it, and it is
-  // otherwise buried among its own citations.
-  if (n.rule) relations("covers", n.covers.map(to => ({rel:"npx:supersedes", to})));
-  relations("cites", n.links); relations("cited by", n.backlinks);
+  // otherwise buried among its own citations. The heading counts what the page actually
+  // hangs; every claimed id is listed, and the ones outside the fold say why.
+  const covers = opens(n);
+  if (covers) relations(`covers ${hung(n).length}`,
+                        n.covers.map(to => ({rel:"npx:supersedes", to})), notHung(n));
+  // Those same edges under `cites` too would read as a second, longer set of targets.
+  relations("cites", covers ? n.links.filter(l => l.rel !== "npx:supersedes") : n.links);
+  relations("cited by", n.backlinks);
   if (VIEW === "map"){
     const i = trail.indexOf(id);
     trail = i >= 0 ? trail.slice(0, i + 1) : [...trail, id];
@@ -980,6 +1023,9 @@ document.getElementById("f-folded").onclick = () => setFold(true);
 document.getElementById("f-all").onclick = () => setFold(false);
 document.getElementById("clusters").onclick = () => setClusters(!CLUSTERS);
 addEventListener("keydown", e => {
+  // ctrl+F is the browser's find, cmd+A selects the page, alt+v opens a menu. A page that
+  // reads the letter and ignores the modifier answers a shortcut nobody aimed at it.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "f") fit();
   if (e.key === "v") setView(VIEW === "columns" ? "map" : "columns");
   if (e.key === "a") setFold(!FOLD);
