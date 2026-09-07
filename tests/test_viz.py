@@ -261,3 +261,18 @@ def test_the_views_are_cards_graph_and_metrics_only_when_declared(small):
 
     assert ">cards</button>" in html and ">graph</button>" in html
     assert 'getElementById("v-metrics").hidden = true' in html
+
+
+def test_the_page_script_parses(small, tmp_path):
+    """A blank page with a working header is what a syntax error in the inline script
+    looks like; nothing in Python can see it. `node --check` can, where node exists."""
+    import shutil, subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    html = viz.render(small.root)
+    script = html[html.index("<script>") + len("<script>"):html.rindex("</script>")]
+    (tmp_path / "page.js").write_text(script, encoding="utf-8")
+    r = subprocess.run([node, "--check", str(tmp_path / "page.js")], capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
