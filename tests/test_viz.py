@@ -371,3 +371,95 @@ def test_the_record_panel_orders_by_the_scaffold(small):
 
     assert "for (const p of PANEL_SECTIONS){" in html
     assert 'el("h3", "field", p.label)' in html
+
+
+Q = "id: question-q\ntype: question\nstatus: open\ncreated: 2026-01-01"
+GATE_H = "id: gate-h\ntype: gate\nstatus: active\ncreated: 2026-01-01"
+
+
+def _finding(i, status="alive", extra=""):
+    return (f"id: finding-{i}\ntype: finding\nstatus: {status}\ncreated: 2026-01-0{i}\nlinks:\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-h}" + extra)
+
+
+@pytest.fixture
+def compressed(graph):
+    """Two specifics retired by one rule, one specific still alive, and one orphan."""
+    graph.rules("name: t\nnode_types: [question, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules: []\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2):
+        graph.node(f"finding-{i}", _finding(i, "superseded"), f"# {i}\n")
+    graph.node("finding-3", _finding(3), "# 3\n")
+    graph.node("finding-4", _finding(4, "superseded"), "# orphan\n")     # nothing alive covers it
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\ncreated: 2026-01-05\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}",
+               "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+    return graph
+
+
+def test_the_payload_says_who_covers_whom(compressed):
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert by["finding-g"]["rule"] is True and by["finding-g"]["covers"] == ["finding-1", "finding-2"]
+    assert by["finding-1"]["under"] == "finding-g" and by["finding-3"]["under"] is None
+    assert by["finding-4"]["under"] is None and by["finding-4"]["status"] == "superseded"
+    assert by["finding-3"]["rule"] is False and by["finding-3"]["covers"] == []
+
+
+def test_the_folded_layout_holds_only_visible_nodes(compressed):
+    p = viz.payload(compressed.root)
+
+    assert set(p["folded"]) == {"question-q", "gate-h", "finding-3", "finding-4", "finding-g"}
+    assert all({"columns", "map"} <= set(v) for v in p["folded"].values())
+    assert set(p["folded_walls"]) <= set(p["folded"]) | {"unattached"}
+
+
+def test_a_compression_moves_nothing_in_the_full_layout(compressed):
+    before = {n["id"]: (n["columns"], n["map"]) for n in viz.payload(compressed.root)["nodes"]}
+    # Compress finding-3 too, under a second rule, as the engine would leave the files.
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-r", "id: finding-r\ntype: finding\nstatus: alive\ncreated: 2026-01-06\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-3}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# R\n\n## Covers\n- finding-3: c\n")
+
+    after = {n["id"]: (n["columns"], n["map"]) for n in viz.payload(compressed.root)["nodes"]}
+
+    assert all(after[i] == before[i] for i in before)
+
+
+def test_appending_moves_nothing_in_the_folded_layout(compressed):
+    before = viz.payload(compressed.root)["folded"]
+    compressed.node("finding-9", _finding(9), "# 9\n")
+
+    after = viz.payload(compressed.root)["folded"]
+
+    assert all(after[i] == before[i] for i in before)
+
+
+def test_the_payload_carries_the_shape_and_the_clusters(compressed):
+    compressed.node("finding-5", _finding(5), "# 5\n").node("finding-6", _finding(6), "# 6\n")
+
+    p = viz.payload(compressed.root)
+
+    assert p["shape"]["rules"] == 1 and p["shape"]["specifics"] == 3
+    assert p["shape"]["clusters"] == 1
+    assert p["clusters"][0]["shared"] == {"gate": "gate-h"}
+    assert p["clusters"][0]["ids"] == ["finding-3", "finding-5", "finding-6"]
+
+
+def test_a_max_alive_rule_reaches_the_page(compressed):
+    (compressed.root / "graph.yaml").write_text(
+        "name: t\nnode_types: [question, finding, gate]\nstatuses: [open, alive, superseded, active]\n"
+        "rules:\n  - id: cap\n    max_alive: {type: finding, per: question, count: 4}\n    message: m\n",
+        encoding="utf-8")
+
+    p = viz.payload(compressed.root)
+
+    assert p["graph"]["rules"][0]["max_alive"] == {"type": "finding", "per": "question", "count": 4}
+    assert p["shape"]["budget"] == [{"question": "question-q", "type": "finding", "free": 2, "count": 4}]

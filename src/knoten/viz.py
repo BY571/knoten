@@ -12,13 +12,15 @@ not wherever its vocabulary says they should be.
 Layout is a pure function of the graph. Nothing is persisted: positions are derived state,
 and a `layout.json` in git would be a merge conflict generator with ten agents appending.
 """
+import dataclasses
 import hashlib
 import json
 import math
 import time
 from pathlib import Path
 
-from .core import GATE_TYPE, GraphError, load, section
+from .core import (GATE_TYPE, GraphError, compressible, compressible_types, is_general,
+                   load, section, shape, supersedes)
 from .validate import check, load_config
 
 HERE = Path(__file__).parent
@@ -196,6 +198,42 @@ def layout(nodes: dict) -> dict:
     return {"columns": _columns(nodes), "map": pos}
 
 
+def _under(nodes: dict) -> dict:
+    """Who covers whom: the ALIVE node that supersedes each id, or None. Several alive
+    superseders is a validate violation; the first by id is taken so the page still
+    draws."""
+    under = {}
+    for n in sorted(nodes.values(), key=lambda n: n.id):
+        if n.status != "alive":
+            continue
+        for t in supersedes(n):
+            if t in nodes and t != n.id:
+                under.setdefault(t, n.id)
+    return under
+
+
+def _visible(nodes: dict, under: dict) -> dict:
+    """The graph with the covered layer folded away. Its own layout, so a compression
+    shrinks the picture; hung positions are derived on the page, never stored."""
+    return {nid: n for nid, n in nodes.items() if nid not in under}
+
+
+def _inherited(nodes: dict, visible: dict, under: dict) -> dict:
+    """`visible`, with a coverer also carrying what it covers' links. `_map` clusters on
+    degree, and a covered node's edges do not vanish when it is folded away — they are
+    now the coverer's business. Without this, appending a leaf that happens to touch a
+    node the covered layer used to touch could tip the folded map's hub selection, since
+    a handful of survivors is a much smaller graph than the one `_map` was tuned on."""
+    covers = {}
+    for covered, coverer in under.items():
+        covers.setdefault(coverer, []).append(covered)
+    out = {}
+    for nid, n in visible.items():
+        extra = [l for cid in covers.get(nid, []) for l in nodes[cid].links]
+        out[nid] = dataclasses.replace(n, links=n.links + extra) if extra else n
+    return out
+
+
 SECTION_LIMIT = 4000
 
 
@@ -248,6 +286,17 @@ def payload(root: Path) -> dict:
     pos, walls = _map(nodes)
     columns = _columns(nodes)
 
+    # Who covers whom, and the graph with the covered layer folded away: its own layout,
+    # so a compression shrinks the picture on the page that shows it.
+    under = _under(nodes)
+    visible = _visible(nodes, under)
+    fpos, fwalls = _map(_inherited(nodes, visible, under))
+    fcols = _columns(visible)
+    # A node that already generalises others is not itself a candidate to be generalised
+    # further — clusters name what is still loose, not what already did the compressing.
+    specific_nodes = {nid: n for nid, n in nodes.items() if not is_general(n)}
+    clusters = compressible(specific_nodes, compressible_types(cfg))
+
     # A graph may declare `node_types` as a plain list, or as a mapping of type -> what
     # that word means here. Only the second can fill the legend.
     # What the graph's own rules say is wrong with it. Without this the page renders a
@@ -265,6 +314,10 @@ def payload(root: Path) -> dict:
         "shelf_types": sorted(shelves),
         "walls": walls,
         "violations": broken,
+        "folded": {nid: {"columns": fcols[nid], "map": fpos[nid]} for nid in visible},
+        "folded_walls": fwalls,
+        "shape": {**shape(nodes, cfg), "clusters": len(clusters)},
+        "clusters": clusters,
         "graph": {
             "name": cfg.get("name"),
             # `node_types` is a list when a graph only declares its vocabulary, and a
@@ -272,7 +325,7 @@ def payload(root: Path) -> dict:
             "vocab": types if isinstance(types, dict) else {},
             "rules": [{k: r.get(k) for k in
                        ("id", "when_type", "when_status", "require_edge",
-                        "require_sections", "message")}
+                        "require_sections", "max_alive", "message")}
                       for r in (cfg.get("rules") or [])],
         },
         "nodes": [{
@@ -285,6 +338,7 @@ def payload(root: Path) -> dict:
                          for t in n.sections],
             "results": n.results, "repro": n.repro, "attachments": n.attachments,
             "columns": columns[n.id], "map": pos[n.id],
+            "rule": is_general(n), "covers": supersedes(n), "under": under.get(n.id),
         } for n in _order(nodes)],
     }
 
