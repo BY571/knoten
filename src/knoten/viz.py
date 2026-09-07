@@ -1,26 +1,23 @@
 """One HTML file: the graph as columns, and the graph as a map.
 
 Read-only, self-contained, no server and no build step. The payload is inlined, so the
-file opens from `file://`, from a share, from a plane.
+file opens from `file://`.
 
-Two views because there are two questions. **Columns** is the inventory — what exists, in
-what role, with what verdict — laid out left to right along the loop a graph declares.
-**Map** is the traversal — what a claim rests on and what else that touched — laid out
-around the busiest nodes, because a graph's landmarks are wherever its edges converge and
-not wherever its vocabulary says they should be.
+Two views because there are two questions. **Columns** is the inventory, laid out along
+the loop a graph declares. **Map** is the traversal, laid out around the busiest nodes:
+a graph's landmarks are wherever its edges converge, not wherever its vocabulary says.
 
-Layout is a pure function of the graph. Nothing is persisted: positions are derived state,
-and a `layout.json` in git would be a merge conflict generator with ten agents appending.
+Layout is a pure function of the graph. Nothing is persisted: a `layout.json` in git
+would be a merge conflict generator with ten agents appending.
 """
-import dataclasses
 import hashlib
 import json
 import math
 import time
 from pathlib import Path
 
-from .core import (GATE_TYPE, GraphError, compressible, compressible_types, is_general,
-                   load, section, shape, supersedes, under)
+from .core import (GATE_TYPE, GraphError, is_general, load, section, shape, supersedes,
+                   under)
 from .validate import check, load_config
 
 HERE = Path(__file__).parent
@@ -37,10 +34,8 @@ RAIL = 28
 # place, so appending a node never disturbs 1..k-1.
 GOLDEN = math.pi * (3 - math.sqrt(5))
 SPACING = 33
-# Clusters sit on the same spiral, at a fixed spacing. Dividing a ring by the cluster
-# COUNT would rotate every cluster the moment a new one appeared — one isolated node
-# appended, and the whole map turns. A constant spacing lets a very large cluster graze
-# its neighbour; that is the cheaper failure, and it is local.
+# Clusters sit on the same spiral at a FIXED spacing: dividing a ring by the cluster
+# count would turn the whole map the moment one isolated node was appended.
 CLUSTER = SPACING * 7.5
 
 GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
@@ -51,10 +46,8 @@ FLOW = ["question", "source", "idea", "hypothesis", "experiment", "finding",
         "blocker", "retraction"]
 
 
-# A node with no `created` is almost always one written by hand or by another tool —
-# `knoten new` and `knoten commit` both stamp it. Sorting it EMPTY-STRING-FIRST put it in
-# slot 0 and pushed every existing node along, which is the one thing this layout promises
-# not to do. Undated work sorts last, with the newest, where an unknown arrival belongs.
+# Undated work sorts LAST, with the newest: empty-string-first put it in slot 0 and
+# pushed every existing node along, the one thing this layout promises not to do.
 UNDATED = "9999"
 
 
@@ -74,17 +67,13 @@ def _sunflower(k: int) -> tuple:
 def roles(nodes: dict) -> tuple:
     """Which types are gates, which are shelves, and what order the rest go in.
 
-    Derived from what the edges DO. A type cited via a gate relation is a gate — a bar,
-    not a stage — and belongs at the end. A type that is only ever cited and never cites
-    is a shelf, and belongs at the start. Precedence is gate, then shelf, then flow: a
-    gate is nearly always cited-and-never-citing, so testing for it second would file
-    every gate as a shelf.
+    Derived from what the edges DO: a type cited via a gate relation is a gate and belongs
+    at the end; a type only ever cited and never citing is a shelf and belongs at the
+    start. Gate is tested first, since a gate is nearly always cited-and-never-citing.
 
-    This is a function of the WHOLE graph, so unlike positions within a column it is not
-    append-stable. A node introducing a type not yet on screen, or the first edge that
-    makes a type a gate, reorders the columns once. Both are rare and both are real
-    changes in what the graph is; a claim appended to a type already present does not
-    move anything.
+    A function of the WHOLE graph, so unlike positions within a column it is not
+    append-stable: a new type, or the first edge that makes a type a gate, reorders the
+    columns once. Both are real changes in what the graph is.
     """
     gate_types, cited, citing = set(), set(), set()
     for n in nodes.values():
@@ -102,10 +91,8 @@ def roles(nodes: dict) -> tuple:
     shelves = [t for t in seen if t not in gates and t in cited and t not in citing]
     rest = [t for t in seen if t not in gates and t not in FLOW]
 
-    # A type FLOW names is placed by FLOW, whatever its edges look like. Sorting shelves
-    # ahead of everything meant `source` — cited by an idea, citing nothing — overtook
-    # `question` on any graph where nothing happened to cite the question back, so the
-    # column order contradicted the loop it exists to show.
+    # A type FLOW names is placed by FLOW, whatever its edges look like: shelves first
+    # let `source` overtake `question` and contradict the loop this exists to show.
     ordered = ([t for t in FLOW if t in seen and t not in gates]
                + [t for t in rest if t in shelves]
                + [t for t in rest if t not in shelves]
@@ -115,14 +102,11 @@ def roles(nodes: dict) -> tuple:
 
 def _columns(nodes: dict, basis: tuple | None = None) -> dict:
     """Stack each column top-down, accumulating heights rather than counting rows, so a
-    type whose card is taller does not overlap the one beneath it.
+    taller card does not overlap the one beneath it.
 
-    `basis`, when given, is `(cols, gates)` from a prior `roles()` call, used instead of
-    deriving them from `nodes`. The folded view passes the full view's: `roles()` reads
-    what the edges DO, and a covered type with every member hidden would otherwise vanish
-    from a smaller node set's own `roles()`, shifting every column after it. Same headers,
-    a shorter stack under some of them — not a page that renumbers itself when a rule
-    covers the last node of a type."""
+    `basis`, when given, is `(cols, gates)` from a prior `roles()` call. The folded view
+    passes the full view's, or a covered type with every member hidden would vanish from
+    the smaller set's own `roles()` and shift every column after it."""
     cols, gates = basis if basis is not None else roles(nodes)[:2]
     at = {c: 0.0 for c in cols}
     pos = {}
@@ -143,18 +127,12 @@ def _neighbours(nodes: dict) -> dict:
 
 
 def _map(nodes: dict) -> tuple:
-    """Cluster around the busiest nodes.
+    """Cluster around the busiest nodes. Degree is the one signal every graph has;
+    clustering on `type: gate` produced 18 clusters on one graph and 2 on another.
 
-    Degree is the one signal every graph has. Clustering on `type: gate` produced 18
-    clusters on one real graph and 2 on another, because how many gates a graph declares
-    is a property of its rules, not of knoten.
-
-    Honest limit, and it is bigger than "a node that gains edges": the hub COUNT is
-    `round(sqrt(n))`, so it steps up at n ≈ 7, 13, 21, 31, … and the new hub's rank
-    inserts mid-list, rotating every later cluster. Measured on a growing graph: 7 of 20
-    nodes moved at n=21. Between those thresholds an appended leaf moves nothing.
-    Ordering clusters by degree instead of arrival was tried and is strictly worse.
-    """
+    Honest limit: the hub COUNT is `round(sqrt(n))`, so it steps at n ≈ 7, 13, 21, … and
+    the new hub's rank inserts mid-list, rotating every later cluster (7 of 20 nodes moved
+    at n=21, measured). Between those thresholds an appended leaf moves nothing."""
     if not nodes:
         return {}, {}
     nbrs = _neighbours(nodes)
@@ -179,9 +157,8 @@ def _map(nodes: dict) -> tuple:
             cells.setdefault(home(n.id), []).append(n.id)
 
     rank = {n.id: i for i, n in enumerate(_order(nodes))}
-    # `unattached` is not a node and has no arrival rank. Sorting it FIRST (a -1 default)
-    # meant the day a graph gained its first orphan, every real cluster shifted one slot
-    # along the spiral. It sorts last, where a bucket that only ever grows belongs.
+    # `unattached` has no arrival rank and sorts LAST: first, the day a graph gained its
+    # first orphan every real cluster shifted one slot along the spiral.
     names = sorted(cells, key=lambda c: (rank.get(c, math.inf), c))
 
     pos, walls = {}, {}
@@ -207,45 +184,19 @@ def layout(nodes: dict) -> dict:
 
 def _visible(nodes: dict, under: dict) -> dict:
     """The graph with the covered layer folded away. Its own layout, so a compression
-    shrinks the picture; hung positions are derived on the page, never stored."""
+    shrinks the picture; hung positions are derived on the page, never stored. Degree
+    separation between rules and leaves comes for free: a rule keeps its own edges while
+    the covered nodes' edges leave the map entirely."""
     return {nid: n for nid, n in nodes.items() if nid not in under}
-
-
-def _inherited(nodes: dict, visible: dict, under: dict) -> dict:
-    """`visible`, with a coverer also carrying what it covers' links. A rule inherits the
-    pull of everything it retired, so on the folded map it is drawn as a landmark: its
-    degree jumps from its own edges to its own plus every covered node's — a gate or
-    question the covered layer shared gains one edge per covered node, undeduped, on
-    purpose, since each covered node really did survive that gate or serve that question
-    and a repeated edge is a real vote, not noise to collapse.
-
-    This buys degree SEPARATION between anchors and leaves; it is not immunity from
-    `_map`'s documented `round(sqrt(n))` hub-count step, which still applies — and applies
-    more often here, since folding is what makes a graph small enough to cross it in the
-    first place. On an uncompressed graph `under` is empty and this is the identity: no
-    coverer, nothing inherited, `folded` equals the full map."""
-    covers = {}
-    for covered, coverer in under.items():
-        covers.setdefault(coverer, []).append(covered)
-    out = {}
-    for nid, n in visible.items():
-        extra = [l for cid in covers.get(nid, []) for l in nodes[cid].links]
-        out[nid] = dataclasses.replace(n, links=n.links + extra) if extra else n
-    return out
 
 
 SECTION_LIMIT = 4000
 
 
-# The scaffold the panel lays a node's record into. A node body is free-form: an agent
-# writes "kill criterion", "kill condition", or "when this is wrong" and any of them is
-# the same field, so each canonical LABEL is matched against the aliases the author might
-# have used, and rendered under the label in this fixed order. The label is ours, not the
-# author's, which is what keeps two findings from disagreeing on shape.
-#
-# It shapes a claim and its verdict. A node whose headings match no label (a source, a
-# gate) renders under the agent's own headings in document order, so nothing is lost -
-# only reorganised where it helps.
+# The scaffold the panel lays a node's record into. A body is free-form: "kill criterion",
+# "kill condition" and "when this is wrong" are one field, so each canonical LABEL is
+# matched against the aliases an author might use and rendered in this fixed order. A node
+# whose headings match no label renders under its own headings, so nothing is lost.
 PANEL_SECTIONS = [
     {"label": "Claim", "aliases": ["The claim", "The idea", "The direction"]},
     {"label": "Scope", "aliases": [
@@ -276,8 +227,7 @@ def _clip(text: str) -> str:
 
 
 def payload(root: Path) -> dict:
-    """Everything the page draws. Structured, never raw markdown: `section()` already
-    splits the body, and `results`/`repro` are already mappings — so no markdown parser
+    """Everything the page draws. Structured, never raw markdown, so no markdown parser
     is needed on either side of the wire."""
     nodes = load(root)
     cfg = load_config(root)
@@ -290,17 +240,9 @@ def payload(root: Path) -> dict:
     # so a compression shrinks the picture on the page that shows it.
     covered = under(nodes)
     visible = _visible(nodes, covered)
-    fpos, fwalls = _map(_inherited(nodes, visible, covered))
-    # Columns stay the plain visible set, not the inherited one: `_inherited`'s extra
-    # links are only for `_map`'s degree count, and feeding them to `_columns` would risk
-    # entering `roles()`'s citing/cited sets and flipping a shelf classification.
+    fpos, fwalls = _map(visible)
     fcols = _columns(visible, basis=(cols, gates))
-    # The same clusters `knoten frontier` shows: recursive compression is allowed, so an
-    # alive rule that shares a gate or tag with loose specifics is a candidate too.
-    clusters = compressible(nodes, compressible_types(cfg))
 
-    # A graph may declare `node_types` as a plain list, or as a mapping of type -> what
-    # that word means here. Only the second can fill the legend.
     # What the graph's own rules say is wrong with it. Without this the page renders a
     # graph that breaks its own rules exactly as it renders a clean one.
     broken = {}
@@ -318,8 +260,7 @@ def payload(root: Path) -> dict:
         "violations": broken,
         "folded": {nid: {"columns": fcols[nid], "map": fpos[nid]} for nid in visible},
         "folded_walls": fwalls,
-        "shape": {**shape(nodes, cfg), "clusters": len(clusters)},
-        "clusters": clusters,
+        "shape": shape(nodes, cfg),
         "graph": {
             "name": cfg.get("name"),
             # `node_types` is a list when a graph only declares its vocabulary, and a
@@ -327,7 +268,7 @@ def payload(root: Path) -> dict:
             "vocab": types if isinstance(types, dict) else {},
             "rules": [{k: r.get(k) for k in
                        ("id", "when_type", "when_status", "require_edge",
-                        "require_sections", "max_alive", "message")}
+                        "require_sections", "message")}
                       for r in (cfg.get("rules") or [])],
         },
         "nodes": [{
@@ -350,14 +291,9 @@ def payload(root: Path) -> dict:
 
 
 def fingerprint(root: Path) -> str:
-    """What `--watch` polls: a hash of every node plus graph.yaml.
-
-    mtimes were the obvious choice and are wrong here. Filesystem timestamp granularity
-    is coarser than an agent writing three nodes in a burst, and every file in a freshly
-    written graph can report the SAME `st_mtime_ns` — so the poll would sit there
-    reporting no change. Reading the content costs 0.56 ms on a 67-node graph, measured,
-    which is nothing against a two-second poll.
-    """
+    """What `--watch` polls: a hash of every node plus graph.yaml. Not mtimes -- every
+    file in a freshly written graph can report the same `st_mtime_ns`, so the poll sat
+    there reporting no change. Hashing costs 0.56 ms on a 67-node graph."""
     h = hashlib.blake2b(digest_size=16)
     for f in sorted((root / "nodes").glob("*.md")) + [root / "graph.yaml"]:
         if f.exists():
@@ -367,12 +303,9 @@ def fingerprint(root: Path) -> str:
 
 
 def render(root: Path, reload_ms: int = 0) -> str:
-    """The template with the payload inlined.
-
-    `<` is escaped rather than the `</script>` sequence alone: a node body containing that
-    literal would otherwise close the tag and blank the whole page — every node in the
-    graph lost to one string in one post-mortem.
-    """
+    """The template with the payload inlined. `<` is escaped, not the `</script>`
+    sequence alone: a node body containing that literal would close the tag and blank the
+    whole page."""
     blob = json.dumps(payload(root), default=str).replace("<", "\\u003c")
     html = (HERE / "viz.html").read_text(encoding="utf-8")
     if reload_ms:
@@ -381,8 +314,8 @@ def render(root: Path, reload_ms: int = 0) -> str:
         html = (html.replace("__RELOAD_MS__", str(int(reload_ms)))
                     .replace("__BUILT_AT__", str(int(time.time()))))
     else:
-        # Cut the block out rather than leave it behind a falsy guard. A file you emailed
-        # someone should contain no code that reloads it, not merely code that declines to.
+        # Cut the block out rather than leave it behind a falsy guard: a file you emailed
+        # someone should contain no code that reloads it.
         a, b = html.index("/*__WATCH__*/"), html.rindex("/*__WATCH__*/")
         html = html[:a] + html[b + len("/*__WATCH__*/"):]
     return (html.replace("__PANEL_SECTIONS__", json.dumps(PANEL_SECTIONS))
