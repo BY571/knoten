@@ -32,18 +32,14 @@ LOCK = ".knoten.lock"
 # refuses is a push that spends the bandwidth before it is told no.
 MAX_PUSH_BYTES = 100 * 1024 * 1024
 
-# What every git the SERVER runs must be told, so that the git which installs the gate and
-# the git which enforces it agree on where hooks live. With `core.hooksPath` in the daemon
-# account's ~/.gitconfig, `Registry.create` asked git where hooks go (process env, no
-# HOME override, so hooksPath applied... or did not, depending on the caller) while
-# receive-pack read ~/.gitconfig and looked somewhere else entirely: the hook was written
-# where nothing would ever run it, and a push that breaks the graph landed with rc 0. A
-# gate that fails OPEN reports green forever. The client-side `knoten hook` must NOT use
-# this: honouring core.hooksPath is exactly right in a clone (husky, monorepos), and nor
-# must `knoten hook --server`, whose repo is served by somebody else's receive-pack.
-# Dropping global config also drops `init.templateDir` and `init.defaultBranch` for
-# hosted repos, deliberately: a template directory is one more place a hook can arrive
-# from, which is one more place the gate can be replaced without anyone editing the repo.
+# What every git the SERVER runs must be told, so the git that INSTALLS the gate and the
+# git that ENFORCES it agree on where hooks live: with `core.hooksPath` in the daemon's
+# ~/.gitconfig they did not, the hook landed where nothing would run it, and a push that
+# breaks the graph returned rc 0. A gate that fails OPEN reports green forever. Dropping
+# global config also drops `init.templateDir`, deliberately: a template directory is one
+# more place a hook can arrive from. Neither `knoten hook` nor `knoten hook --server` may
+# use this -- honouring core.hooksPath is right in a clone, and the second repo is served
+# by somebody else's receive-pack.
 SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
                   # A graph directory named "*" once widened `git archive`'s pathspec to
                   # the whole repo; literal pathspecs make every name a plain path, glob
@@ -170,18 +166,11 @@ def node_path(root: Path, nid: str) -> Path:
 class _Loader(yaml.SafeLoader):
     """YAML 1.2 scalars, not YAML 1.1.
 
-    PyYAML is YAML 1.1, whose implicit typing silently rewrites `results:` — the block
-    holding the numbers this tool exists to protect:
-
-        tags: [no, off]     -> [False, False]   the "Norway problem"
-        wallclock: 12:30    -> 750              sexagesimal
-        seed: 042           -> 34               octal (but `08` stays a string!)
-        n: 1_000            -> 1000             digit separators
-        run: 2024-01-15     -> datetime.date    implicit timestamps
-
-    So swap the implicit resolvers for the 1.2 core schema, which has none of them.
-    Anything we cannot confidently type stays a string: a string fails a numeric rule
-    loudly, a silently rewritten number does not.
+    PyYAML is YAML 1.1, whose implicit typing silently rewrites the `results:` block this
+    tool exists to protect: `[no, off]` becomes `[False, False]`, `12:30` becomes 750,
+    `042` becomes 34, `1_000` becomes 1000, `2024-01-15` becomes a date. So swap the
+    implicit resolvers for the 1.2 core schema, which has none of them. Anything we
+    cannot confidently type stays a string, which fails a numeric rule loudly.
     """
 
 
@@ -386,12 +375,9 @@ def _title(body: str) -> str:
 
 
 def fields(n: Node) -> tuple[set, set, set]:
-    """(id+title, tags, everything).
-
-    Cached on the node because `retrieve` walks the pool twice and tokenising is the bulk
-    of the work: 33ms vs 150ms for one query over 500 nodes. `load` builds fresh Nodes,
-    so the cache never survives a call.
-    """
+    """(id+title, tags, everything). Cached on the node because `retrieve` walks the pool
+    twice and tokenising is the bulk of the work: 33ms vs 150ms over 500 nodes. `load`
+    builds fresh Nodes, so the cache never survives a call."""
     if n.tokens is None:
         strong = set(_tokens(f"{n.id} {_title(n.body)}"))
         medium = set(_tokens(" ".join(str(t) for t in (n.frontmatter.get("tags") or []))))
@@ -433,16 +419,11 @@ RELATIVE_FLOOR = 0.35
 
 def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
              status=None, type=None, where=None, since=None) -> list[Node]:
-    """Rank nodes by relevance to `query`, narrowed by the filters.
-
-    Ranked, not filtered: ANDing every token let one unmatched word silence the query and
-    answer "no prior work" about a hypothesis the graph was holding. A false "untested"
-    is the only failure of this tool that costs real work. Tokens are weighted by idf, so
-    a word in every node counts for nothing and a rare one dominates.
-
-    The ONE retrieval seam: `query` and `index` both come through here, so a semantic
-    backend replaces this body and nothing above it changes.
-    """
+    """Rank nodes by relevance to `query`, narrowed by the filters. Ranked, not filtered:
+    ANDing every token let one unmatched word silence the query and answer "no prior work"
+    about a hypothesis the graph was holding, and a false "untested" is the only failure
+    of this tool that costs real work. idf weighting means a word in every node counts for
+    nothing. The ONE retrieval seam, so a semantic backend replaces this body alone."""
     pool = [n for n in nodes.values() if _passes(n, tags, status, type, where, since)]
     if query is None:
         return sorted(pool, key=lambda n: n.id)
@@ -508,16 +489,12 @@ def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
 
 
 def frontier(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> dict:
-    """What is worth doing next, in five buckets.
-
-    `## What would reopen this` is the standing offer SPEC §5 insists on. This does not
-    decide whether a condition is *met* — that is a judgement, and encoding it would be
-    either trivially wrong or an ontology project. It presents the offers cheaply and
-    lets the reader judge, the bargain `retrieve` makes with an index.
-
-    `unchecked` is the advisory counterpart to `live-claims-must-cite-their-gates`: with
-    that rule commented out (the default) this is the only place such a claim shows up.
-    """
+    """What is worth doing next, in five buckets. This never decides whether a reopen
+    condition is *met* -- that is a judgement, and encoding it would be either trivially
+    wrong or an ontology project; it presents the offers cheaply and lets the reader
+    judge. `unchecked` is the advisory counterpart to `live-claims-must-cite-their-gates`:
+    with that rule commented out (the default) this is the only place such a claim shows
+    up."""
     ordered = sorted(nodes.values(), key=lambda n: n.id)
     return {
         "compressible": compressible(nodes, types),

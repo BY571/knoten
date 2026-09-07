@@ -16,14 +16,10 @@ from .update import compression_report, refused, superseded_candidates, supersed
 
 
 def _similar(nodes: dict[str, Node], candidate: Node, keep: int = 3) -> list[dict]:
-    """Settled claims that look like the same question, worded differently.
-
-    A warning and never a block: a compute-matched rerun of a dead idea IS a new claim,
-    and that is the point of a gate. Settled claims only — `open` is not an answer — plus
-    at least two shared title words, so a single shared "accuracy" does not fire. Two is
-    loose on purpose: a false positive costs one line of JSON, a false negative costs a
-    duplicated experiment.
-    """
+    """Settled claims that look like the same question, worded differently. A warning and
+    never a block: a compute-matched rerun of a dead idea IS a new claim. Settled only
+    (`open` is not an answer), plus two shared title words so one shared "accuracy" does
+    not fire -- loose on purpose, since a false negative costs a duplicated experiment."""
     mine = fields(candidate)[0]
     # Never what this candidate just superseded: those resemble it by construction.
     own = set(supersedes(candidate))

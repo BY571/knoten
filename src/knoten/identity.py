@@ -105,22 +105,20 @@ def verify(allowed: str, identity: str, data: bytes, sig: str, namespace: str) -
 
 
 def allowed_signers(keys: dict[str, str], namespaces: tuple[str, ...] = ("git", INVITE_NS)) -> str:
-    """The file format both `git verify-commit` and `ssh-keygen -Y verify` read:
-    one `name namespaces="..." <public line>` per contributor."""
+    """What `git verify-commit` and `ssh-keygen -Y verify` both read."""
     ns = ",".join(namespaces)
     return "".join(f'{name} namespaces="{ns}" {key}\n' for name, key in sorted(keys.items()))
 
 
 def configure_signing(repo: Path, priv: Path) -> None:
-    """Make every commit in this clone signed with `priv`, so a contributor never has to
-    remember `-S`. The PRIVATE path: that is git's form for ssh signing without an agent."""
+    """Every commit in this clone signed with `priv`, so a contributor never has to
+    remember `-S`. The PRIVATE path: git's form for ssh signing without an agent."""
     for key, value in (("gpg.format", "ssh"), ("user.signingkey", str(priv)),
                        ("commit.gpgsign", "true")):
         r = subprocess.run(["git", "-C", str(repo), "config", key, value], capture_output=True)
         if r.returncode != 0:
-            # check=True raised CalledProcessError, which escapes the CLI's GraphError
-            # handler as a traceback. A read-only .git/config is ordinary user trouble
-            # and owes them one line.
+            # Not check=True: CalledProcessError escapes the CLI's GraphError handler as
+            # a traceback, and a read-only .git/config is ordinary user trouble.
             raise GraphError(f"could not configure signing in {repo}: "
                              f"{r.stderr.decode(errors='replace').strip() or f'git config {key} failed'}")
 

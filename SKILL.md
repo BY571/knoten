@@ -20,16 +20,15 @@ next, or write any code, run steps 1-4 below. They take seconds and they answer 
 things your own context cannot: what is already dead, what is already open, and what a
 result has to survive here.
 
-Skipping them has a price you pay in compute. Gates are the checks this graph declares,
-so read `knoten gates` before designing the experiment: one designed blind can produce a
-result that fails a check you never saw, and you run it again having already spent the
-budget once. File `kn:survivedGate` or `kn:killedByGate` on the claim once you have
-checked it against one.
+Skipping them has a price you pay in compute: an experiment designed blind can fail a
+check you never saw, and you run it again having already spent the budget once. Read
+`knoten gates` first, and file `kn:survivedGate` or `kn:killedByGate` on the claim once
+you have checked it against one.
 
-If you realise you have already done the work without doing this: run 1-4 now, before
-writing anything. The question may already be settled, and the gates still apply, even
+If you realise you have already done the work without doing this, run 1-4 now, before
+writing anything. The question may already be settled, and the gates still apply even
 though citing none is not refused: `knoten frontier` lists an alive claim with no gate as
-unchecked, and a graph may turn that into a refusal by enabling the rule in `graph.yaml`.
+unchecked, and a graph may turn that into a refusal by enabling the rule.
 
 ## How the graph is shaped
 
@@ -83,13 +82,11 @@ forward edge and never authored.
     prov:wasDerivedFrom                 claim ──▶ what it came from
 
 `knoten validate` lists every relation it knows when you name one it does not, so ask it
-rather than guessing. `kn:explains`, `kn:generalises` and `kn:followsFrom` name the KIND
-of a derivation when that matters.
-
-Writing the generated name (`kn:testedBy` where you meant `kn:tests`) is refused. Writing
-the right relation on the wrong node is NOT detectable: the back-link lands and the graph
-reports itself healthy, with the claim reversed. A correction is a NEW node that supersedes
-or retracts the old one, never an edit to it.
+rather than guessing; `kn:explains`, `kn:generalises` and `kn:followsFrom` name the KIND
+of a derivation when that matters. Writing the generated name (`kn:testedBy` where you
+meant `kn:tests`) is refused. Writing the right relation on the wrong node is NOT
+detectable: the back-link lands and the graph reports itself healthy, with the claim
+reversed. A correction is a NEW node, never an edit.
 
 ## Before you work
 

@@ -1,14 +1,12 @@
 """Moving a node through its own lifecycle: open -> alive / dead / retracted / superseded.
 
 The `superseded` arrow is the one the engine walks by itself: an update that leaves the
-node superseding others flips every one of those targets in the SAME validated write, so
-the general node and the specifics it retires are never on disk in disagreement.
+node superseding others flips every target in the SAME validated write, so the general
+node and the specifics it retires are never on disk in disagreement.
 
-What bounds an edit is the graph's own declared rules, not a list of things this module
-refuses: the amended candidate goes through the same in-memory validation `knoten commit`
-uses, and never reaches disk if it fails. `fields` therefore sets any top-level key, with
-`results` the one exception — a number you already published is a different kind of claim
-from a label. Git holds the before and after.
+What bounds an edit is the graph's own rules, not a list of things this module refuses:
+the amended candidate goes through the same in-memory validation `commit` uses. `fields`
+therefore sets any top-level key, with `results` the one exception.
 """
 from __future__ import annotations
 
@@ -138,21 +136,14 @@ def superseded_candidates(root: Path, texts: dict[str, str]) -> dict[str, Node]:
 
 def refused(nodes: dict[str, Node], cands: dict[str, Node], root: Path,
            cascade: bool) -> list:
-    """Violations that must block writing `cands` (the candidate for the node just
-    written, plus every superseded target, when this write flips any).
+    """Violations that must block writing `cands`: the candidate just written, plus every
+    superseded target when this write flips any.
 
-    Without `cascade` — a plain update that touches only its own node — the bar is the
-    node's own violations, same as always: a dependant that now fails because the claim
-    it rested on changed status is `validate`'s job to report, not this call's to veto.
-    `knoten update --status dead` on a node others depend on must still succeed; the
-    graph now has a violation, and that is what `validate` is for.
-
-    With `cascade` — a write that flips targets — the bar widens to anything that
-    appears anywhere in the graph that was not there before: a target that only fails
-    once it is `superseded`, or a third node whose own rule depended on a target staying
-    alive, must refuse the write here rather than land it and let `validate` discover the
-    breakage after the fact. That is the whole point of flipping status INSIDE the same
-    validated write as the edge that causes it.
+    Without `cascade` the bar is the node's own violations: `knoten update --status dead`
+    on a node others depend on must still succeed, and a dependant that now fails is
+    `validate`'s job to report. With `cascade` it widens to anything new anywhere in the
+    graph, since a target that only fails once `superseded`, or a third node whose rule
+    depended on it staying alive, must refuse the write rather than land it.
     """
     merged = backlink({**nodes, **cands})
     after = check(merged, root)

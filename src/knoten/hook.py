@@ -115,16 +115,14 @@ exec knoten gate
 
 
 def install_server(repo: Path, force: bool = False, env: dict | None = None) -> Path:
-    """Install the pre-receive gate into the repo everyone pushes to. Takes the repo,
-    not a graph: a bare repo has no working tree, and the hook finds the graphs in each
-    pushed tree instead.
+    """Install the pre-receive gate into the repo everyone pushes to. Takes the repo, not
+    a graph: a bare repo has no working tree, and the hook finds the graphs in each pushed
+    tree instead.
 
     `env` must be whatever the receive-pack that will ENFORCE this gate runs under, since
     that decides where hooks are read from. `knoten serve` runs receive-pack itself, so
     `Registry.create` passes `server_git_env()`, the COMPLETE environment, or a stray
-    GIT_DIR in the daemon's shell redirects where the gate is written. `knoten hook
-    --server` passes NO env: that repo is served by the operator's own account, whose
-    ~/.gitconfig receive-pack reads, and forcing a server env there wrote the gate to
-    repo.git/hooks while git looked at their core.hooksPath. The gate then failed OPEN.
-    """
+    GIT_DIR redirects where the gate is written. `knoten hook --server` passes NO env: its
+    repo is served by the operator's account, whose ~/.gitconfig receive-pack reads, and
+    forcing a server env there wrote the gate where git never looked -- failing OPEN."""
     return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force, env=env)

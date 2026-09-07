@@ -1,14 +1,10 @@
 """One HTML file: the graph as columns, and the graph as a map.
 
-Read-only, self-contained, no server and no build step. The payload is inlined, so the
-file opens from `file://`.
-
-Two views because there are two questions. **Columns** is the inventory, laid out along
-the loop a graph declares. **Map** is the traversal, laid out around the busiest nodes:
-a graph's landmarks are wherever its edges converge, not wherever its vocabulary says.
-
-Layout is a pure function of the graph. Nothing is persisted: a `layout.json` in git
-would be a merge conflict generator with ten agents appending.
+Read-only, self-contained, no server and no build step; the payload is inlined, so the
+file opens from `file://`. Two views because there are two questions: **columns** is the
+inventory along the loop a graph declares, **map** is the traversal around the busiest
+nodes, since a graph's landmarks are where its edges converge. Layout is a pure function
+of the graph, and a persisted `layout.json` would be a merge conflict generator.
 """
 import hashlib
 import json
@@ -65,16 +61,11 @@ def _sunflower(k: int) -> tuple:
 
 
 def roles(nodes: dict) -> tuple:
-    """Which types are gates, which are shelves, and what order the rest go in.
-
-    Derived from what the edges DO: a type cited via a gate relation is a gate and belongs
-    at the end; a type only ever cited and never citing is a shelf and belongs at the
-    start. Gate is tested first, since a gate is nearly always cited-and-never-citing.
-
-    A function of the WHOLE graph, so unlike positions within a column it is not
-    append-stable: a new type, or the first edge that makes a type a gate, reorders the
-    columns once. Both are real changes in what the graph is.
-    """
+    """Which types are gates, which are shelves, and what order the rest go in. Derived
+    from what the edges DO: a type cited via a gate relation is a gate and goes at the
+    end, a type only ever cited and never citing is a shelf and goes at the start, and
+    gate is tested first since a gate is nearly always cited-and-never-citing. A function
+    of the WHOLE graph, so unlike positions within a column it is not append-stable."""
     gate_types, cited, citing = set(), set(), set()
     for n in nodes.values():
         for l in n.links:

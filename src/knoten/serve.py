@@ -1,13 +1,9 @@
-"""One job per request: decide whether this token may do this, then hand the request to
-git.
+"""One job per request: decide whether this token may do this, then hand it to git.
 
-`git http-backend` ships with git and speaks the smart HTTP protocol as a CGI. It is what
-nginx and Apache call to host git. knoten's server is the authorization layer in front
-of it and nothing more: packfiles, refs, negotiation and the pre-receive gate are git's.
-
-git's own protocol separates reading from writing by endpoint (`git-upload-pack` serves
-data out, `git-receive-pack` takes it in), so "read access" is a token that never gets
-past the door for receive-pack. There is no finer reasoning about git's data model here.
+knoten's server is the authorization layer in front of `git http-backend` and nothing
+more: packfiles, refs, negotiation and the pre-receive gate are git's. git's protocol
+separates reading from writing by endpoint, so "read access" is a token that never gets
+past the door for `git-receive-pack`.
 
 Binds localhost and speaks plain HTTP. TLS is a reverse proxy's or a tunnel's job.
 """
@@ -63,16 +59,11 @@ def _pkt_lines(data: bytes):
 
 
 def _push_refused(body: bytes) -> bool:
-    """Did receive-pack decline this push?
-
-    http-backend exits 0 and answers 200 either way, so the verdict has to be read out of
-    the response. Grepping the whole body for git's words read the hook's stderr too,
-    which echoes back the paths in the pushed tree: a graph in a directory named
-    `denying x` made a push that landed log as refused, and every such phrase is
-    attacker-chosen. Band 1 carries report-status and nothing else. There, `ng <ref>
-    <reason>` is a rejection and `ok <ref>` is not, and a ref name cannot contain a
-    space, so there is nothing to spoof.
-    """
+    """Did receive-pack decline this push? http-backend exits 0 and answers 200 either
+    way, so the verdict is read out of the response. Band 1 only: grepping the whole body
+    also read the hook's stderr, which echoes attacker-chosen paths from the pushed tree,
+    and a graph in a directory named `denying x` logged a push that landed as refused.
+    On band 1, `ng <ref> <reason>` is a rejection and a ref name cannot contain a space."""
     packets = list(_pkt_lines(body))
     if any(p[:1] in (b"\x01", b"\x02", b"\x03") for p in packets):
         # side-band-64k: band 1 is report-status, band 2 the hook's own stderr. Band 1 is
@@ -93,27 +84,18 @@ def _field(value) -> str:
 
 
 class _Server(ThreadingHTTPServer):
-    """The registry belongs to the server, not to a handler class minted per call.
-
-    `make_server` used to subclass the handler to carry `registry` as a class attribute,
-    so two servers in one process meant two anonymous handler types and nothing could
-    name either. One attribute on the server the handler already has a reference to.
-    """
+    """The registry belongs to the server, not to a handler class minted per call: two
+    servers in one process then meant two anonymous handler types nothing could name."""
 
     def __init__(self, registry: Registry, address, handler):
         self.registry = registry
         super().__init__(address, handler)
 
     def handle_error(self, request, client_address) -> None:
-        """One line, never socketserver's traceback block.
-
-        The house rule is that nobody reads a stack to find out what went wrong, and the
-        server's own log is not an exception: a traceback is unreadable next to the access
-        log and says nothing this line does not. Two things reach it -- a client that
-        closed before the response was written, and a handler thread outliving the test or
-        request that started it, since these are daemon threads and shutdown() does not
-        join them. Anything the handler itself raises is already a 500, one frame up.
-        """
+        """One line, never socketserver's traceback block: a traceback is unreadable next
+        to the access log and says nothing this does not. Two things reach it -- a client
+        that closed before the response was written, and a daemon handler thread outliving
+        the request. Anything the handler raises is already a 500, one frame up."""
         e = sys.exc_info()[1]
         print(f"knoten serve: {type(e).__name__}: {e} "
               f"from {client_address[0]}:{client_address[1]}", file=sys.stderr, flush=True)
@@ -278,12 +260,10 @@ class _Handler(BaseHTTPRequestHandler):
             **SERVER_GIT_ENV,
             "GIT_PROJECT_ROOT": str(self.server.registry.graph_dir(name)),
             "GIT_HTTP_EXPORT_ALL": "1",
-            # The gate runs as a pre-receive hook under http-backend and inherits this
-            # env. It is the only place that knows who the token belongs to: a signature
-            # says which KEY wrote a commit, never which token pushed it, and the first
-            # contributors.yaml in a hosted graph has to be laid down by its admin's own
-            # token. Not in KEEP_ENV, and not GIT_*: set here, per request, from what the
-            # server itself authenticated a moment ago.
+            # The gate inherits this env, and this is the only place that knows who the
+            # token belongs to: a signature says which KEY wrote a commit, never which
+            # token pushed it, and the first contributors.yaml must be laid down by the
+            # admin's own token. Set per request, from what the server authenticated.
             "KNOTEN_PUSHER": user,
             "KNOTEN_ROLE": role,
             "PATH_INFO": "/repo.git" + sub,          # the URL says <name>.git; disk says repo.git
@@ -345,12 +325,10 @@ class _Handler(BaseHTTPRequestHandler):
             # /join needs no credentials, so it must not become a name oracle: an
             # unknown graph gets the same 400 a wrong code gets, not "no graph 'x'".
             return self._refuse(400, "knoten: that invite code is not valid for this graph")
-        # A fresh read, not whatever head_graph said when the invite was minted: an admin
-        # revoked between the invite and the join must be caught NOW, not only later when
-        # the gate refuses the join commit -- by then the holder already has a live token.
-        # Passed as a callable, not called here: redeem() only invokes it AFTER the code
-        # itself is confirmed to exist, so a bogus code costs no git work at all and a
-        # misconfigured hosted repo never gets a chance to answer before the code does.
+        # A fresh read: an admin revoked between the invite and the join must be caught
+        # NOW, not when the gate refuses the join commit, by which time the holder has a
+        # live token. A callable, so redeem() invokes it only AFTER the code is known to
+        # exist: a bogus code costs no git work and leaks no misconfigured repo's error.
         user, role, token, extra = self.server.registry.redeem(
             name, body.get("code", ""), lambda: self.server.registry.head_graph(name)[0])
         self.log_message(f"join:{role}", name, user, 200)
@@ -379,12 +357,10 @@ class _Handler(BaseHTTPRequestHandler):
         contribs, graph_name = self.server.registry.head_graph(name)
         blob, sig = str(body.get("blob", "")), str(body.get("sig", ""))
         try:
-            # A lone surrogate in `blob`/`sig` (a crafted \udXXX escape in the JSON body)
-            # decodes fine through json.loads but not through .encode(): unguarded, that
-            # reached the catch-all as a bare 500 instead of a refusal. Encoding BEFORE
-            # the size cap below also means that cap counts BYTES, not code points -- a
-            # multi-byte character made a code-point count understate what actually gets
-            # stored and signed over.
+            # A lone surrogate in the JSON body decodes through json.loads but not
+            # through .encode(), and unguarded reached the catch-all as a bare 500.
+            # Encoding BEFORE the cap below also makes that cap count BYTES, not code
+            # points, which a multi-byte character made understate what is stored.
             blob_bytes, sig_bytes = blob.encode(), sig.encode()
         except UnicodeEncodeError:
             raise GraphError("that invite is malformed") from None

@@ -149,9 +149,8 @@ tags:       [decoding, reasoning, prompting, evaluation]
 
 ## Compress
 
-Sooner or later several findings under one question are saying the same thing in
-different numbers. Write the statement that makes them unnecessary, and point it at each
-of them:
+Sooner or later several findings under one question say the same thing in different
+numbers. Write the statement that makes them unnecessary, and point it at each of them:
 
 ````markdown
 ---
@@ -203,10 +202,8 @@ the band is the whole of the nudge, and the commit says what a compression bough
 That is the whole of what the command prints. The resemblance warning never names what
 the node just superseded, since resembling them is the point; it names the experiment and
 the dead hypothesis still standing behind them, and leaves the judgement to you.
-
 Retracting a general node stops it covering anything, and the specifics it retired stay
-`superseded` until a person revives them: only a person can say whether an old result is
-worth having back.
+`superseded` until a person revives them.
 
 ## A shared graph
 

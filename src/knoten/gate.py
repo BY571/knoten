@@ -1,9 +1,9 @@
 """The server-side gate: what the pre-receive hook execs.
 
-Per pushed ref: find every graph in the pushed tree (a `graph.yaml` blob with a real
-`nodes/` tree beside it), unpack it as regular files only, and run the graph's own rules.
-Task 4 adds the signature walk in front of that. Anything failing refuses the whole push,
-and every refusal is one `knoten:` line on stderr, which git relays to the pusher.
+Per pushed ref: walk the signatures, then find every graph in the pushed tree (a
+`graph.yaml` blob with a real `nodes/` tree beside it), unpack it as regular files only,
+and run the graph's own rules. Anything failing refuses the whole push, and every refusal
+is one `knoten:` line on stderr, which git relays to the pusher.
 
 Runs inside the bare repo (git sets the hook's cwd) under SERVER_GIT_ENV, so nothing in
 the operator's shell or git config changes what is checked.
@@ -36,11 +36,8 @@ ONE_BRANCH = "a hosted graph has one branch; new branches and tags are refused"
 
 def _git(*args: str, input: bytes | None = None,
          repo: Path | None = None) -> subprocess.CompletedProcess:
-    # subprocess.run() rejects stdin= together with input=, so the two are exclusive: an
-    # explicit input still pipes it in, but with no input the child gets /dev/null, never
-    # the hook's own stdin. That stdin IS git's ref list; a child that read from it instead
-    # of getting EOF (`git verify-commit`/gpg, Task 4) would consume lines the outer loop
-    # in main() still needs to read.
+    # With no input the child gets /dev/null, never the hook's own stdin. That stdin IS
+    # git's ref list, and a child reading from it eats lines main() still needs.
     kw = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
     cmd = ["git", *(["-C", str(repo)] if repo else []), *args]
     if repo:
@@ -50,12 +47,10 @@ def _git(*args: str, input: bytes | None = None,
         # exactly the case a stray GIT_DIR silently redirects.
         env = server_git_env()
     else:
-        # No `repo`: this IS the hook, running inside the bare repo git itself invoked it
-        # in. git sets GIT_DIR and, mid-push, the quarantine object-directory variables
-        # (GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_QUARANTINE_PATH) in
-        # THIS process's own environment so the hook can see objects not yet migrated
-        # into the main odb. Stripping every GIT_* var here (as server_git_env() does)
-        # made the hook blind to the very commits it was asked to check.
+        # No `repo`: this IS the hook, inside the repo git invoked it in. git sets GIT_DIR
+        # and the mid-push quarantine object-directory variables in THIS process's own
+        # environment, so the hook can see objects not yet migrated into the main odb.
+        # Stripping every GIT_* here made the hook blind to the commits it must check.
         env = {**os.environ, **SERVER_GIT_ENV}
     return subprocess.run(cmd, capture_output=True, env=env, **kw)
 
@@ -66,15 +61,11 @@ def say(msg: str) -> None:
 
 def _safe_dirs(found: set[str]) -> list[str]:
     """The directory names, sorted, with any one git could read as something other than a
-    path refused.
-
-    A directory name is a path lifted from the PUSHED tree, never trusted input. A
-    component starting with `-` reaches `git archive`/`git ls-tree` as an OPTION
-    (`--output=x` made git write a file; `--remote=host:path` made it shell out to ssh),
-    and one starting with `:` is pathspec magic (`:(top)`, `:(exclude)`). Both walks that
-    lift a name out of a tree come through here, so no name from a pushed tree ever
-    reaches git as anything but a plain path -- `extract`'s `--` separator is defense in
-    depth, not the only gate."""
+    path refused. A name lifted from the PUSHED tree is never trusted input: a component
+    starting with `-` reaches `git archive`/`git ls-tree` as an OPTION (`--output=x` made
+    git write a file, `--remote=host:path` made it shell out to ssh), and one starting
+    with `:` is pathspec magic. Both walks that lift a name out of a tree come through
+    here, so `extract`'s `--` separator is defense in depth, not the only gate."""
     out = []
     for d in sorted(found):
         if d and any(part.startswith(("-", ":")) for part in d.split("/")):
@@ -242,17 +233,13 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
     Three shapes. A commit that leaves contributors.yaml alone needs any listed writer's
     signature. A commit that adds exactly one entry carrying an admin-signed invite is a
     join, and needs the NEWCOMER's signature (the invite is the admin's part). Anything
-    else that touches the file is a change to who may write, and needs an admin. Two
-    things are refused outright, whoever signed: a name leaving the file, the whole file
-    leaving the gdir included (revoke, never remove), and, under `knoten serve`, a
-    bootstrap by anything but the graph's admin token.
+    else that touches the file changes who may write, and needs an admin. Two things are
+    refused whoever signed: a name leaving the file (revoke, never remove), the whole file
+    leaving the gdir included, and, under `knoten serve`, a bootstrap by anything but the
+    graph's admin token.
 
-    `has_parent` is the caller's own answer to "does this commit have a parent", asked
-    once per commit rather than once per (commit, gdir) pair -- check_ref may call this
-    for several directories on one sha. `is_graph` and `parent_dirs` say whether `gdir`
-    holds a graph AT this commit and which directories held one at its parent;
-    `signed_before` is every directory with a constitution at the parent. All three are
-    read once per commit for the same reason."""
+    `has_parent`, `is_graph`, `parent_dirs` and `signed_before` are read once per commit
+    and passed in, since check_ref may call this for several directories on one sha."""
     prev = contributors_at(f"{sha}^", gdir) if has_parent else None
     cur = contributors_at(sha, gdir)
     where = f"{ref}: {sha[:7]}"
@@ -285,11 +272,10 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
                     f"by an admin of the graph already here ({WHY.get(status, status)})")
                 return False
         # `KNOTEN_ROLE` is set by `knoten serve` for the token it authenticated, so its
-        # presence means this push came through a knoten server. There the graph's own
-        # admin token is the only one that may lay down the first constitution: a `write`
-        # collaborator could otherwise bootstrap a phase-1 hosted graph and be its admin.
-        # Absent (a `knoten hook --server` repo, which has no tokens at all), nothing here
-        # applies and the genesis rule above stands alone.
+        # presence means this push came through a knoten server, where only the graph's
+        # own admin token may lay down the first constitution -- a `write` collaborator
+        # could otherwise bootstrap a phase-1 hosted graph and be its admin. Absent (a
+        # `knoten hook --server` repo has no tokens), the genesis rule stands alone.
         if os.environ.get("KNOTEN_ROLE") is not None:
             if (os.environ["KNOTEN_ROLE"] != "admin"
                     or signer != os.environ.get("KNOTEN_PUSHER", "")):
@@ -306,12 +292,10 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
     added, changed, removed = ({}, {}, set(prev)) if cur is None else C.diff(prev, cur)
     if removed:
         # Revocation is a mark, so history stays attributable. Dropping an entry erases
-        # who could write, and deleting the file outright is the same act in two commits
-        # -- delete it, then bootstrap a fresh one that leaves somebody out, which the
-        # bootstrap rules would accept because nothing is left to weigh it against. Both
-        # are refused whoever signed, so a graph's constitution never stops existing.
-        # A directory rename is a deletion here too: it takes the file away from the
-        # gdir the entries were written for.
+        # who could write, and deleting the file is the same act in two commits: delete
+        # it, then bootstrap a fresh one leaving somebody out, which the bootstrap rules
+        # would accept with nothing left to weigh it against. A directory rename is a
+        # deletion here too. Both are refused whoever signed.
         say(f"{where}: contributors are revoked, never removed")
         return False
     if not added and not changed:
@@ -339,12 +323,9 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
             blob = str(inv["blob"]).encode()
             try:
                 by = C.verify_invite(prev, blob, str(inv["sig"]))
-                # The graph's name is read at the PARENT, not at sha: reading it at sha
-                # let a same-commit rename of graph.yaml's `name:` make an invite issued
-                # for one graph verify against whatever name the joiner picked for it in
-                # the very commit being judged. At the parent, the name is whatever it
-                # was a moment before this commit -- something the invite's signer could
-                # actually have seen and signed for.
+                # The graph's name at the PARENT, not at sha: read at sha, a same-commit
+                # rename of `name:` let an invite issued for one graph verify against
+                # whatever name the joiner picked in the very commit being judged.
                 C.check_blob(C.parse_blob(blob), graph_name_at(f"{sha}^", gdir), name, entry["role"])
             except GraphError as e:
                 say(f"{where}: {e}")
@@ -352,23 +333,17 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
             if entry.get("invited_by") not in (None, by):
                 say(f"{where}: {name}'s entry names a different inviter than the one who signed")
                 return False
-            # An invite authorises adding exactly one name to contributors.yaml -- nothing
-            # about the rest of the tree. Without this, a join commit was accepted
-            # wholesale on the invite plus the newcomer's signature, so a `read` invite
-            # bought its holder one unrestricted write to the entire graph (any node,
-            # graph.yaml, anything else bundled into the same commit).
+            # An invite authorises adding exactly one name, nothing about the rest of the
+            # tree: without this a `read` invite bought its holder one unrestricted write
+            # to the entire graph, bundled into the join commit.
             target = f"{gdir}/{C.FILE}" if gdir else C.FILE
             if not _touches_only(sha, target):
                 say(f"{where}: a join may change nothing but {C.FILE}")
                 return False
-            # The invite is the admin's half: it authorises this name and role. This is
-            # the other half -- the commit must be signed by the very key the entry
-            # publishes, so the person who committed the entry is the person who holds
-            # that key. The invite itself binds no key, so this does NOT stop someone else
-            # arriving with maria's invite under a key of their own: whoever holds the
-            # invite (the blob+sig pair) can join as the invited name with any key. That is
-            # the invite-by-code model for phase 2 -- an invite grants the invited role
-            # under the invited name to whoever holds it; the role cannot be escalated.
+            # The invite is the admin's half; this is the other: the commit must be
+            # signed by the very key the entry publishes. The invite binds no key, so
+            # whoever HOLDS it can join as the invited name under a key of their own --
+            # the invite-by-code model, where the role still cannot be escalated.
             status, _ = signature(sha, {name: entry["key"]})
             if status == "G":
                 return True
@@ -383,24 +358,17 @@ def check_commit(sha: str, gdir: str, ref: str, has_parent: bool,
 
 
 def check_ref(old: str, new: str, ref: str) -> bool:
-    """One hosted graph, one line of history.
-
-    Branches, tags, deletions and rewrites are all ways to put a tree on the server that
-    the next `knoten pull` will never look at, or to take one away. `receive.denyDeletes`
-    and `receive.denyNonFastForwards` say the same thing in the hosted repo's config, but
-    only there: a graph in a bare repo somebody gated with `knoten hook --server` has
-    whatever config its operator set. The rule belongs with the gate, which every hosted
-    graph runs, and it is checked BEFORE any signature so a refusal names the real
-    reason.
-    """
+    """One hosted graph, one line of history. Branches, tags, deletions and rewrites are
+    all ways to put a tree on the server that no `knoten pull` will look at, or to take
+    one away. `receive.denyDeletes` and `receive.denyNonFastForwards` say the same in the
+    hosted repo's config, but only there -- a repo gated by hand with `knoten hook
+    --server` has whatever config its operator set. Checked BEFORE any signature, so a
+    refusal names the real reason."""
     if not ref.startswith("refs/heads/"):
-        # A hosted graph has a branch and nothing else, and that holds for moving a ref
-        # as much as for making one: a tag that predates the gate (a repo gated by hand
-        # with `knoten hook --server`) must not stay writable. The branch count below
-        # reads `refs/heads/` only, so it cannot see a tag: into a repo with no branch a
-        # tag answered "none here", landed, and the branch still landed after it.
-        # Counting `refs/` instead would be worse -- a tag would then block the branch
-        # forever.
+        # A branch and nothing else, for moving a ref as much as for making one: a tag
+        # predating the gate must not stay writable. The branch count below reads
+        # `refs/heads/` only, so a tag cannot block the branch forever; the cost is that
+        # a tag into a branchless repo answered "none here" and landed, hence this.
         say(f"{ref}: {ONE_BRANCH}")
         return False
     if ZERO.match(new):
@@ -443,22 +411,16 @@ def check_ref(old: str, new: str, ref: str) -> bool:
     ok = True
     for sha in commits:
         has_parent = _git("rev-parse", "--verify", "-q", f"{sha}^").returncode == 0
-        # A gdir can vanish between a commit and its parent -- moved elsewhere, or deleted
-        # outright. Checking only graph_dirs(sha) let a commit do either to g and skip the
-        # per-commit signature check entirely, since g was gone from the tree being
-        # examined. Union in graph_dirs at the parent too, so "g disappeared here" is
-        # still checked against who could write to g a moment before this commit.
+        # A gdir can vanish between a commit and its parent. Checking only graph_dirs(sha)
+        # let a commit move or delete g and skip the signature check entirely, so the
+        # parent's graph_dirs is unioned in: "g disappeared here" is still checked.
         now = frozenset(graph_dirs(sha))
         before = frozenset(graph_dirs(f"{sha}^")) if has_parent else frozenset()
-        # Every rule in check_commit keys on contributors.yaml, but the loop used to
-        # visit only directories that hold a GRAPH at this commit or its parent. A
-        # directory with a constitution and no graph was therefore judged by nobody: a
-        # writer could plant `mine/contributors.yaml` naming themselves admin (invisible,
-        # `mine` is not a graph dir) and add `mine/graph.yaml` and `mine/nodes/` in a
-        # second commit, where the constitution now reads as unchanged and is checked
-        # against their own key. The same blind spot let a writer rewrite the constitution
-        # of a graph an admin had retired, dropping the admin, while its directory held no
-        # graph at either end. Watch wherever a constitution is or was, not where a graph is.
+        # Watch wherever a constitution IS or WAS, not where a graph is. Visiting only
+        # graph directories judged a constitution with no graph by nobody: a writer could
+        # plant `mine/contributors.yaml` naming themselves admin, then add the graph in a
+        # second commit where it reads as unchanged and is checked against their own key.
+        # The same blind spot let a writer rewrite a retired graph's constitution.
         signed_before = frozenset(contributors_dirs(f"{sha}^")) if has_parent else frozenset()
         watched = now | before | signed_before | frozenset(contributors_dirs(sha))
         for gdir in sorted(watched):
@@ -489,11 +451,9 @@ def main(stdin=None) -> int:
             ok = False
             continue
         if ZERO.match(old):
-            # check_ref asks git which branches exist, and mid-push the answer is the
-            # same for every line: no ref has moved yet when pre-receive runs. So a
-            # `git push --all` into a repo with no branch read "none here" once per ref
-            # and created them all. The count of creations in THIS push is kept here,
-            # where the lines are read, because nothing git can be asked knows it.
+            # Mid-push, git's answer to "which branches exist" is the same for every
+            # line, so `git push --all` into a branchless repo read "none here" once per
+            # ref and created them all. Counted here, because nothing git knows it.
             if born:
                 say(f"{ref}: {ONE_BRANCH}, and one refused ref refuses the whole push")
                 ok = False

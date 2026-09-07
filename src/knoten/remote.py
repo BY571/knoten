@@ -1,10 +1,7 @@
-"""The client side of a remote graph.
-
-A remote is a git URL plus a token: this module is git's credential helper plus a handful
-of commands that wrap git and make four JSON calls. It imports nothing from the server
-(`serve.py`, `registry.py`) so a bug in one cannot hide in the other -- except
-`gate.graph_dirs`, a read-only tree walk, asked here the same question the gate asks on
-every push: where in this clone does the graph live.
+"""The client side of a remote graph: git's credential helper plus a handful of commands
+that wrap git and make four JSON calls. It imports nothing from the server (`serve.py`,
+`registry.py`) so a bug in one cannot hide in the other -- except `gate.graph_dirs`, a
+read-only tree walk asked the same question the gate asks on every push.
 
 Tokens live in one file, mode 0600, one line per remote: `<url> <user> <token>`. The key
 carries the scheme, because a token scoped to `https://h/x.git` must never travel in the
