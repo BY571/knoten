@@ -10,6 +10,8 @@ call, and the agent — which is already an LLM — does the semantic matching i
 """
 import pytest
 
+from conftest import compressible_graph
+
 from knoten import ops
 from knoten.core import find_root
 
@@ -119,22 +121,17 @@ def test_index_filters_on_an_arbitrary_frontmatter_field(cwd):
 
 
 def _layered(graph):
-    (graph.root / "graph.yaml").write_text(
-        "name: t\nnode_types: [question, finding, gate]\n"
-        "statuses: [open, alive, superseded, active]\nrules: []\n", encoding="utf-8")
-    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
-    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
+    """Two findings retired by one general node, with a third still standing: the three
+    layers `index` has to tell apart."""
+    compressible_graph(graph, n=3, gates=1)
     for i in (1, 2):
         graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: superseded\nlinks:\n"
                                    "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
-    graph.node("finding-3", "id: finding-3\ntype: finding\nstatus: alive\nlinks:\n"
-                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                            "  - {rel: kn:survivedGate, to: gate-h}", "# 3\n")
+                                   "  - {rel: kn:survivedGate, to: gate-a}", f"# {i}\n")
     graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
                             "  - {rel: npx:supersedes, to: finding-1}\n"
                             "  - {rel: npx:supersedes, to: finding-2}\n"
-                            "  - {rel: kn:survivedGate, to: gate-h}",
+                            "  - {rel: kn:survivedGate, to: gate-a}",
                "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
 
 
@@ -149,7 +146,7 @@ def test_superseded_nodes_are_hidden_by_default_and_counted(graph):
     # regardless of what graph.yaml currently declares. None of them is superseded, so
     # they survive the hiding step alongside the four nodes this test is actually about.
     assert [n["id"] for n in p["nodes"]] == [
-        "finding-g", "finding-3", "gate-cost", "gate-h", "hyp-alpha", "hyp-beta", "question-q"]
+        "finding-g", "finding-3", "gate-a", "gate-cost", "hyp-alpha", "hyp-beta", "question-q"]
     assert p["hidden"] == 2 and p["total"] == 7
 
 

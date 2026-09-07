@@ -6,6 +6,8 @@ optional dependency for a transport you may not be using. `attach` and `update` 
 that problem; they live in their own modules and lock themselves.
 """
 
+from conftest import compressible_graph
+
 from knoten import commit as commit_mod
 from knoten.commit import commit
 from knoten.core import load
@@ -166,16 +168,6 @@ def test_a_malformed_candidate_is_refused_not_raised(graph):
     assert not (graph.root / "nodes" / "hyp-bad.md").exists()
 
 
-COMP_RULES = """\
-name: t
-statuses: [open, alive, dead, superseded]
-node_types: [question, finding, gate]
-rules:
-  - id: compress-before-you-accumulate
-    max_alive: {type: finding, per: question, count: 4}
-    message: Compress first.
-"""
-
 GENERAL = ("type: finding\nstatus: alive\nlinks:\n"
            "  - {rel: npx:supersedes, to: finding-1}\n"
            "  - {rel: npx:supersedes, to: finding-2}\n"
@@ -184,23 +176,8 @@ GENERAL = ("type: finding\nstatus: alive\nlinks:\n"
 COVERS = "# G\n\n## Covers\n- finding-1: small\n- finding-2: large\n"
 
 
-def _specifics(graph, n=2):
-    graph.rules(COMP_RULES)
-    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
-    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
-    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
-    for i in range(1, n + 1):
-        gate = "gate-a" if i % 2 else "gate-b"
-        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\n"
-                                   f"created: 2026-01-{i:02d}\nlinks:\n"
-                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                                   f"  - {{rel: kn:survivedGate, to: {gate}}}",
-                   f"# {i}\n\nThe claim {i}.\n")
-    return graph
-
-
 def test_committing_a_general_node_flips_its_targets_and_keeps_their_claims(graph):
-    _specifics(graph)
+    compressible_graph(graph, n=2, cap=4)
     before = {i: graph.read(f"finding-{i}") for i in (1, 2)}
 
     res = commit(graph.root, "finding-g", GENERAL, COVERS)
@@ -211,12 +188,12 @@ def test_committing_a_general_node_flips_its_targets_and_keeps_their_claims(grap
     for i in (1, 2):
         after = graph.read(f"finding-{i}")
         assert f"The claim {i}." in after and after.startswith("---\n")
-        assert "superseded by finding-g" in after
+        assert "\n## Superseded\nsuperseded by finding-g on " in after
         assert before[i].split("---")[2].strip() in after      # the body survives verbatim
 
 
 def test_a_refused_general_node_flips_nothing(graph):
-    _specifics(graph)
+    compressible_graph(graph, n=2, cap=4)
 
     res = commit(graph.root, "finding-g", GENERAL, "# G\n")     # no Covers
 
@@ -227,7 +204,7 @@ def test_a_refused_general_node_flips_nothing(graph):
 
 
 def test_a_compression_reports_what_it_freed(graph):
-    _specifics(graph, n=4)
+    compressible_graph(graph, n=4, cap=4)
 
     res = commit(graph.root, "finding-g", GENERAL, COVERS)
 
@@ -240,7 +217,7 @@ def test_a_compression_reports_what_it_freed(graph):
 
 
 def test_the_budget_refuses_the_one_too_many_and_a_compression_unblocks_it(graph):
-    _specifics(graph, n=4)
+    compressible_graph(graph, n=4, cap=4)
     fifth = ("type: finding\nstatus: alive\ncreated: 2026-02-01\nlinks:\n"
              "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
              "  - {rel: kn:survivedGate, to: gate-a}")
@@ -254,8 +231,69 @@ def test_the_budget_refuses_the_one_too_many_and_a_compression_unblocks_it(graph
     assert commit(graph.root, "finding-5", fifth, "# 5\n")["status"] == "COMMITTED"
 
 
+def test_a_backdated_one_too_many_is_still_refused(graph):
+    """The cap is a fact about the graph, not a race the newest node loses. Refusing on
+    blame let an author hand-write an old `created:`, put the violation on somebody else's
+    node, and walk through a full budget."""
+    compressible_graph(graph, n=4, cap=4)
+    fifth = ("type: finding\nstatus: alive\ncreated: 2001-01-01\nlinks:\n"
+             "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+             "  - {rel: kn:survivedGate, to: gate-a}")
+
+    res = commit(graph.root, "finding-5", fifth, "# 5\n")
+
+    assert res["status"] == "REJECTED"
+    assert "5 alive finding under question-q, budget 4" in res["violations"][0]["message"]
+    assert not (graph.root / "nodes" / "finding-5.md").exists()
+
+
+def test_a_partial_compression_lands_on_a_graph_already_over_its_budget(graph):
+    """Six alive under a cap of three. A general node over three of them still leaves four,
+    so refusing anything over the cap would make the one move that helps impossible. What
+    the budget refuses is a write that GROWS an over-cap group, which the next finding does.
+    """
+    compressible_graph(graph, n=6, cap=3)
+    general = ("type: finding\nstatus: alive\nlinks:\n"
+               "  - {rel: npx:supersedes, to: finding-1}\n"
+               "  - {rel: npx:supersedes, to: finding-2}\n"
+               "  - {rel: npx:supersedes, to: finding-3}\n"
+               "  - {rel: kn:survivedGate, to: gate-a}\n"
+               "  - {rel: kn:survivedGate, to: gate-b}")
+    covers = "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n- finding-3: c\n"
+    seventh = ("type: finding\nstatus: alive\nlinks:\n"
+               "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+               "  - {rel: kn:survivedGate, to: gate-a}")
+
+    assert commit(graph.root, "finding-g", general, covers)["status"] == "COMMITTED"
+
+    res = commit(graph.root, "finding-7", seventh, "# 7\n")
+    assert res["status"] == "REJECTED"
+    assert "5 alive finding under question-q, budget 3" in res["violations"][0]["message"]
+
+
+def test_a_target_whose_filename_is_not_a_legal_id_is_refused_not_raised(graph):
+    """`commit` promises a refusal an agent can read rather than a traceback. `node_path`
+    raises on an id that is not kebab-case, and a file written by hand carries whatever
+    name the filesystem allowed -- so the promise has to cover the targets too."""
+    compressible_graph(graph, n=1, cap=4)
+    (graph.root / "nodes" / "Finding-A.md").write_text(
+        "---\nid: Finding-A\ntype: finding\nstatus: alive\nlinks:\n"
+        "  - {rel: prov:wasDerivedFrom, to: question-q}\n---\n\n# A\n", encoding="utf-8")
+
+    res = commit(graph.root, "finding-g",
+                 "type: finding\nstatus: alive\nlinks:\n"
+                 "  - {rel: npx:supersedes, to: Finding-A}\n"
+                 "  - {rel: npx:supersedes, to: finding-1}\n"
+                 "  - {rel: kn:survivedGate, to: gate-a}",
+                 "# G\n\n## Covers\n- Finding-A: a\n- finding-1: b\n")
+
+    assert res["status"] == "REJECTED"
+    assert "not a valid node id" in res["reason"]
+    assert not (graph.root / "nodes" / "finding-g.md").exists()
+
+
 def test_a_single_replacement_reports_one_line_worth(graph):
-    _specifics(graph)
+    compressible_graph(graph, n=2, cap=4)
     one = ("type: finding\nstatus: alive\nlinks:\n"
            "  - {rel: npx:supersedes, to: finding-1}\n"
            "  - {rel: kn:survivedGate, to: gate-a}")
@@ -311,7 +349,7 @@ def test_a_rule_that_only_fires_on_superseded_refuses_the_compression(graph):
     """A target that is perfectly fine ALIVE can still fail once flipped, if a rule
     fires only on `superseded` (e.g. demanding a post-mortem section). That failure must
     be caught before the write, not raised after the general node is already on disk."""
-    _specifics(graph)
+    compressible_graph(graph, n=2, cap=4)
     graph.rules(SECTION_RULES)   # neither finding-1 nor finding-2 has the section
 
     res = commit(graph.root, "finding-g", GENERAL, COVERS)
@@ -340,7 +378,7 @@ def test_a_third_party_node_broken_by_the_flip_refuses_the_compression(graph):
     targets: `note-x` here rests on two alive supports, and flipping both to superseded
     breaks it. That must refuse the compression, naming `note-x` — not go through and
     leave a rule violation nobody was told about."""
-    _specifics(graph)
+    compressible_graph(graph, n=2, cap=4)
     graph.rules(THIRD_PARTY_RULES)
     graph.node("note-x", "id: note-x\ntype: note\nstatus: open\nlinks:\n"
                          "  - {rel: mp:supports, to: finding-1}\n"
@@ -372,7 +410,7 @@ def test_a_principle_general_node_reports_the_finding_budget(graph):
     """`compression_report`'s budget slot is matched on what the TARGETS are typed, not
     what the general node itself is typed: a `principle` node generalising `finding`s
     must find the finding budget, not come up empty looking for a principle one."""
-    _specifics(graph, n=4)
+    compressible_graph(graph, n=4, cap=4)
     graph.rules(PRINCIPLE_RULES)
     principle = ("type: principle\nstatus: alive\nlinks:\n"
                 "  - {rel: npx:supersedes, to: finding-1}\n"

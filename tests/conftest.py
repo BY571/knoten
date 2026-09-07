@@ -54,6 +54,50 @@ def graph(tmp_path):
     return Graph().rules()
 
 
+COMPRESSIBLE_YAML = """\
+name: t
+statuses: [open, alive, dead, retracted, superseded, active]
+node_types: [question, experiment, finding, gate, hypothesis, note, principle, source]
+tags: [lr, batch]
+rules:
+{rules}"""
+
+
+def compressible_graph(graph, n=2, cap=None, gates=2, tag=None, start=1,
+                       per="question", through=None):
+    """The shape every compression test needs: one question, `gates` gates, and `n` alive
+    findings under it, each surviving one gate in turn, stamped a day apart. `cap` adds the
+    `max_alive` budget rule; `through` roots the findings via an experiment rather than
+    straight at the question; `tag` tags them, which is the other thing a cluster forms on.
+
+    Seven near-identical builders wrote this same graph, differing in ways that were never
+    the point of the tests using them -- and a fix to the shape had to be made in seven
+    places or the suite disagreed with itself about what a compressible graph looks like.
+    """
+    rule = (f"  - id: compress-before-you-accumulate\n"
+            f"    max_alive: {{type: finding, per: {per}, count: {cap}}}\n"
+            f"    message: Compress first.\n") if cap else ""
+    graph.rules(COMPRESSIBLE_YAML.format(rules=rule))
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    names = [f"gate-{c}" for c in "abcdefgh"[:gates]]
+    for g in names:
+        graph.node(g, f"id: {g}\ntype: gate\nstatus: active", f"# {g}\n")
+    if through:
+        graph.node(through, f"id: {through}\ntype: experiment\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}", "# E\n")
+    for i in range(start, start + n):
+        gate = names[(i - start) % len(names)] if names else None
+        graph.node(f"finding-{i}",
+                   f"id: finding-{i}\ntype: finding\nstatus: alive\n"
+                   f"created: 2026-01-{i + 1:02d}\n"
+                   + (f"tags: [{tag}]\n" if tag else "")
+                   + "links:\n"
+                   + f"  - {{rel: prov:wasDerivedFrom, to: {through or 'question-q'}}}\n"
+                   + (f"  - {{rel: kn:survivedGate, to: {gate}}}\n" if gate else ""),
+                   f"# {i}\n\nThe claim {i}.\n")
+    return graph
+
+
 GIT_ISOLATION = {
     # The developer's own git config must not reach these tests: a global credential
     # helper would answer the server's 401 with cached credentials and pass a test that

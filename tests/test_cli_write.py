@@ -3,6 +3,7 @@ on a second surface. An agent with a shell had to install an SDK to file a claim
 import json
 
 import pytest
+from conftest import compressible_graph
 
 from knoten.cli import main
 from knoten.core import load
@@ -239,28 +240,11 @@ def test_new_scaffolds_a_required_field_blank_so_validate_still_names_it(tmp_pat
     assert main(["validate"]) == 1
 
 
-COMP = """\
-name: t
-statuses: [open, alive, superseded]
-node_types: [question, finding, gate]
-rules:
-  - id: compress-before-you-accumulate
-    max_alive: {type: finding, per: question, count: 6}
-    message: Compress first.
-"""
-
-
 @pytest.fixture
 def four_findings(graph, monkeypatch, tmp_path):
-    graph.rules(COMP)
-    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
-    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
-    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
-    for i in range(1, 5):
-        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\nlinks:\n"
-                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                                   f"  - {{rel: kn:survivedGate, to: {'gate-a' if i < 3 else 'gate-b'}}}",
-                   f"# {i}\n")
+    """Four findings under one question with a budget of six, and the two files a
+    `knoten commit` of a general node over three of them takes on the command line."""
+    compressible_graph(graph, n=4, cap=6)
     fm = tmp_path / "fm.yaml"
     fm.write_text("type: finding\nstatus: alive\nlinks:\n"
                   "  - {rel: npx:supersedes, to: finding-1}\n"
@@ -269,7 +253,8 @@ def four_findings(graph, monkeypatch, tmp_path):
                   "  - {rel: kn:survivedGate, to: gate-a}\n"
                   "  - {rel: kn:survivedGate, to: gate-b}\n", encoding="utf-8")
     body = tmp_path / "body.md"
-    body.write_text("# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n- finding-3: c\n", encoding="utf-8")
+    body.write_text("# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n- finding-3: c\n",
+                    encoding="utf-8")
     monkeypatch.chdir(graph.root)
     return fm, body
 

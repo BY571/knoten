@@ -475,7 +475,9 @@ def test_frontier_lists_at_most_eight_ids_per_cluster(graph, monkeypatch, capsys
     out = capsys.readouterr().out
 
     assert "finding-07, +2 more" in out and "finding-08" not in out
-    assert "10 alive findings" in out and "budget" not in out
+    # No budget rule in this graph, so the cluster line ends at the count: a `, budget N`
+    # tail here would be a ceiling nobody declared.
+    assert "question-q  ·  gate-h  ·  10 alive findings\n" in out
 
 
 def test_index_footer_says_how_many_superseded_are_hidden(graph, monkeypatch, capsys):

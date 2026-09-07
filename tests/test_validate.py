@@ -1,6 +1,7 @@
 """The rules engine. Its one job is to refuse. Every finding here made it
 silently accept instead — the worst possible failure for a validator."""
 import pytest
+from conftest import compressible_graph
 
 from knoten.commit import commit
 from knoten.core import GraphError, load, today
@@ -499,28 +500,8 @@ def test_a_malformed_require_field_is_a_graph_error(graph):
         check(load(graph.root), graph.root)
 
 
-def _q_graph(graph, n_findings, cap=3, per="question", extra_rules=""):
-    rules(graph, f"""\
-name: t
-statuses: [open, alive, dead, superseded]
-node_types: [question, experiment, finding, gate]
-rules:
-  - id: compress-before-you-accumulate
-    max_alive: {{type: finding, per: {per}, count: {cap}}}
-    message: Compress first.
-{extra_rules}""")
-    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
-    graph.node("exp-e", "id: exp-e\ntype: experiment\nstatus: alive\nlinks:\n"
-                        "  - {rel: prov:wasDerivedFrom, to: question-q}", "# E\n")
-    for i in range(n_findings):
-        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\n"
-                                   f"created: 2026-01-0{i + 1}\nlinks:\n"
-                                   "  - {rel: prov:wasDerivedFrom, to: exp-e}", f"# {i}\n")
-    return graph
-
-
 def test_max_alive_fires_on_the_newest_nodes_past_the_cap(graph):
-    _q_graph(graph, 5, cap=3)
+    compressible_graph(graph, 5, cap=3, gates=0, start=0, through="exp-e")
 
     errs = [e for e in check(load(graph.root), graph.root) if e.rule == "compress-before-you-accumulate"]
 
@@ -530,13 +511,13 @@ def test_max_alive_fires_on_the_newest_nodes_past_the_cap(graph):
 
 
 def test_max_alive_is_quiet_at_the_cap(graph):
-    _q_graph(graph, 3, cap=3)
+    compressible_graph(graph, 3, cap=3, gates=0, start=0, through="exp-e")
 
     assert not [e for e in check(load(graph.root), graph.root) if "compress" in e.rule]
 
 
 def test_a_node_something_alive_supersedes_stops_counting(graph):
-    _q_graph(graph, 4, cap=3)
+    compressible_graph(graph, 4, cap=3, gates=0, start=0, through="exp-e")
     graph.node("finding-rule", "id: finding-rule\ntype: finding\nstatus: alive\n"
                                "created: 2026-02-01\nlinks:\n"
                                "  - {rel: npx:supersedes, to: finding-0}\n"
@@ -545,13 +526,14 @@ def test_a_node_something_alive_supersedes_stops_counting(graph):
                "# rule\n\n## Covers\n- finding-0: a\n- finding-1: b\n")
     graph.node("gate-g", "id: gate-g\ntype: gate\nstatus: open", "# G\n")
 
-    errs = [e for e in check(load(graph.root), graph.root) if "compress" in e.rule]
-
-    assert not errs, errs          # 4 - 2 + 1 = 3, at the cap
+    # Not just the budget rule: a general node that stops two findings counting has to
+    # leave the graph clean by every other check too, or it has bought the slot with a
+    # violation somewhere else.
+    assert check(load(graph.root), graph.root) == []      # 4 - 2 + 1 = 3, at the cap
 
 
 def test_superseded_nodes_do_not_count(graph):
-    _q_graph(graph, 3, cap=2)
+    compressible_graph(graph, 3, cap=2, gates=0, start=0, through="exp-e")
     graph.node("finding-0", "id: finding-0\ntype: finding\nstatus: superseded\n"
                             "created: 2026-01-01\nlinks:\n"
                             "  - {rel: prov:wasDerivedFrom, to: exp-e}", "# 0\n")
@@ -560,7 +542,7 @@ def test_superseded_nodes_do_not_count(graph):
 
 
 def test_unrooted_nodes_share_a_group_of_their_own(graph):
-    _q_graph(graph, 0, cap=1)
+    compressible_graph(graph, 0, cap=1, gates=0, start=0, through="exp-e")
     for i in range(2):
         graph.node(f"finding-lost-{i}", f"id: finding-lost-{i}\ntype: finding\nstatus: alive\n"
                                         f"created: 2026-01-0{i + 1}", f"# {i}\n")
@@ -571,7 +553,7 @@ def test_unrooted_nodes_share_a_group_of_their_own(graph):
 
 
 def test_max_alive_per_graph_ignores_questions(graph):
-    _q_graph(graph, 3, cap=2, per="graph")
+    compressible_graph(graph, 3, cap=2, per="graph", gates=0, start=0, through="exp-e")
     graph.node("question-r", "id: question-r\ntype: question\nstatus: open", "# R\n")
     graph.node("finding-r", "id: finding-r\ntype: finding\nstatus: alive\ncreated: 2026-03-01\n"
                             "links:\n  - {rel: prov:wasDerivedFrom, to: question-r}", "# r\n")
@@ -711,22 +693,11 @@ def test_compressible_does_not_hijack_node_types_own_diagnosis(graph):
 
 
 def _bar_graph(graph):
-    rules(graph, """\
-name: t
-statuses: [open, alive, dead, superseded]
-node_types: [question, experiment, finding, gate, source]
-rules: []
-""")
-    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    """The bar's own fixture: two findings under one question, each with its own gate, so
+    a general node over them has a union of gates to face and a second question to be
+    caught standing under."""
+    compressible_graph(graph, n=2)
     graph.node("question-r", "id: question-r\ntype: question\nstatus: open", "# R\n")
-    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
-    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
-    graph.node("finding-1", "id: finding-1\ntype: finding\nstatus: alive\nlinks:\n"
-                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                            "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n")
-    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
-                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n")
     return graph
 
 
@@ -867,6 +838,62 @@ def test_a_target_already_superseded_by_another_node_is_refused(graph):
 
     msgs = [e.message for e in _bar(graph) if e.node == "finding-g"]
     assert any("finding-g supersedes finding-3, which finding-h already superseded" in m for m in msgs)
+
+
+SUPERSEDED_1 = ("id: finding-1\ntype: finding\nstatus: superseded\nlinks:\n"
+                "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                "  - {rel: kn:survivedGate, to: gate-a}")
+SUPERSEDED_2 = ("id: finding-2\ntype: finding\nstatus: superseded\nlinks:\n"
+                "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def _compressed(graph):
+    """The graph the moment after a compression lands: both targets superseded, one alive
+    general node standing for them."""
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+    graph.node("finding-1", SUPERSEDED_1)
+    graph.node("finding-2", SUPERSEDED_2)
+    return graph
+
+
+def test_only_a_compressible_type_may_supersede(graph):
+    """The bar checked everything about the targets and nothing about the node doing the
+    retiring. A graph where a `hypothesis` can retire findings has no compression bar, it
+    has a delete button."""
+    _bar_graph(graph).node("hyp-g", GOOD_GENERAL.replace("id: finding-g", "id: hyp-g")
+                                                .replace("type: finding", "type: hypothesis"),
+                           GOOD_COVERS)
+
+    assert "hyp-g (hypothesis) may not supersede; only finding can" in \
+        [e.message for e in _bar(graph)]
+
+
+def test_a_superseded_node_whose_superseder_is_retracted_is_named(graph):
+    """Retracting the general node leaves its targets standing for nothing: hidden from
+    `index`, counted by no budget, answering no question. A finding must not be lost that
+    quietly -- and a second general node must be able to take them over."""
+    _compressed(graph)
+    graph.node("finding-g", GOOD_GENERAL.replace("status: alive", "status: retracted"),
+               GOOD_COVERS)
+
+    errs = _bar(graph)
+    assert [e.node for e in errs] == ["finding-1", "finding-2"]
+    assert "finding-1 is superseded by nothing alive" in errs[0].message
+    assert "knoten update finding-1 --status alive" in errs[0].message
+
+    graph.node("finding-h", GOOD_GENERAL.replace("finding-g", "finding-h"), GOOD_COVERS)
+
+    assert _bar(graph) == []
+
+
+def test_deleting_the_general_node_orphans_the_targets_it_retired(graph):
+    _compressed(graph)
+
+    (graph.root / "nodes" / "finding-g.md").unlink()
+
+    assert [e.node for e in _bar(graph)] == ["finding-1", "finding-2"]
+    assert all("is superseded by nothing alive" in e.message for e in _bar(graph))
 
 
 def test_covers_matching_is_whole_token_not_substring(graph):

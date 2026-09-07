@@ -1,6 +1,9 @@
 """Every question the graph answers, as a dict. One implementation; the CLI renders it,
 --json dumps it. These lived twice before — once per surface — and drifted."""
+from conftest import compressible_graph
+
 from knoten import ops
+from knoten.core import load
 
 
 def test_index_returns_one_shape_both_renderings_share(graph):
@@ -30,36 +33,10 @@ def test_get_reports_an_attachments_size_from_disk(graph):
     assert by_path["attachments/hyp-x/gone.png"]["missing"] is True
 
 
-COMP_RULES = """\
-name: t
-statuses: [open, alive, dead, superseded]
-node_types: [question, finding, gate]
-rules:
-  - id: compress-before-you-accumulate
-    max_alive: {type: finding, per: question, count: 4}
-    message: Compress first.
-"""
-
-
-def _findings(graph, n=2):
-    graph.rules(COMP_RULES)
-    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
-    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
-    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
-    for i in range(1, n + 1):
-        gate = "gate-a" if i % 2 else "gate-b"
-        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\n"
-                                   f"created: 2026-01-{i:02d}\nlinks:\n"
-                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                                   f"  - {{rel: kn:survivedGate, to: {gate}}}",
-                   f"# {i}\n\nThe claim {i}.\n")
-    return graph
-
-
 def test_ops_update_that_adds_a_supersedes_link_reports_the_compression(graph):
     """`ops.update` gains the same `compressed` key `ops.commit`-equivalent (`commit()`)
     already carries, once the update itself is what adds the `npx:supersedes` edge."""
-    _findings(graph, n=4)
+    compressible_graph(graph, n=4, cap=4)
     graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
                             "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
                             "  - {rel: kn:survivedGate, to: gate-a}\n"
@@ -204,3 +181,43 @@ rules:
     assert res["status"] == "REJECTED"
     for nid, text in before.items():
         assert graph.read(nid) == text
+
+
+def test_bringing_a_node_back_alive_past_the_cap_is_refused(graph):
+    """`update` writes as truly as `commit`, and `fields` sets any top-level key -- so an
+    author could revive a node past a full cap and backdate it in the same call, leaving
+    the violation on somebody else's node and the write on disk."""
+    compressible_graph(graph, n=3, cap=3)
+    graph.node("finding-4", "id: finding-4\ntype: finding\nstatus: dead\n"
+                            "created: 2001-01-01\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}", "# 4\n")
+
+    res = ops.update(graph.root, "finding-4", status="alive",
+                     fields={"updated": "2001-01-02"})
+
+    assert res["status"] == "REJECTED"
+    assert "4 alive finding under question-q, budget 3" in res["reason"]
+    assert load(graph.root)["finding-4"].status == "dead"
+
+
+def test_a_supersedes_edge_written_through_fields_flips_its_targets_too(graph):
+    """The targets to flip are read off the candidate, not off the `links` argument:
+    `fields={"links": [...]}` declares the edge just as truly, and reading the argument
+    left the general node claiming to have retired findings the graph still counted."""
+    compressible_graph(graph, n=2, cap=4)
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}",
+               "# G\n\n## Covers\n- finding-1: small\n- finding-2: large\n")
+
+    res = ops.update(graph.root, "finding-g", fields={"links": [
+        {"rel": "prov:wasDerivedFrom", "to": "question-q"},
+        {"rel": "kn:survivedGate", "to": "gate-a"},
+        {"rel": "kn:survivedGate", "to": "gate-b"},
+        {"rel": "npx:supersedes", "to": "finding-1"},
+        {"rel": "npx:supersedes", "to": "finding-2"}]})
+
+    assert res["compressed"]["flipped"] == ["finding-1", "finding-2"]
+    nodes = load(graph.root)
+    assert nodes["finding-1"].status == nodes["finding-2"].status == "superseded"

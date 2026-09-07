@@ -15,11 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from knoten.core import load, parse_text
+from knoten.cli import main
+from knoten.core import FM_RE, load, parse_text
 from knoten.validate import check, load_rules
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ["README.md", "SPEC.md"]
+PROSE = ["README.md", "SKILL.md", "SPEC.md"]
 
 # The closing fence must be the SAME length as the opening one. The README's node example
 # is a ````markdown fence wrapping an inner ```python block; a naive `^`{3,}` closer stops
@@ -81,3 +83,48 @@ def test_a_documented_rules_block_is_accepted_by_the_engine(doc, block, tmp_path
     (tmp_path / "graph.yaml").write_text(block, encoding="utf-8")
 
     load_rules(tmp_path)         # raises GraphError on an unknown key
+
+
+@pytest.mark.parametrize("doc", PROSE)
+def test_the_prose_docs_use_no_em_dashes(doc):
+    """A house rule, pinned rather than remembered: every pass over these files adds a few
+    back, and nobody reads a diff looking for one character."""
+    text = (ROOT / doc).read_text(encoding="utf-8")
+
+    assert "\u2014" not in text, f"{doc} contains an em dash"
+
+
+@pytest.fixture
+def readme_compression(example, tmp_path, monkeypatch, capsys):
+    """The README's own general node, committed on a copy of the shipped example graph
+    through the CLI the README tells you to run. Returns what it printed."""
+    block = next(b for b in blocks("README.md") if "npx:supersedes" in b)
+    fm, body = FM_RE.match(block).groups()
+    (tmp_path / "fm").write_text(fm, encoding="utf-8")
+    (tmp_path / "body").write_text(body, encoding="utf-8")
+    monkeypatch.chdir(example)
+
+    assert main(["commit", "finding-sc-needs-scale",
+                 "--frontmatter", str(tmp_path / "fm"), "--body", str(tmp_path / "body")]) == 0
+    return capsys.readouterr().out
+
+
+def test_the_readmes_reward_block_is_what_the_command_actually_prints(readme_compression):
+    """The numbers in that block are the reward the whole feature exists to hand out. A
+    README that quotes a number the tool no longer prints is the same lie as a spec that
+    documents a rule the engine does not implement."""
+    quoted = next(b for b in blocks("README.md") if b.startswith("  + nodes/"))
+
+    for line in quoted.strip("\n").splitlines():
+        assert line in readme_compression, line
+
+
+def test_a_compression_is_not_warned_about_resembling_what_it_just_superseded(readme_compression):
+    """A general node resembles its targets by construction -- that is what compressing IS.
+    Telling the author to supersede what they have already superseded reads as a refusal of
+    the very move the graph asked for."""
+    warned = readme_compression.split("! This resembles")[1:]
+
+    assert warned, "the example no longer trips the resemblance warning at all"
+    assert "finding-sc-small-models" not in warned[0]
+    assert "finding-sc-large-models" not in warned[0]

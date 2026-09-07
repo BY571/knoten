@@ -8,6 +8,8 @@ log.
 """
 import pytest
 
+from conftest import compressible_graph
+
 from knoten import ops
 from knoten.core import frontier, load
 
@@ -90,64 +92,40 @@ def test_the_cli_prints_all_three_buckets(g, monkeypatch, capsys):
     assert "gate-idle" in out
 
 
-COMP_RULES = """\
-name: t
-statuses: [open, alive, dead, superseded, active]
-node_types: [question, finding, gate, hypothesis]
-tags: [lr, batch]
-rules:
-  - id: compress-before-you-accumulate
-    max_alive: {type: finding, per: question, count: 5}
-    message: Compress first.
-"""
-
-
-def _cluster_graph(graph, n=4, tag="lr"):
-    graph.rules(COMP_RULES)
-    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
-    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
-    for i in range(n):
-        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\n"
-                                   f"tags: [{tag}]\nlinks:\n"
-                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
-    return graph
-
-
 def test_three_alive_findings_sharing_a_gate_or_a_tag_are_a_cluster(graph):
-    _cluster_graph(graph, n=3)
+    compressible_graph(graph, n=3, cap=5, gates=1, tag="lr", start=0)
 
     f = frontier(load(graph.root))
 
     shared = {tuple(c["shared"].items())[0] for c in f["compressible"]}
-    assert shared == {("gate", "gate-h"), ("tag", "lr")}
+    assert shared == {("gate", "gate-a"), ("tag", "lr")}
     assert all(c["ids"] == ["finding-0", "finding-1", "finding-2"] for c in f["compressible"])
     assert all(c["question"] == "question-q" for c in f["compressible"])
 
 
 def test_two_are_not_a_cluster(graph):
-    _cluster_graph(graph, n=2)
+    compressible_graph(graph, n=2, cap=5, gates=1, tag="lr", start=0)
 
     assert frontier(load(graph.root))["compressible"] == []
 
 
 def test_clusters_are_ordered_biggest_first_and_superseded_nodes_are_out(graph):
-    _cluster_graph(graph, n=4)
+    compressible_graph(graph, n=4, cap=5, gates=1, tag="lr", start=0)
     graph.node("finding-3", "id: finding-3\ntype: finding\nstatus: alive\ntags: [batch]\nlinks:\n"
                             "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                            "  - {rel: kn:survivedGate, to: gate-h}", "# 3\n")
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 3\n")
     graph.node("finding-0", "id: finding-0\ntype: finding\nstatus: superseded\ntags: [lr]\nlinks:\n"
                             "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
-                            "  - {rel: kn:survivedGate, to: gate-h}", "# 0\n")
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 0\n")
 
     clusters = frontier(load(graph.root))["compressible"]
 
     assert [(c["shared"], c["ids"]) for c in clusters] == [
-        ({"gate": "gate-h"}, ["finding-1", "finding-2", "finding-3"])]      # lr has 2 left
+        ({"gate": "gate-a"}, ["finding-1", "finding-2", "finding-3"])]      # lr has 2 left
 
 
 def test_unrooted_findings_never_cluster(graph):
-    graph.rules(COMP_RULES)
+    compressible_graph(graph, n=0, cap=5, gates=1)
     for i in range(3):
         graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\ntags: [lr]", f"# {i}\n")
 
@@ -155,7 +133,7 @@ def test_unrooted_findings_never_cluster(graph):
 
 
 def test_the_payload_carries_the_shape_and_the_budget(graph, monkeypatch):
-    _cluster_graph(graph, n=3)
+    compressible_graph(graph, n=3, cap=5, gates=1, tag="lr", start=0)
     monkeypatch.chdir(graph.root)
 
     p = ops.frontier(graph.root)
@@ -167,7 +145,6 @@ def test_the_payload_carries_the_shape_and_the_budget(graph, monkeypatch):
 
 
 def test_without_a_budget_rule_the_shape_has_no_budget(graph):
-    _cluster_graph(graph, n=3)
-    (graph.root / "graph.yaml").write_text(COMP_RULES.split("rules:")[0] + "rules: []\n", encoding="utf-8")
+    compressible_graph(graph, n=3, gates=1, tag="lr", start=0)
 
     assert ops.frontier(graph.root)["shape"]["budget"] == []
