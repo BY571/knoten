@@ -450,7 +450,7 @@ def test_the_payload_carries_the_shape_and_the_clusters(compressed):
     assert p["shape"]["rules"] == 1 and p["shape"]["specifics"] == 3
     assert p["shape"]["clusters"] == 1
     assert p["clusters"][0]["shared"] == {"gate": "gate-h"}
-    assert p["clusters"][0]["ids"] == ["finding-3", "finding-5", "finding-6"]
+    assert p["clusters"][0]["ids"] == ["finding-3", "finding-5", "finding-6", "finding-g"]
 
 
 def test_a_max_alive_rule_reaches_the_page(compressed):

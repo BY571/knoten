@@ -292,10 +292,9 @@ def payload(root: Path) -> dict:
     visible = _visible(nodes, under)
     fpos, fwalls = _map(_inherited(nodes, visible, under))
     fcols = _columns(visible)
-    # A node that already generalises others is not itself a candidate to be generalised
-    # further — clusters name what is still loose, not what already did the compressing.
-    specific_nodes = {nid: n for nid, n in nodes.items() if not is_general(n)}
-    clusters = compressible(specific_nodes, compressible_types(cfg))
+    # The same clusters `knoten frontier` shows: recursive compression is allowed, so an
+    # alive rule that shares a gate or tag with loose specifics is a candidate too.
+    clusters = compressible(nodes, compressible_types(cfg))
 
     # A graph may declare `node_types` as a plain list, or as a mapping of type -> what
     # that word means here. Only the second can fill the legend.
