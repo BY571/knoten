@@ -1,0 +1,145 @@
+# {name} — a knoten research graph.
+#
+# The core knows NOTHING about this domain. Every rule below is declared HERE, as
+# data. Write a rule only when you have a corpse: a rule without a body behind it is
+# just friction.
+name: {name}
+description: TODO — what question is this graph about?
+
+# Enforced. A node whose type or status is not declared here is a typo — and a claim with
+# a typo'd status silently drops out of every query. Edit these for YOUR topic.
+#
+# The meanings are not decoration: knoten defines none of these words, so this is the only
+# place they ARE defined, and `knoten viz` shows them beside each column.
+node_types:
+  question:   what this graph exists to answer — a question, a statement or a task
+  source:     where the work came from — a paper, dataset, search, or your own intuition
+  idea:       what you took from a source; a direction, not yet a testable claim
+  hypothesis: a falsifiable claim derived from an idea
+  experiment: the test built to verify or falsify a hypothesis
+  finding:    what the experiment showed, expected or not — new ideas come from these
+  retraction: a claim withdrawn after the fact
+  gate:       a standing rule every claim must survive; a bar, not a stage
+statuses:   [open, alive, dead, retracted, superseded, active]
+
+# The axis `knoten index --tag` filters on. Declare them and a typo is a violation;
+# declare none and tagging is free. Add tags as the topic tells you what they are.
+# tags: [decoding, evaluation]
+
+# Reused standards: mp:supports / mp:challenges (Micropublications),
+#   npx:retracts / npx:supersedes (Nanopublications),
+#   prov:wasDerivedFrom / prov:used (PROV-O)
+# knoten adds:  kn:survivedGate  (claim -> the gate it PASSED)
+#               kn:killedByGate  (claim -> the gate that KILLED it)
+#               kn:blockedBy     (claim -> a structural wall, not a result)
+
+rules:
+  # --- the two that make a graph worth keeping -----------------------------------
+  # Gates are advisory by default here: `knoten frontier` lists an unchecked alive claim,
+  # it does not refuse it. Uncomment this rule to make citing a gate mandatory instead.
+  # - id: live-claims-must-cite-their-gates
+  #   when_status: alive
+  #   when_type: hypothesis, finding
+  #   require_edge: kn:survivedGate
+  #   message: An unchallenged claim is not a finding, it is a hope.
+
+  - id: dead-claims-must-say-why
+    when_status: dead, retracted
+    require_sections: Why it died, What would reopen this
+    message: The post-mortem IS the asset. A dead end must become a standing offer.
+
+  # --- the loop: every step records where it came from ---------------------------
+  # Delete any of these that your topic does not want. They are this graph's opinion,
+  # not knoten's: the core checks only what is declared here.
+  - id: sources-must-be-findable-again
+    when_type: source
+    require_field: origin
+    message: >
+      A source you cannot go back to is a rumour. Record a url, a doi, a file path
+      or "own intuition" if the work started in your head.
+
+  - id: ideas-must-cite-what-prompted-them
+    when_type: idea
+    require_edge_target: {rel: prov:wasDerivedFrom, type: question, min: 1}
+    message: Cite the question this idea serves.
+
+  - id: hypotheses-must-say-what-they-do-not-test
+    when_type: hypothesis
+    require_sections: The claim, What this does not test
+    message: >
+      A hypothesis is a pull request: one change, one thing tested. If you cannot say
+      what this does NOT test, it is testing more than one thing. Open a second
+      hypothesis instead of widening this one.
+
+  - id: hypotheses-are-claims-not-runs
+    when_type: hypothesis
+    forbid_fields: results, repro
+    message: >
+      A hypothesis is a claim. The run that tested it is an experiment and the number it
+      produced is a finding — put `results` and `repro` on those. One node holding all
+      three is how a loop stops having stages.
+
+  - id: alive-hypotheses-must-have-been-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {rel: kn:testedBy, type: experiment, min: 1}
+    message: >
+      A hypothesis is alive because something tested it. Record the run as an experiment
+      that `kn:tests` this node.
+
+  - id: experiments-must-be-rerunnable
+    when_type: experiment
+    require_sections: Setup, How to reproduce, Result
+    message: An experiment I cannot rerun is an anecdote.
+
+  # --- the round -------------------------------------------------------------------
+  # Each step names the one before it, so a claim can always be walked back to what was
+  # read. When `knoten frontier` reports a COMPRESSIBLE cluster, write the rule.
+  - id: ideas-come-from-sources
+    when_type: idea
+    require_edge_target: {rel: prov:wasDerivedFrom, type: source, finding, min: 1}
+    message: >
+      An idea comes from somewhere: a source you read, or a finding that changed the
+      picture. If it came out of your own head, cite `source-own-intuition` (`knoten idea`
+      does that for you). An idea citing nothing cannot be traced back to what prompted it.
+
+  - id: hypotheses-come-from-ideas
+    when_type: hypothesis
+    require_edge_target: {rel: prov:wasDerivedFrom, type: idea, min: 1}
+    message: >
+      Every hypothesis descends from an idea. One idea can produce several hypotheses,
+      that is the point of splitting them, but a claim with no idea behind it cannot be
+      traced back to what prompted it. If it came out of a finding, write the idea that
+      finding gave you and derive the hypothesis from that.
+
+  - id: experiments-test-a-hypothesis
+    when_type: experiment
+    require_edge_target: {rel: kn:tests, type: hypothesis, min: 1}
+    message: >
+      An experiment tests a claim. One that names none is a measurement nobody can
+      interpret six months later: was it exploratory, or did it settle something? If the
+      run explored rather than tested, write the hypothesis it was exploring, however
+      obvious it looks now.
+
+  - id: experiments-must-record-what-they-measured
+    when_type: experiment
+    require_field: results
+    message: >
+      The run that produced the number is the node that should carry it. A `## Result`
+      section is prose nothing can filter on; put the figures in `results:` as well.
+
+  - id: findings-come-from-experiments
+    when_type: finding
+    unless_edge: npx:supersedes
+    require_edge_target: {rel: prov:wasDerivedFrom, type: experiment, min: 1}
+    message: >
+      A finding that no experiment produced is an opinion. Cite the experiment; a general
+      finding that supersedes others cites those instead.
+
+  - id: findings-cite-the-run-rather-than-repeat-it
+    when_type: finding
+    forbid_fields: repro
+    message: >
+      How to rerun it belongs on the experiment. A finding that carries its own `repro`
+      is a second copy that will drift from the first.
+

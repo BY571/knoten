@@ -47,7 +47,3 @@ rules:
     when_type: hypothesis
     require_result_min: {n_independent: 30}
     message: A result on fewer than 30 independent questions is noise, not evidence.
-
-  - id: compress-before-you-accumulate
-    max_alive: {type: finding, per: question, count: 12}
-    message: Twelve live findings under one question and no rule above them. Compress first.

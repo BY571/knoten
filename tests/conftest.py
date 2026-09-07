@@ -59,25 +59,15 @@ name: t
 statuses: [open, alive, dead, retracted, superseded, active]
 node_types: [question, experiment, finding, gate, hypothesis, note, principle, source]
 tags: [lr, batch]
-rules:
-{rules}"""
+rules: []
+"""
 
 
-def compressible_graph(graph, n=2, cap=None, gates=2, tag=None, start=1,
-                       per="question", through=None):
-    """The shape every compression test needs: one question, `gates` gates, and `n` alive
-    findings under it, each surviving one gate in turn, stamped a day apart. `cap` adds the
-    `max_alive` budget rule; `through` roots the findings via an experiment rather than
-    straight at the question; `tag` tags them, which is the other thing a cluster forms on.
-
-    Seven near-identical builders wrote this same graph, differing in ways that were never
-    the point of the tests using them -- and a fix to the shape had to be made in seven
-    places or the suite disagreed with itself about what a compressible graph looks like.
-    """
-    rule = (f"  - id: compress-before-you-accumulate\n"
-            f"    max_alive: {{type: finding, per: {per}, count: {cap}}}\n"
-            f"    message: Compress first.\n") if cap else ""
-    graph.rules(COMPRESSIBLE_YAML.format(rules=rule))
+def compressible_graph(graph, n=2, gates=2, tag=None, start=1, through=None):
+    """One question, `gates` gates, `n` alive findings under it, each surviving one gate
+    in turn, stamped a day apart. `through` roots them via an experiment; `tag` tags them,
+    which is the other thing a cluster forms on."""
+    graph.rules(COMPRESSIBLE_YAML)
     graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
     names = [f"gate-{c}" for c in "abcdefgh"[:gates]]
     for g in names:
@@ -110,24 +100,13 @@ GIT_ISOLATION = {
 
 @pytest.fixture(autouse=True)
 def isolated_git(monkeypatch):
-    """The developer's own ~/.gitconfig, out of every test, in-process calls included.
-
-    `git()` merged GIT_ISOLATION into the subprocesses IT ran, which protected nothing
-    that knoten runs itself: `install_server(bare)` asks git where hooks live through
-    `subprocess.run` inside the module under test. On a machine with a global
-    `core.hooksPath`, the hook tests answered with the developer's shared hooks directory,
-    wrote a `pre-receive` into it, and 24 tests failed -- after touching a directory
-    outside the tmp_path they were given. The merge in `git()` stays; this is the
-    guarantee.
-    """
+    """The developer's own ~/.gitconfig, out of every test, in-process calls included."""
     for k, v in GIT_ISOLATION.items():
         monkeypatch.setenv(k, v)
 
 
 def git(*args, cwd, env=None):
-    """Every test file drives real git. One spelling of the call, so the isolation above
-    cannot be present in two files and missing in the third -- which is what happened:
-    the server-hook tests ran against the developer's own global config."""
+    """Every test file drives real git."""
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
                           env={**os.environ, **GIT_ISOLATION, **(env or {})})
 
@@ -141,21 +120,14 @@ def commit_node(work, name, text):
 
 @pytest.fixture
 def hub(tmp_path, monkeypatch):
-    """A real knoten server on a random localhost port, and an isolated credential store.
-
-    Real because the failures worth catching live in the seam between git's client, the
-    HTTP layer and git-http-backend, and none of them are visible to a mock.
-    """
+    """A real knoten server on a random localhost port, and an isolated credential store."""
     import threading
     from types import SimpleNamespace
-
     from knoten.registry import Registry
     from knoten.serve import make_server
-
     for k, v in GIT_ISOLATION.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("KNOTEN_CREDENTIALS", str(tmp_path / "credentials"))
-
     reg = Registry(tmp_path / "data")
     srv = make_server(reg, "127.0.0.1", 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -168,13 +140,6 @@ def hub(tmp_path, monkeypatch):
 
 @pytest.fixture
 def local_graph(tmp_path, rules_yaml):
-    """A git repo whose root is a graph with one committed node: what a user has on disk
-    the moment they decide to share it.
-
-    Nested under "admin/", not directly in tmp_path: a friend joining a graph named
-    "trading" clones to tmp_path/"trading" by default, and that must never collide with
-    the admin's own on-disk checkout of the same graph, which happens to share this
-    tmp_path in tests."""
     root = tmp_path / "admin" / "trading"
     (root / "nodes").mkdir(parents=True)
     (root / "graph.yaml").write_text(rules_yaml, encoding="utf-8")
@@ -190,9 +155,7 @@ def local_graph(tmp_path, rules_yaml):
 
 @pytest.fixture(autouse=True)
 def keys_dir(tmp_path, monkeypatch):
-    """Every signing key a test makes lands under tmp_path. Without this, `ensure_key`
-    would write into the developer's real ~/.config/knoten/keys, and a test that ran
-    twice would sign with a key the first run left behind."""
+    """Every signing key a test makes lands under tmp_path."""
     d = tmp_path / "keys"
     monkeypatch.setenv("KNOTEN_KEYS", str(d))
     return d
@@ -220,8 +183,6 @@ def pub_line(priv):
 
 
 def commit_signed(repo, message, priv):
-    """Commit everything staged plus the working tree, signed with `priv`, and return the
-    sha. Signing config is passed per call so a fixture never has to persist it."""
     import subprocess
     env = {**os.environ, **GIT_ISOLATION}
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env, capture_output=True)

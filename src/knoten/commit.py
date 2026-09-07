@@ -3,10 +3,6 @@
 The gate is the point: the candidate is parsed and rule-checked IN MEMORY, and nothing
 reaches the filesystem until it is clean. An agent cannot record a shiny result that cites
 no test it survived.
-
-This lived inside a transport layer, which put domain logic in the wrong place and — worse
-— made writing a node from Python require that transport's SDK, an optional dependency for
-a transport you may not be using. `attach` and `update` never had that problem.
 """
 from __future__ import annotations
 
@@ -20,25 +16,12 @@ from .update import compression_report, refused, superseded_candidates, supersed
 
 
 def _similar(nodes: dict[str, Node], candidate: Node, keep: int = 3) -> list[dict]:
-    """Settled claims that look like the same question, worded differently.
-
-    A warning and never a block: two claims can be genuinely close and genuinely
-    different — a compute-matched rerun of a dead idea IS a new claim, and that is the
-    whole point of a gate. Refusing would make the tool wrong in the interesting case and
-    push the agent to route around it.
-
-    Settled claims only — `open` is not an answer, and reporting one would tell the agent
-    the question is closed when it is exactly what is still being asked. Plus at least two
-    shared title words, so a single shared "accuracy" does not fire.
-
-    Two is a loose bar on purpose. A false positive costs one line of JSON the agent can
-    dismiss; a false negative costs a duplicated experiment, which is the failure this
-    whole tool exists to prevent. The asymmetry says lean permissive.
-    """
+    """Settled claims that look like the same question, worded differently. A warning and
+    never a block: a compute-matched rerun of a dead idea IS a new claim. Settled only
+    (`open` is not an answer), plus two shared title words so one shared "accuracy" does
+    not fire -- loose on purpose, since a false negative costs a duplicated experiment."""
     mine = fields(candidate)[0]
-    # Never the nodes this candidate just superseded: they resemble it by construction --
-    # that is what a compression IS -- and telling the author to supersede what they have
-    # already superseded reads as a refusal of the very move the graph asked for.
+    # Never what this candidate just superseded: those resemble it by construction.
     own = set(supersedes(candidate))
     out = []
     for n in retrieve(nodes, candidate.title or candidate.id):
@@ -56,9 +39,8 @@ def commit(root: Path, nid: str, frontmatter: str, body: str) -> dict:
     candidate — the caller is usually an agent, and a refusal it can read and act on beats
     a traceback it can only give up on."""
     with graph_lock(root):
-        # Loaded INSIDE the lock. Read outside it, the snapshot goes stale the moment a
-        # peer commits, and a claim citing the gate that peer just created is rejected for
-        # a dangling edge to a node already on disk.
+        # INSIDE the lock: read outside it, the snapshot goes stale the moment a peer
+        # commits, and a claim citing that peer's new gate is rejected as dangling.
         nodes = load(root)
         try:
             path = node_path(root, nid)
@@ -83,28 +65,20 @@ def commit(root: Path, nid: str, frontmatter: str, body: str) -> dict:
 
         targets = supersedes(candidate)
 
-        # The whole post-write graph is validated BEFORE anything is written: a target
-        # that fails once its OWN status is `superseded` (a `graph.yaml` whose `statuses:`
-        # lacks it; a `when_status: superseded` rule), or a third node whose own rule
-        # depended on a target staying alive, must refuse the commit here — not raise
-        # midway through a write that already put the general node and some targets on
-        # disk. `texts` is computed once; `cands` parses those SAME strings rather than
-        # recomputing them, so the text written below is exactly the candidate that was
-        # validated. `refused` only cascades past this node's own violations when there
-        # are targets to flip — a plain commit (no `npx:supersedes`) is refused on its
-        # own violations alone, same as it always was.
-        # Both calls turn a target id into a path, and an id that is not a legal one --
-        # `Finding-A.md`, written by hand -- raises there. `commit` promises a refusal it
-        # can read, so the promise has to cover the targets too, not only the candidate.
+        # The whole post-write graph is validated BEFORE anything is written, so a
+        # target that fails once it is `superseded`, or a third node the flip breaks,
+        # refuses the commit rather than raising midway through the write. `cands` parses
+        # the SAME strings written below, so what is validated is what lands. Both calls
+        # turn a target id into a path and raise on an illegal one, which `commit` owes
+        # the caller as a readable refusal rather than a traceback.
         try:
             texts = superseded_texts(root, nodes, candidate) if targets else {}
             cands = {nid: candidate, **superseded_candidates(root, texts)}
         except GraphError as e:
             return {"status": "REJECTED", "node": nid, "reason": str(e)}
         if errs := refused(nodes, cands, root, bool(targets)):
-            # `node` is no longer redundant with the top-level `nid` now that a flip can
-            # break a node that is neither the general node nor one of its targets: the
-            # violation must name which node it is on.
+            # Each violation names its own node: a flip can break a node that is neither
+            # the general node nor one of its targets.
             return {"status": "REJECTED", "node": nid,
                     "violations": [{"node": e.node, "rule": e.rule, "message": e.message}
                                    for e in errs],

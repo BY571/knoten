@@ -32,18 +32,14 @@ LOCK = ".knoten.lock"
 # refuses is a push that spends the bandwidth before it is told no.
 MAX_PUSH_BYTES = 100 * 1024 * 1024
 
-# What every git the SERVER runs must be told, so that the git which installs the gate and
-# the git which enforces it agree on where hooks live. With `core.hooksPath` in the daemon
-# account's ~/.gitconfig, `Registry.create` asked git where hooks go (process env, no
-# HOME override, so hooksPath applied... or did not, depending on the caller) while
-# receive-pack read ~/.gitconfig and looked somewhere else entirely: the hook was written
-# where nothing would ever run it, and a push that breaks the graph landed with rc 0. A
-# gate that fails OPEN reports green forever. The client-side `knoten hook` must NOT use
-# this: honouring core.hooksPath is exactly right in a clone (husky, monorepos), and nor
-# must `knoten hook --server`, whose repo is served by somebody else's receive-pack.
-# Dropping global config also drops `init.templateDir` and `init.defaultBranch` for
-# hosted repos, deliberately: a template directory is one more place a hook can arrive
-# from, which is one more place the gate can be replaced without anyone editing the repo.
+# What every git the SERVER runs must be told, so the git that INSTALLS the gate and the
+# git that ENFORCES it agree on where hooks live: with `core.hooksPath` in the daemon's
+# ~/.gitconfig they did not, the hook landed where nothing would run it, and a push that
+# breaks the graph returned rc 0. A gate that fails OPEN reports green forever. Dropping
+# global config also drops `init.templateDir`, deliberately: a template directory is one
+# more place a hook can arrive from. Neither `knoten hook` nor `knoten hook --server` may
+# use this -- honouring core.hooksPath is right in a clone, and the second repo is served
+# by somebody else's receive-pack.
 SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
                   # A graph directory named "*" once widened `git archive`'s pathspec to
                   # the whole repo; literal pathspecs make every name a plain path, glob
@@ -77,11 +73,8 @@ INVERSE = {
     "npx:retracts":        "npx:retractedBy",
     "npx:supersedes":      "npx:supersededBy",
     "prov:wasDerivedFrom": "prov:hadDerivation",
-    # How a claim was reached, not merely that it was. `prov:wasDerivedFrom` records the
-    # fact of a derivation and never its kind; these three name the kind, so a rule can
-    # demand something of one without demanding it of all (SPEC §4). Plain verbs, and
-    # inverses read from the object, matching the gate pair above — Peirce's own words
-    # would be worse here: "abduced" reads as "abducted".
+    # How a claim was reached, not merely that it was: `prov:wasDerivedFrom` records the
+    # fact of a derivation and never its kind, so a rule can demand one kind (SPEC §4).
     "kn:explains":         "kn:explainedBy",
     "kn:generalises":      "kn:generalisedBy",
     "kn:followsFrom":      "kn:entails",
@@ -92,42 +85,32 @@ GENERATED = set(INVERSE.values())
 # The claim lifecycle. A node with any other status is not a claim (a gate, a source).
 VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 
-# The three conventions `frontier` reads. They are conventions, not core vocabulary — a
-# graph that names things differently gets an empty bucket, not a wrong answer. They are
-# named here rather than buried so that stays obvious.
+# Conventions `frontier` reads, not core vocabulary: a graph that names things
+# differently gets an empty bucket, not a wrong answer. Named here so that stays obvious.
 OPEN = "open"
 REOPEN_SECTION = "What would reopen this"
 GATE_TYPE = "gate"
 GATE_SECTIONS = ("The rule", "Why it exists")
-# The claim types `frontier`'s `unchecked` band watches. Gates are advisory by default
-# (graph.yaml's `live-claims-must-cite-their-gates` ships commented out), so nothing
-# refuses an alive claim with no `kn:survivedGate` edge — this is how the frontier shows
-# which ones nobody has checked instead. A graph that names its claim types differently
-# gets an empty band, same bargain as OPEN and GATE_TYPE above.
+# The claim types `frontier`'s `unchecked` band watches. Gates are advisory by default,
+# so this is the only place an alive claim with no gate shows up as unfinished.
 CLAIM_TYPES = ("hypothesis", "finding")
 
 SUPERSEDES = "npx:supersedes"
 QUESTION_TYPE = "question"
 # What a general node may supersede when the graph declares nothing. Named once so the
-# frontier, the clusterer and the validator cannot disagree about what "compressible"
-# means in a graph that never said.
+# frontier, the clusterer and the validator cannot disagree.
 DEFAULT_COMPRESSIBLE = ("finding",)
-# The edges that lead from a node back towards the question it serves. `question_of`
-# follows them breadth-first and stops at the first question. A node no such walk
-# reaches is unrooted, and compression refuses it, because "under the same question"
-# cannot be decided for it.
+# The edges that lead back towards the question a node serves. A node no walk over them
+# reaches is unrooted, and compression refuses it: "same question" cannot be decided.
 ROOTING_RELS = ("prov:wasDerivedFrom", "kn:tests", "kn:explains", "kn:followsFrom",
                 "kn:generalises", SUPERSEDES, "mp:supports", "mp:challenges")
 
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
-# An id becomes a filename, so anything else is a path traversal. Go through node_path()
-# for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
-# the graph: an id authored by a model is not a path, and only one entry point
-# checked that — not the one people used.
-# `\\Z`, not `$`: `$` also matches just before a trailing newline, so `"maria\\n"` passed
-# every id check in the codebase -- and that name goes on to be a filename, a
-# directory, a URL segment and a line in the credentials file.
+# An id becomes a filename, so anything else is a path traversal: go through node_path()
+# for EVERY id -> file conversion (`knoten detach ../../x f` once deleted a file outside
+# the graph). `\\Z`, not `$`: `$` lets a trailing newline through, and `"maria\\n"` goes on
+# to be a filename, a directory, a URL segment and a line in the credentials file.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
 
 # An invite is a bearer secret. A year is already generous for one. Here rather than in
@@ -142,14 +125,9 @@ MAX_NAME = 64
 
 @contextmanager
 def graph_lock(root: Path):
-    """One writer at a time, for the read-modify-write windows.
-
-    `attach` reads a node's frontmatter, copies files, then rewrites the list. Two agents
-    doing that at once lost one of the two lists — and the file stayed parseable, so
-    `validate` passed while the frontmatter no longer mentioned a file on disk. Parallel
-    agents are the obvious way to scale a research loop, and this is the step most likely
-    to happen at the same moment.
-    """
+    """One writer at a time, for the read-modify-write windows. Two agents attaching to
+    one node at once lost a list, and the file stayed parseable, so `validate` passed
+    while the frontmatter no longer mentioned a file on disk."""
     if fcntl is None:                         # pragma: no cover
         yield
         return
@@ -162,9 +140,8 @@ def graph_lock(root: Path):
 
 
 def write_atomic(path: Path, text: str) -> None:
-    """Write via a temp file in the same directory, then rename. A reader either sees the
-    old node or the new one — never the half-written one, which does not parse and takes
-    the whole graph down with it, since load() raises rather than skips."""
+    """Temp file in the same directory, then rename: a reader sees the old node or the
+    new one, never a half-written one, which load() raises on rather than skips."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -176,8 +153,7 @@ def write_atomic(path: Path, text: str) -> None:
 
 
 def today() -> str:
-    """The stamp knoten writes. A plain ISO date: it sorts lexicographically, survives
-    the YAML 1.2 loader as a string, and diffs cleanly in git."""
+    """A plain ISO date: sorts lexicographically, survives the loader as a string."""
     return date.today().isoformat()
 
 
@@ -190,19 +166,11 @@ def node_path(root: Path, nid: str) -> Path:
 class _Loader(yaml.SafeLoader):
     """YAML 1.2 scalars, not YAML 1.1.
 
-    PyYAML is YAML 1.1, whose implicit typing silently rewrites `results:` — the block
-    holding the numbers this tool exists to protect:
-
-        tags: [no, off]     -> [False, False]   the "Norway problem"
-        wallclock: 12:30    -> 750              sexagesimal
-        seed: 042           -> 34               octal (but `08` stays a string!)
-        n: 1_000            -> 1000             digit separators
-        run: 2024-01-15     -> datetime.date    implicit timestamps
-
-    Rather than patch these one at a time, swap the implicit resolvers for the 1.2 core
-    schema, which has none of them. Anything we cannot confidently type stays a string —
-    the safe direction, since a string fails a numeric rule loudly while a silently
-    rewritten number does not.
+    PyYAML is YAML 1.1, whose implicit typing silently rewrites the `results:` block this
+    tool exists to protect: `[no, off]` becomes `[False, False]`, `12:30` becomes 750,
+    `042` becomes 34, `1_000` becomes 1000, `2024-01-15` becomes a date. So swap the
+    implicit resolvers for the 1.2 core schema, which has none of them. Anything we
+    cannot confidently type stays a string, which fails a numeric rule loudly.
     """
 
 
@@ -251,15 +219,14 @@ class Node:
 
     @property
     def title(self) -> str:
-        """The H1 — the claim itself, in one line. This is what makes an index row
-        judgeable: an id alone cannot be compared against a new idea."""
+        """The H1 — the claim in one line. An id alone cannot be judged against a new
+        idea, which is what makes an index row worth reading."""
         return _title(self.body)
 
     @property
     def tags(self) -> list:
-        """A bare `tags: decoding` is legal YAML that iterates as characters. `validate`
-        reports it as malformed-tags; here it reads as untagged rather than as five
-        one-letter tags."""
+        """A bare `tags: decoding` is legal YAML that iterates as characters: read as
+        untagged here, reported as malformed-tags by `validate`."""
         raw = self.frontmatter.get("tags")
         return [str(x) for x in raw] if isinstance(raw, list) else []
 
@@ -293,8 +260,8 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
 
 
 def parse_text(text: str, nid: str, label: str | None = None) -> Node:
-    """Build a Node from a string. Used by `knoten commit` to validate a candidate
-    node in memory, so an invalid node never reaches the filesystem at all."""
+    """Build a Node from a string, so `commit` can validate a candidate in memory and an
+    invalid node never reaches the filesystem."""
     label = label or f"{nid}.md"
     fm, body = split(text, label)
 
@@ -338,9 +305,7 @@ def backlink(nodes: dict[str, Node]) -> dict[str, Node]:
 
 
 # ---------------------------------------------------------------------------------
-# Shared. These lived twice — once in cli.py, once in a second surface since removed —
-# and drifted: one path printed relation labels and the other did not, and a
-# search fix landed in one copy and not the other.
+# Shared. These lived twice, on two surfaces, and drifted.
 
 def find_root(start: Path | None = None) -> Path:
     """The graph containing `start` (default: cwd). A graph is the folder with graph.yaml."""
@@ -355,8 +320,7 @@ def section(body: str, title: str, collapse: bool = True) -> str | None:
     """The prose under a `## <title>` heading.
 
     Collapsed to one line by default, because the CLI prints it inline. `collapse=False`
-    keeps the newlines, which is the difference between a result table and a row of
-    pipes: a reader looking at a whole section needs its shape.
+    keeps the newlines: the difference between a result table and a row of pipes.
     """
     m = re.search(rf"^##+ {re.escape(title)}\s*\n+(.+?)(?=\n##|\Z)", body, re.S | re.M)
     if not m:
@@ -369,8 +333,7 @@ def _tokens(s: str) -> list[str]:
 
 
 # Function words an agent's question carries and a node never means. Domain words are
-# NEVER listed here — a corpus-common word like "accuracy" is handled by idf below,
-# which is adaptive; a hardcoded one would be a permanent blind spot.
+# NEVER listed here: idf below handles a corpus-common word, adaptively.
 _STOP = {
     "a", "about", "again", "all", "an", "and", "any", "anybody", "anyone", "anything",
     "are", "as", "at", "be", "been", "before", "being", "but", "by", "did", "do", "does",
@@ -391,9 +354,8 @@ _STRONG, _MEDIUM, _WEAK = 3.0, 2.0, 1.0
 
 
 def _flatten(obj, out: list) -> list:
-    """Every scalar in the frontmatter, plus the keys a human chose (`tokens_per_question`,
-    `acc_greedy`). The haystack was id + body + tags, so `repro.model: Qwen3-8B` was
-    unsearchable and two nodes that ran on the same benchmark answered as one."""
+    """Every scalar in the frontmatter, plus the keys a human chose. With id + body +
+    tags alone, `repro.model: Qwen3-8B` was unsearchable."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             if str(k) not in _STRUCTURAL:
@@ -413,13 +375,9 @@ def _title(body: str) -> str:
 
 
 def fields(n: Node) -> tuple[set, set, set]:
-    """(id+title, tags, everything).
-
-    Cached on the node because `retrieve` walks the pool twice — once to count document
-    frequencies, once to score — and tokenising is the bulk of the work: 33ms vs 150ms
-    for one query over 500 nodes. The cache does NOT survive between calls; `load` builds
-    fresh Nodes, so every tool call pays the first pass.
-    """
+    """(id+title, tags, everything). Cached on the node because `retrieve` walks the pool
+    twice and tokenising is the bulk of the work: 33ms vs 150ms over 500 nodes. `load`
+    builds fresh Nodes, so the cache never survives a call."""
     if n.tokens is None:
         strong = set(_tokens(f"{n.id} {_title(n.body)}"))
         medium = set(_tokens(" ".join(str(t) for t in (n.frontmatter.get("tags") or []))))
@@ -429,15 +387,15 @@ def fields(n: Node) -> tuple[set, set, set]:
 
 
 def moved(n: Node) -> str:
-    """When this claim last moved — updated if it has, else created. Not when the FILE
-    changed: a typo fix and a status flip are the same event to git."""
+    """When this claim last moved. Not when the FILE changed: to git a typo fix and a
+    status flip are the same event."""
     fm = n.frontmatter
     return max(str(fm.get("updated") or ""), str(fm.get("created") or ""))
 
 
 def _passes(n: Node, tags, status, type, where, since) -> bool:
-    # An unstamped node predates stamping and cannot answer a question about time. Better
-    # absent from a `since` view than silently assumed recent.
+    # An unstamped node cannot answer a question about time: better absent from a
+    # `since` view than silently assumed recent.
     if since and moved(n) < str(since):
         return False
     if status and n.status not in status:
@@ -446,8 +404,7 @@ def _passes(n: Node, tags, status, type, where, since) -> bool:
         return False
     if tags and not set(n.tags) & set(tags):
         return False
-    # Generic, because the core knows no domain: "everything that died of a weak
-    # baseline" is one graph's question, and `cause` is one graph's field name.
+    # Generic, because the core knows no domain: `cause` is one graph's field name.
     for key, allowed in (where or {}).items():
         got = n.frontmatter.get(key)
         if got is None or str(got) not in {str(a) for a in allowed}:
@@ -455,27 +412,18 @@ def _passes(n: Node, tags, status, type, where, since) -> bool:
     return True
 
 
-# Keep a hit only if it scores within this fraction of the best hit. Adaptive, so there
-# is no absolute threshold to tune per graph: one strong match suppresses the long tail
-# of nodes that merely share a common word with the query.
+# Keep a hit only if it scores within this fraction of the best. Adaptive, so there is
+# no per-graph threshold: one strong match suppresses the long common-word tail.
 RELATIVE_FLOOR = 0.35
 
 
 def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
              status=None, type=None, where=None, since=None) -> list[Node]:
     """Rank nodes by relevance to `query`, narrowed by the filters. Ranked, not filtered:
-
-    ANDing every token meant one unmatched word silenced the whole query, so
-    `"has anyone tried self-consistency?"` — the README's own example — answered "no
-    prior work found" about a hypothesis the graph was holding, dead and documented.
-    A false "untested" is the only failure of this tool that costs real work.
-
-    Tokens are weighted by idf, so a word in every node counts for nothing without
-    anybody having to list it, and a rare one dominates.
-
-    This is the ONE retrieval seam: `query` and `index` both come through
-    here, so a semantic backend replaces this body and nothing above it changes.
-    """
+    ANDing every token let one unmatched word silence the query and answer "no prior work"
+    about a hypothesis the graph was holding, and a false "untested" is the only failure
+    of this tool that costs real work. idf weighting means a word in every node counts for
+    nothing. The ONE retrieval seam, so a semantic backend replaces this body alone."""
     pool = [n for n in nodes.values() if _passes(n, tags, status, type, where, since)]
     if query is None:
         return sorted(pool, key=lambda n: n.id)
@@ -505,9 +453,9 @@ def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
 
 
 def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str]] | None:
-    """BFS over the graph read as undirected — "how did we get from A to B?" doesn't care
-    which way an edge points. Returns [(node_id, relation_taken_to_reach_it), ...], the
-    first with an empty relation. `←rel` means the edge was traversed backwards."""
+    """BFS over the graph read as undirected: "how did we get from A to B?" does not care
+    which way an edge points. [(node_id, relation_taken), ...], the first with an empty
+    relation; `←rel` means the edge was traversed backwards."""
     for nid in (a, b):
         if nid not in nodes:
             raise GraphError(f"no node '{nid}'")
@@ -532,11 +480,8 @@ def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str
 
 def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
     """Every gate, with what it killed and what survived it: [(node, killed, survived)].
-
-    An agent used to meet a gate by being REJECTED by it, once the experiment had already
-    run. The gates are the reusable asset (SPEC §1), so they belong in front of the work
-    as a specification. The record is free — the back-links are already generated.
-    """
+    Gates are the reusable asset (SPEC §1), so they belong in front of the work as a
+    specification, not behind it as a rejection."""
     return [(n,
              [b["to"] for b in n.backlinks if b["rel"] == "kn:gateKilled"],
              [b["to"] for b in n.backlinks if b["rel"] == "kn:gateSurvivedBy"])
@@ -544,19 +489,12 @@ def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
 
 
 def frontier(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> dict:
-    """What is worth doing next, in five buckets.
-
-    `## What would reopen this` is the standing offer SPEC §5 insists on, and until now
-    the only way to act on one was to re-read every post-mortem and notice the world had
-    changed. This does not try to decide whether a condition is *met* — that is a
-    judgement, and encoding it as a predicate would be either trivially wrong or an
-    ontology project. It presents the offers cheaply and lets the reader judge, the same
-    bargain `retrieve` makes with an index.
-
-    `unchecked` is the advisory counterpart to `live-claims-must-cite-their-gates`: a
-    graph that leaves the rule commented out (the default) never refuses an alive claim
-    with no gate, so this is the only place that claim still shows up as unfinished.
-    """
+    """What is worth doing next, in five buckets. This never decides whether a reopen
+    condition is *met* -- that is a judgement, and encoding it would be either trivially
+    wrong or an ontology project; it presents the offers cheaply and lets the reader
+    judge. `unchecked` is the advisory counterpart to `live-claims-must-cite-their-gates`:
+    with that rule commented out (the default) this is the only place such a claim shows
+    up."""
     ordered = sorted(nodes.values(), key=lambda n: n.id)
     return {
         "compressible": compressible(nodes, types),
@@ -592,72 +530,24 @@ def supersedes(n: Node) -> list[str]:
     return sorted({l["to"] for l in n.links if l["rel"] == SUPERSEDES})
 
 
-NO_QUESTION = "(no question)"
-WHOLE_GRAPH = "(graph)"
-
-
 def under(nodes: dict[str, Node]) -> dict[str, str]:
-    """Who covers whom: for every node some standing superseder retired, the id of that
-    superseder. THE one definition, read by `counted` and drawn by `viz`.
+    """Who covers whom: for every retired node, the id of the node that retired it (the
+    first by id, since several is a `validate` violation and the page must still draw).
 
-    A superseder stands when it is alive, or when it is itself superseded by one that
-    stands. Recursive compression is the point: a rule over two rules over four findings
-    leaves the inner rules `superseded`, and reading only alive superseders would call
-    all four findings orphans and draw them loose beside the rule that covers them.
-
-    A cycle stands for nothing -- it never reaches an alive node -- so nothing in it
-    covers anything. A self-loop is not an edge at all here: without that guard a node
-    exempted itself from every budget by naming its own id.
-
-    Several standing superseders on one node is a `validate` violation; the first by id is
-    taken so the page still draws and the budget still counts.
-    """
-    claims: dict[str, list[str]] = {}      # target -> the ids claiming to have retired it
-    retires: dict[str, list[str]] = {}     # superseder -> what it claims
+    A superseder counts while it is alive OR itself superseded: a rule over two rules over
+    four findings leaves the inner rules `superseded`, and reading only alive superseders
+    would call all four findings loose and draw them beside the rule that covers them. A
+    superseder that is dead or retracted covers nothing -- it has stopped standing for
+    what it retired. A self-target is not an edge here: without that guard a node covered
+    itself."""
+    claims: dict[str, list[str]] = {}
     for n in nodes.values():
+        if n.status not in ("alive", "superseded"):
+            continue
         for t in supersedes(n):
             if t in nodes and t != n.id:
                 claims.setdefault(t, []).append(n.id)
-                retires.setdefault(n.id, []).append(t)
-    standing = {n.id for n in nodes.values() if n.status == "alive"}
-    queue = deque(sorted(standing))
-    while queue:                           # outward from the alive, never up from a cycle
-        for t in retires.get(queue.popleft(), ()):
-            if t not in standing and nodes[t].status == "superseded":
-                standing.add(t)
-                queue.append(t)
-    def stands_for(t: str, c: str) -> bool:
-        """A superseded-but-covered claimer keeps holding what it had already retired --
-        that is recursive compression -- but it may not retire a node that is still
-        alive. `index` lists that node and its question still has it, so the budget has
-        to count it: a rule the graph has itself retired must not go on shrinking a
-        budget from inside another rule's fold."""
-        return c in standing and (nodes[t].status != "alive" or nodes[c].status == "alive")
-
-    return {t: min(held) for t, cs in claims.items()
-            if (held := [c for c in cs if stands_for(t, c)])}
-
-
-def counted(nodes: dict[str, Node], types: tuple[str, ...],
-            per: str = "question") -> dict[str, list[Node]]:
-    """The alive nodes of `types` that nothing standing has generalised away, grouped by
-    the question they stand under (`per: graph` puts them all in one group).
-
-    THE one definition of "still counts". `shape`, `compressible`, `validate._budget` and
-    the delta `update.refused` measures a write by all read these groups, so the number a
-    commit is refused on is the number `validate` prints. Written three times before, it
-    drifted once already: a self-loop let a node exempt itself from the budget by naming
-    its own id, and only two of the three copies had the guard -- which is why coverage is
-    now `under`'s one definition and not a comprehension repeated here.
-    """
-    covered = set(under(nodes))
-    groups: dict[str, list[Node]] = {}
-    for n in nodes.values():
-        if n.status != "alive" or n.type not in types or n.id in covered:
-            continue
-        key = WHOLE_GRAPH if per == "graph" else (question_of(nodes, n.id) or NO_QUESTION)
-        groups.setdefault(key, []).append(n)
-    return groups
+    return {t: min(cs) for t, cs in claims.items()}
 
 
 def is_general(n: Node) -> bool:
@@ -665,23 +555,31 @@ def is_general(n: Node) -> bool:
     return len(supersedes(n)) >= 2
 
 
+def standing(nodes: dict[str, Node], types: tuple[str, ...]) -> list[Node]:
+    """The alive nodes of `types` that nothing alive has generalised away. THE one
+    definition of "still counts", read by `shape` and by `compressible`."""
+    covered = under(nodes)
+    return [n for n in nodes.values()
+            if n.status == "alive" and n.type in types and n.id not in covered]
+
+
 def compressible(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> list[dict]:
     """Clusters of alive nodes under one question that share a survived gate or a tag,
-    three or more, with nothing yet generalising them. Deliberately dumb: shared gate
-    or tag, not similarity. It presents cheaply and lets the reader judge what
-    generalises, the bargain the reopen band makes."""
+    three or more, with nothing yet generalising them. Deliberately dumb: shared gate or
+    tag, not similarity. It presents cheaply and lets the reader judge what generalises,
+    the same bargain the reopen band makes."""
     groups: dict[tuple, set] = {}
-    for q, members in counted(nodes, types).items():
-        if q == NO_QUESTION:      # an unrooted node has no question to cluster under
+    for n in standing(nodes, types):
+        q = question_of(nodes, n.id)
+        if q is None:                 # an unrooted node has no question to cluster under
             continue
-        for n in members:
-            keys = [("gate", l["to"]) for l in n.links if l["rel"] == "kn:survivedGate"]
-            keys += [("tag", str(t)) for t in n.tags]
-            for k in keys:
-                groups.setdefault((q, k), set()).add(n.id)
+        keys = [("gate", l["to"]) for l in n.links if l["rel"] == "kn:survivedGate"]
+        keys += [("tag", str(t)) for t in n.tags]
+        for k in keys:
+            groups.setdefault((q, k), set()).add(n.id)
     out = [{"question": q, "shared": {kind: key}, "ids": sorted(ids),
-            # The word the frontier prints for this cluster: what these nodes ARE, since
-            # a graph whose compressible type is `principle` must not be told "findings".
+            # What these nodes ARE: a graph whose compressible type is `principle` must
+            # not be told "findings".
             "type": "/".join(sorted({nodes[i].type for i in ids}))}
            for (q, (kind, key)), ids in groups.items() if len(ids) >= 3]
     out.sort(key=lambda c: (-len(c["ids"]), c["question"], next(iter(c["shared"].items()))))
@@ -690,8 +588,6 @@ def compressible(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRE
 
 def compressible_types(cfg: dict) -> tuple[str, ...]:
     """What a general node may supersede. `graph.yaml: compressible:` or findings."""
-    # `load_config` refuses anything but a list of declared types; this coercion guards
-    # direct callers that may pass a bare string (e.g., from YAML that was parsed elsewhere).
     v = cfg.get("compressible") or list(DEFAULT_COMPRESSIBLE)
     v = [v] if isinstance(v, str) else v
     return tuple(str(t) for t in v)
@@ -699,8 +595,8 @@ def compressible_types(cfg: dict) -> tuple[str, ...]:
 
 def _csv(v) -> list[str]:
     """A rule value that may be written as a YAML list or a comma-separated string, read
-    the same way everywhere. A hand-rolled split at one of the call sites is how they
-    drift: `type: finding,principle` would be one type in one place and two in another."""
+    the same way everywhere. A hand-rolled split at one call site is how they drift:
+    `type: finding,principle` would be one type in one place and two in another."""
     if not v:
         return []
     if isinstance(v, list):
@@ -709,22 +605,9 @@ def _csv(v) -> list[str]:
 
 
 def shape(nodes: dict[str, Node], cfg: dict) -> dict:
-    """The graph's compression state: rules over specifics, and how each budgeted group
-    stands against its cap. The same numbers reward a commit and head `frontier`."""
-    types = compressible_types(cfg)
+    """The graph's compression state: rules over specifics. The same two numbers reward a
+    commit and head `frontier`."""
     alive = [n for n in nodes.values() if n.status == "alive"]
-    still = counted(nodes, types, per="graph").get(WHOLE_GRAPH, [])
-    out = {"rules": len([n for n in alive if is_general(n)]),
-           "specifics": len([n for n in still if not is_general(n)]), "budget": []}
-    for r in cfg.get("rules", []):
-        spec = r.get("max_alive")
-        if not spec:
-            continue
-        rtypes = tuple(_csv(spec["type"]))
-        # Every group `_budget` would form, `per: graph` included: a row missing here is a
-        # cap the reader is never shown and a compression that reports no budget at all.
-        for key, members in counted(nodes, rtypes, spec.get("per", "question")).items():
-            out["budget"].append({"question": key, "type": "/".join(rtypes),
-                                  "free": spec["count"] - len(members), "count": spec["count"]})
-    out["budget"].sort(key=lambda b: (b["free"], b["question"]))
-    return out
+    still = standing(nodes, compressible_types(cfg))
+    return {"rules": len([n for n in alive if is_general(n)]),
+            "specifics": len([n for n in still if not is_general(n)])}

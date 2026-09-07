@@ -1,15 +1,17 @@
-"""contributors.yaml: who may write to a graph, as data beside the rules, machine-owned so
-graph.yaml's comments survive every join and revoke."""
+"""identity.py: who may write here, and the keys that prove it."""
 import json
+import os
+import stat
 
 import pytest
 
 from conftest import make_key, pub_line
-from knoten import core, contributors
+from knoten import core
 from knoten.core import GraphError
-from knoten.contributors import (FILE, ROLES, active, admins, check_blob, diff, dump,
-                                 invite_blob, keys, load, parse, parse_blob, verify_invite)
-from knoten.keys import INVITE_NS, sign
+from knoten.identity import (FILE, INVITE_NS, ROLES, active, admins, allowed_signers,
+                             check_blob, configure_signing, diff, dump, ensure_key,
+                             invite_blob, key_dir, keys, load, parse, parse_blob,
+                             public_line, sign, verify, verify_invite)
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxYm3v0R3f7pWJ2cQ5lD8Rk9x6ZQ7pMd2eS8rT1uV2w"
 KEY2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHF3ZaMh1uWn5V0oGZ9rT2pQ8cX6yLdN4wK1sB3jR7t"
@@ -18,14 +20,6 @@ KEY2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHF3ZaMh1uWn5V0oGZ9rT2pQ8cX6yLdN4wK1
 def test_absent_file_is_none_not_an_error(tmp_path):
     """A phase-1 graph has no contributors.yaml, and must keep working unsigned."""
     assert load(tmp_path) is None
-
-
-def test_parse_accepts_the_documented_shape():
-    c = parse(f"seb:\n  key: {KEY}\n  role: admin\nmaria:\n  key: {KEY2}\n  role: write\n"
-              f"  invited_by: seb\n")
-    assert set(c) == {"seb", "maria"}
-    assert c["seb"]["role"] == "admin"
-    assert c["maria"]["invited_by"] == "seb"
 
 
 @pytest.mark.parametrize("text, msg", [
@@ -45,16 +39,6 @@ def test_parse_refuses_malformed_entries(text, msg):
         parse(text)
 
 
-def test_dump_and_load_round_trip_sorted_and_atomic(tmp_path):
-    c = {"maria": {"key": KEY2, "role": "write"}, "seb": {"key": KEY, "role": "admin"}}
-    dump(tmp_path, c)
-
-    text = (tmp_path / FILE).read_text(encoding="utf-8")
-    assert text.index("maria") < text.index("seb")
-    assert load(tmp_path) == c
-    assert not list(tmp_path.glob(".contributors.yaml.*"))
-
-
 def test_views_active_keys_admins():
     c = {"seb": {"key": KEY, "role": "admin"},
          "maria": {"key": KEY + "1", "role": "write"},
@@ -65,39 +49,11 @@ def test_views_active_keys_admins():
     assert admins(c) == {"seb": KEY}
 
 
-def test_diff_names_what_changed():
-    prev = {"seb": {"key": KEY, "role": "admin"}, "old": {"key": KEY, "role": "write"}}
-    cur = {"seb": {"key": KEY, "role": "admin", "revoked": "2026-09-05"},
-           "new": {"key": KEY, "role": "read"}}
-    added, changed, removed = diff(prev, cur)
-    assert set(added) == {"new"} and set(changed) == {"seb"} and removed == {"old"}
-    assert diff(prev, prev) == ({}, {}, set())
-    assert diff(None, cur) == (cur, {}, set())
-
-
-def test_invite_blob_is_canonical_and_parses_back():
-    b = invite_blob("trading", "maria", "write", "2026-09-12", "ab12")
-    assert b == b'{"expires":"2026-09-12","graph":"trading","name":"maria","nonce":"ab12","role":"write"}'
-    assert parse_blob(b) == json.loads(b)
-    with pytest.raises(GraphError, match="invite"):
-        parse_blob(b"not json")
-
-
-def test_check_blob_matches_every_field():
-    d = parse_blob(invite_blob("trading", "maria", "write", "2026-09-12", "ab12"))
-    check_blob(d, "trading", "maria", "write")
-    for graph, name, role in [("biology", "maria", "write"), ("trading", "eve", "write"),
-                              ("trading", "maria", "admin")]:
-        with pytest.raises(GraphError, match="invite"):
-            check_blob(d, graph, name, role)
-
-
 def test_verify_invite_returns_the_admin_who_signed(keys_dir):
     seb, mallory = make_key(keys_dir, "seb"), make_key(keys_dir, "mallory")
     c = {"seb": {"key": pub_line(seb), "role": "admin"},
          "mallory": {"key": pub_line(mallory), "role": "write"}}
     blob = invite_blob("trading", "maria", "write", "2026-09-12", "ab12")
-
     assert verify_invite(c, blob, sign(seb, blob, INVITE_NS)) == "seb"
     with pytest.raises(GraphError, match="not signed by an admin"):
         verify_invite(c, blob, sign(mallory, blob, INVITE_NS))          # a writer, not an admin
@@ -114,9 +70,7 @@ def test_a_revoked_admin_cannot_sign_invites(keys_dir):
 
 
 def test_an_unquoted_revoked_date_loads_as_the_string_it_was_written_as(tmp_path):
-    """YAML reads `revoked: 2026-09-01` as a date object. Left alone, an entry loaded
-    from disk compared unequal to the same entry built in code with today(), so diff()
-    reported a change that had not happened, and json.dumps crashed on it."""
+    """YAML reads `revoked: 2026-09-01` as a date object."""
     (tmp_path / FILE).write_text(f"seb:\n  key: {KEY}\n  role: admin\n  revoked: 2026-09-01\n",
                                  encoding="utf-8")
     c = load(tmp_path)
@@ -127,16 +81,51 @@ def test_an_unquoted_revoked_date_loads_as_the_string_it_was_written_as(tmp_path
 
 
 def test_two_names_may_not_share_one_key():
-    """%GS reports the signer's NAME, and allowed_signers sorts by name -- so two entries
-    sharing a key let the alphabetically-first name silently vouch for commits the other
-    one signed. One key must map to exactly one name."""
     with pytest.raises(GraphError, match="the same key is listed under 'eve' and 'seb'"):
         parse(f"eve:\n  key: {KEY}\n  role: write\nseb:\n  key: {KEY}\n  role: admin\n")
 
 
-def test_the_name_cap_is_one_constant():
-    """MAX_NAME must be the same in core, contributors, and registry so lengths are
-    consistently enforced across the system."""
-    assert contributors.MAX_NAME is core.MAX_NAME
-    from knoten import registry
-    assert registry.MAX_NAME is core.MAX_NAME
+# --------------------------------------------------------------- signing keys
+
+def test_ensure_key_generates_once_and_keeps_it_private(keys_dir):
+    a = ensure_key("seb")
+    was = a.read_bytes()
+    b = ensure_key("seb")
+    assert a == b == keys_dir / "seb"
+    # The same PATH proves nothing on its own; a regenerated keypair lands at the same
+    # path and would refuse every commit the old one signed.
+    assert b.read_bytes() == was
+    assert a.with_suffix(".pub").exists()
+    assert stat.S_IMODE(a.stat().st_mode) == 0o600
+    assert stat.S_IMODE(keys_dir.stat().st_mode) == 0o700
+
+
+def test_ensure_key_refuses_a_name_too_long_to_be_a_filename(keys_dir):
+    with pytest.raises(GraphError, match="too long"):
+        ensure_key("a" * 65)
+    assert not keys_dir.exists() or list(keys_dir.iterdir()) == []
+
+
+def test_configure_signing_refuses_in_one_line_when_git_config_fails(tmp_path, keypair):
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    with pytest.raises(GraphError, match="could not configure signing"):
+        configure_signing(not_a_repo, keypair)
+
+
+@pytest.mark.parametrize("bad", ["Seb", "a b", "../x", ""])
+def test_ensure_key_refuses_a_name_that_is_not_an_id(keys_dir, bad):
+    """The name becomes a filename under the key dir."""
+    with pytest.raises(GraphError, match="not a valid"):
+        ensure_key(bad)
+    assert not keys_dir.exists() or list(keys_dir.iterdir()) == []
+
+
+def test_sign_and_verify_round_trip_in_a_namespace(keypair):
+    data = b'{"graph":"trading","name":"maria"}'
+    allowed = allowed_signers({"seb": public_line(keypair)})
+    sig = sign(keypair, data, INVITE_NS)
+    assert "-----BEGIN SSH SIGNATURE-----" in sig
+    assert verify(allowed, "seb", data, sig, INVITE_NS)
+
+

@@ -21,7 +21,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import contributors as C
+from . import identity as C
 from . import gate
 from .core import (GraphError, ID_RE, MAX_DAYS, MAX_NAME, MAX_PUSH_BYTES, graph_lock,
                    server_git_env, write_atomic)
@@ -34,12 +34,9 @@ def _hash(secret: str) -> str:
     return hashlib.sha256((secret or "").encode()).hexdigest()
 
 
-# Every secret below that a human ever passes on a command line (owner_secret,
-# invite codes) is generated with token_hex, not token_urlsafe: token_urlsafe's
-# alphabet includes '-', and a secret that begins with '-' reads to argparse as
-# a flag, not a value — `knoten remote create ... --owner-secret <secret>` then
-# failed one run in five with a perfectly valid secret. mint()'s tokens travel
-# only as a git HTTP password, never argv, so they keep token_urlsafe.
+# Every secret a human passes on a command line uses token_hex, not token_urlsafe:
+# token_urlsafe's alphabet includes '-', and a secret starting with '-' reads to argparse
+# as a flag. mint()'s tokens travel only as a git HTTP password, so they keep it.
 
 
 def _now() -> datetime:
@@ -58,15 +55,10 @@ class Registry:
     # ---------------------------------------------------------------- owner
 
     def ensure_owner_secret(self) -> tuple[str, bool]:
-        """The secret, and whether this call is the one that made it.
-
-        `knoten serve` prints it exactly once, on the run that creates it, so it has to be
-        told. Deciding from "did the file exist" is what broke: a file that existed but
-        was EMPTY counted as made, so serve printed nothing, check_owner had nothing to
-        compare against, and every `POST /graphs` was a 401 forever with nothing on disk
-        to explain it. A crash between the create and the write is exactly how that file
-        appears, which is why the write goes through a temp file and a rename.
-        """
+        """The secret, and whether this call is the one that made it. `knoten serve` prints
+        it exactly once, so it has to be told: deciding from "did the file exist" made an
+        EMPTY file count as made, and every `POST /graphs` was then a 401 forever with
+        nothing on disk to explain it. Hence also the temp file and rename."""
         p = self.data / "owner"
         current = p.read_text(encoding="utf-8").strip() if p.exists() else ""
         if current:
@@ -124,21 +116,17 @@ class Registry:
 
     def head_graph(self, name: str) -> tuple[dict | None, str]:
         """The hosted repo's contributors.yaml at its tip and its graph name. None for a
-        phase-1 graph or an empty repo. A signed remote holds one graph: the server has
-        to know WHICH contributors.yaml an invite is checked against.
+        phase-1 graph or an empty repo. A signed remote holds one graph: the server has to
+        know WHICH contributors.yaml an invite is checked against.
 
-        The tip is `HEAD` when that resolves, but `knoten remote create` runs `git push
-        -u origin HEAD` -- whatever branch the user happens to be on, `main` as often as
-        `master` -- so a bare repo freshly made by `git init --bare` has an UNBORN HEAD
-        (it still points at refs/heads/master, which a push to `main` never creates).
-        Reading only `HEAD` there returned "no contributors, no name" for a graph that is
-        fully bootstrapped and signed, and every invite for it minted unsigned. When HEAD
-        does not resolve, fall back to whatever branch actually exists: exactly one, use
-        it, and FIX HEAD to point there so this fallback runs exactly once -- a graph
-        pushed as `main` today must not turn into "several branches and no HEAD" the day
-        someone pushes a second branch to it. None, an empty repo. More than one with no
-        valid HEAD, refuse: there is no single line of history left to check an invite
-        against, and only a human can say which branch should have been HEAD."""
+        The tip is `HEAD` when that resolves. It often does not: `knoten remote create`
+        pushes whatever branch the user is on, and a bare repo's unborn HEAD still points
+        at refs/heads/master, so a graph pushed as `main` read as "no contributors, no
+        name" and every invite for it minted unsigned. Fall back to the one branch that
+        exists and FIX HEAD to point there, so this runs once. No branches means an empty
+        repo; more than one with no valid HEAD is refused, because there is no single line
+        of history to check an invite against and only a human can say which it should be.
+        """
         repo = self.repo(name)
         tip = "HEAD"
         if gate._git("rev-parse", "--verify", "-q", "HEAD", repo=repo).returncode != 0:
@@ -160,12 +148,9 @@ class Registry:
         if len(dirs) > 1:
             raise GraphError(f"graph '{name}' holds {len(dirs)} graphs; a signed remote holds one")
         if not dirs:
-            # "No graph here" is not "nobody signed here". A writer who runs `git rm -r
-            # nodes` passes the gate (contributors unchanged, their own signature) and
-            # this used to read the result as phase-1: signed invites refused, UNSIGNED
-            # invites accepted for any role, and /join skipping the signature re-check
-            # entirely. A constitution with no graph under it is a broken graph, not an
-            # unsigned one.
+            # "No graph here" is not "nobody signed here". `git rm -r nodes` passes the
+            # gate, and reading the result as phase-1 accepted UNSIGNED invites for any
+            # role. A constitution with no graph under it is broken, not unsigned.
             if gate.contributors_dirs(tip, repo=repo):
                 raise GraphError(f"graph '{name}' holds a {C.FILE} but no graph; "
                                  f"an admin must restore it")
@@ -187,12 +172,10 @@ class Registry:
         try:
             d.mkdir(mode=0o700, parents=True)
             repo = d / "repo.git"
-            # The same config every other git on this server runs under: a core.hooksPath
-            # or an init.templateDir in the daemon account's ~/.gitconfig would otherwise
-            # make the repo we create and the repo receive-pack sees two different repos.
-            # server_git_env(), not {**os.environ, **SERVER_GIT_ENV}: a stray GIT_DIR in
-            # the operator's shell outranks `-C` and would point `git init`/`git config`
-            # at a repo nobody asked to create or configure.
+            # The same config every other git here runs under, or a core.hooksPath in the
+            # daemon's ~/.gitconfig makes the repo we create and the repo receive-pack
+            # sees two different repos. server_git_env(), because a stray GIT_DIR outranks
+            # `-C` and points `git init` at a repo nobody asked to create.
             env = server_git_env()
             subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True, env=env)
             for key, value in (("http.receivepack", "true"),
@@ -211,20 +194,15 @@ class Registry:
                                ("receive.fsckObjects", "true")):
                 subprocess.run(["git", "-C", str(repo), "config", key, value],
                                check=True, env=env)
-            # server_git_env(), because this server runs receive-pack itself and under
-            # exactly that -- and because hook._git uses this env AS GIVEN, with no
-            # merge over os.environ, a stray GIT_DIR in the daemon's own environment
-            # cannot survive into the `rev-parse --git-path hooks` call install_server
-            # makes and redirect it at a different repo's hooks directory. Asked under
-            # anything else, git answers with a different hooks directory and the gate
-            # is installed where the git that enforces it will never look.
+            # server_git_env(), because this server runs receive-pack under exactly that,
+            # and because hook._git uses the env AS GIVEN a stray GIT_DIR cannot survive
+            # into its `rev-parse --git-path hooks`. Asked under anything else, git names
+            # a different hooks directory and the gate lands where nothing runs it.
             install_server(repo, env=server_git_env())
             if not (repo / "hooks" / "pre-receive").exists():
-                # install_server reported success, but nothing is actually there to
-                # enforce the gate -- exactly what a GIT_DIR or core.hooksPath silently
-                # redirecting the write would produce. An unsigned push into this repo
-                # would then be accepted with no gate at all; refuse instead of serving
-                # a graph nobody is actually checking.
+                # install_server reported success and nothing is there to enforce the
+                # gate: exactly what a redirected write produces. An unsigned push would
+                # then land unchecked, so refuse rather than serve an ungated graph.
                 raise GraphError("the gate did not land in the hosted repo; a GIT_DIR or "
                                  "core.hooksPath in the server's environment redirected it")
             return self.mint(name, admin, "admin")
@@ -337,15 +315,12 @@ class Registry:
         removed on first try whether or not it was still live, so an expired code cannot
         be retried.
 
-        `contribs_for`, when given, is a ZERO-ARGUMENT CALLABLE returning the graph's
-        current contributors.yaml (or None), called only AFTER the code is confirmed to
-        exist and already popped -- a bogus code must not pay for the git read this
-        implies, nor leak a misconfigured hosted repo's own error through this route
-        before the code itself was even checked. When it does return contributors, a
-        signed invite's signature is re-checked against them: the gate would refuse the
-        eventual join COMMIT anyway once an admin is revoked, but without this a revoked
-        admin's still-unexpired invite minted a live TOKEN here and now, which reads a
-        private graph long before that commit is ever attempted."""
+        `contribs_for` is a ZERO-ARGUMENT CALLABLE returning the graph's contributors.yaml
+        (or None), called only AFTER the code is confirmed to exist and already popped: a
+        bogus code must not pay for that git read nor leak a misconfigured repo's error.
+        When it returns contributors, a signed invite is re-checked against them -- the
+        gate would refuse the eventual join COMMIT, but without this a revoked admin's
+        unexpired invite still minted a live TOKEN, which reads a private graph now."""
         self.repo(name)
         with graph_lock(self.graph_dir(name)):
             invites = self._read(name, "invites.json")

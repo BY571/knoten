@@ -1,9 +1,3 @@
-"""The stage prompts are the loop, made into an instruction you can follow at the right
-moment. Before these, the "dedicated agent prompt per stage" was a shape with no body;
-this pins what that shape actually is: the files exist, each names the stage it comes from
-(the one-stage-before rule, as data), and the graph's own docs point at them so an agent
-that never heard of the directory can still find them.
-"""
 from pathlib import Path
 
 import pytest
@@ -54,8 +48,6 @@ def test_each_stage_states_its_own_required_field(name, field):
 
 
 def test_the_graph_docs_point_at_the_prompts():
-    """SKILL.md is the loop. It has to point at the prompts, or the agent never loads them
-    and the prompts are only a spec for a file nobody reads."""
+    """SKILL.md is the loop."""
     skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
-
     assert "prompts" in skill

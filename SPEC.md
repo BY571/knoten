@@ -51,10 +51,9 @@ A system that stores only conclusions would have preserved ~15% of that.
 
 ## 2. Non-goals
 
-- **We do not build a general git host.** We host knoten graphs, because the permission
-  model (who may write, who verified what) is part of the graph and no general host can
-  enforce it. Git still provides versioning, branching, blame, diffs and history; we
-  write none of that.
+- **We do not build a general git host.** We host knoten graphs, because who may write
+  and who verified what is part of the graph and no general host can enforce it. Git
+  still provides versioning, branching, blame, diffs and history.
 - **We do not build a UI first.** A static site generator over the graph is a
   phase-3 nicety, and it can emit its own JSON when it exists.
 - **We do not invent a vocabulary.** Micropublications and nanopublications already
@@ -96,19 +95,15 @@ open ──► alive ──────► superseded
 ```
 
 The engine applies the superseded arrow: a node that supersedes another flips it, and must
-first face every gate it survived. The node doing the superseding is itself of a
-compressible type (§6); every target is alive, or already superseded by that same node.
-And a `superseded` node always has an alive node superseding it: retract the general claim
-without reviving them first and the graph says so, rather than leaving findings standing
-for nothing.
+first face every gate it survived. The superseder is itself of a compressible type (§6);
+every target is alive, or already superseded by that same node. And a `superseded` node
+always has something superseding it: delete the general claim and the graph says so.
 
-Every arrow is walkable via `knoten update`, which appends and moves the status but cannot
-rewrite a claim. Every arrow but the superseded one: only the engine draws that, inside the
-write that declares the edge, so setting it by hand leaves a node nothing alive supersedes,
-and that is refused. Immutability protects **what was claimed**, never the status: the
-status *is* the lifecycle, and git holds the before and after (§7). Without it an agent
-could open a hypothesis and never close it, leaving a settled question `open` on every
-frontier.
+Every arrow but that one is walkable via `knoten update`, which appends and moves the
+status but cannot rewrite a claim. Immutability protects **what was claimed**, never the
+status: the status *is* the lifecycle, and git holds the before and after (§7). Without
+it an agent could open a hypothesis and never close it, leaving a settled question `open`
+on every frontier.
 
 `retracted` is first-class. Three claims in the source session were withdrawn. **A
 graph that records only conclusions and never corrections lies to you in six months.**
@@ -169,8 +164,8 @@ methodological gate."* DISK's `LineOfInquiry` is the closest blueprint and it
 
 `kn:survivedGate` + the rule engine is the whole safety mechanism when a graph turns it
 on: **an unchallenged claim cannot be marked alive.** The scaffold ships that rule
-commented out, advisory by default; until a graph enables it, `knoten frontier` lists an
-uncited alive claim under `unchecked` instead of refusing it.
+commented out; until a graph enables it, `knoten frontier` lists an uncited alive claim
+under `unchecked` instead of refusing it.
 
 ---
 
@@ -234,9 +229,7 @@ rules:
 ```
 
 `knoten init` writes the first of these two commented out: gates are advisory by
-default, so an alive claim with no `kn:survivedGate` edge is not refused, only listed by
-`knoten frontier` under `unchecked`. Uncommenting it is what turns that listing into a
-refusal.
+default, and uncommenting it turns `knoten frontier`'s listing into a refusal.
 
 | key | effect |
 |---|---|
@@ -244,7 +237,6 @@ refusal.
 | `message` | what the human reads when it fires. |
 | `when_status` / `when_type` | only apply to these statuses / types (comma-separated). |
 | `unless_edge` | `<rel>`: skip the rule for a node that declares that relation. |
-| `max_alive` | `{type, per, count}`: a graph-level ceiling, attributed to the newest nodes past it. `per` is `question` (the default) or `graph`. |
 | `require_edge` | node must declare this relation. |
 | `require_sections` | body must contain these `## ` headings. |
 | `require_field` | frontmatter must carry this key, with any non-empty value. |
@@ -297,8 +289,14 @@ Always-on structural checks, which no graph declares: `dangling-edge`,
 `malformed-results`, `malformed-repro`, `supersession` (the bar of §3: a superseder of a
 compressible type over alive targets of a compressible type, one shared question, the
 union of the gates they survived, a `## Covers` section naming each, and no superseded
-node left without an alive superseder), and `not-a-gate` (a migration aid, deletable once
-graphs written before the gate rename have moved).
+node whose superseder has been deleted), and `not-a-gate` (a migration aid, deletable
+once graphs written before the gate rename have moved).
+
+**Two known properties, documented rather than guarded.** Retracting a general node stops
+it covering anything, and the targets it retired stay `superseded` until a person revives
+them: only a person can say whether an old specific is worth having back. And nothing caps
+how many alive findings a question may hold; `knoten frontier`'s `COMPRESSIBLE` band is
+the whole of the nudge to write the rule above them.
 
 A biology graph declares entirely different rules. The core never changes.
 

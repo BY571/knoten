@@ -1,19 +1,12 @@
-"""The client side of a remote graph.
-
-A remote is a git URL plus a token. git already knows how to push, pull and clone over
-HTTP and how to ask a helper program for credentials, so this module is that helper plus
-a handful of commands that wrap git and make four JSON calls. It imports nothing from the
-server itself (`serve.py`, `registry.py`): a client and a server never share THOSE code
-paths, so a bug in one cannot hide in the other. The one exception is `gate.graph_dirs`,
-a read-only tree walk with no server state behind it, reused here to find where a freshly
-cloned graph lives (root or a monorepo subdirectory) -- the same question the gate itself
-answers on every push.
+"""The client side of a remote graph: git's credential helper plus a handful of commands
+that wrap git and make four JSON calls. It imports nothing from the server (`serve.py`,
+`registry.py`) so a bug in one cannot hide in the other -- except `gate.graph_dirs`, a
+read-only tree walk asked the same question the gate asks on every push.
 
 Tokens live in one file, mode 0600, one line per remote: `<url> <user> <token>`. The key
-carries the scheme, because `https://h/x.git` and `http://h/x.git` are not the same
-remote and a token scoped to the first must never travel in the clear to the second. The
-owner secret for a server is stored under `owner://<host>`, a scheme git never asks for,
-so no git request can be answered with the key to the whole server.
+carries the scheme, because a token scoped to `https://h/x.git` must never travel in the
+clear to `http://h/x.git`. The owner secret is stored under `owner://<host>`, a scheme
+git never asks for, so no git request can be answered with the key to the whole server.
 """
 from __future__ import annotations
 
@@ -31,10 +24,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import contributors as C
+from . import identity as C
 from . import gate
 from .core import GraphError, ID_RE, MAX_DAYS, MAX_NAME, _yaml, today
-from .keys import INVITE_NS, configure_signing, ensure_key, key_dir, public_line, sign
+from .identity import INVITE_NS, configure_signing, ensure_key, key_dir, public_line, sign
 
 
 # ---------------------------------------------------------------- credentials
@@ -87,26 +80,18 @@ def _match(lines: list[str], key: str) -> tuple[str, str] | None:
 
 
 def cred_lookup(url: str) -> tuple[str, str] | None:
-    """The exact key or nothing. There is deliberately no fallback to the schemeless
-    `<netloc><path>` key this file used before the scheme was added.
-
-    That fallback existed for one release-less week and it leaked the owner secret. Old
-    keys carried no scheme, so `owner://h:8899` and `https://h:8899` both collapse to
-    `h:8899`: a plain `git fetch` against the bare host (any repo without
-    credential.useHttpPath) matched the owner line, and the migration then rewrote it as
-    `https://h:8899`, reachable by ordinary git from then on. The whole point of the
-    `owner://` namespace is that no git request can name it, and a lookup that strips the
-    scheme is exactly a lookup that can. Nothing is released, so nothing is stranded.
-    """
+    """The exact key or nothing, with deliberately NO fallback to a schemeless
+    `<netloc><path>` key: `owner://h:8899` and `https://h:8899` both collapse to `h:8899`,
+    so a plain `git fetch` against the bare host matched the owner line and leaked the
+    secret. The whole point of the `owner://` namespace is that no git request names it,
+    and a lookup that strips the scheme is exactly a lookup that can."""
     return _match(_cred_lines(cred_path()), _key(url))
 
 
 def credential_helper(request: str) -> str:
-    """git's credential protocol: key=value lines in, username and password out.
-
-    Empty output for an unknown remote, never an error: git then falls through to its
-    next helper, so every non-knoten remote on the machine keeps working.
-    """
+    """git's credential protocol: key=value lines in, username and password out. Empty
+    output for an unknown remote, never an error, so git falls through to its next helper
+    and every non-knoten remote on the machine keeps working."""
     fields = dict(line.split("=", 1) for line in request.splitlines() if "=" in line)
     url = f"{fields.get('protocol', '')}://{fields.get('host', '')}/{fields.get('path', '')}"
     if not url.startswith(("http://", "https://")):
@@ -173,16 +158,10 @@ def _api(url: str, body: dict, auth: tuple[str, str] | None = None) -> dict:
 def _explain(stderr: str) -> str:
     """git prints only a status code for an HTTP refusal. Say what it means.
 
-    A bare substring search for "401"/"403" also matched git's own URL line
-    (`fatal: unable to access 'http://127.0.0.1:36605/trading.git/': The requested
-    URL returned error: 403`), so any host, port or graph name that happened to
-    contain those three digits flipped the verdict — the `hub` fixture binds
-    port 0, and plenty of ephemeral ports contain "401". Match git's phrasing,
-    not the digits.
-    """
-    # A relayed `remote:` line can itself contain "401" or "403" (a node id, a rule
-    # message) — match only git's own lines, or a rule violation reads as a credential
-    # problem.
+    Match git's PHRASING, not the digits: a bare search for "401"/"403" also matched the
+    port and the graph name in git's own URL line. And only git's own lines, not the
+    relayed `remote:` ones, or a rule message containing "403" reads as a credential
+    problem."""
     own = "\n".join(l for l in stderr.splitlines() if not l.startswith("remote:"))
     if re.search(r"returned error: 401\b|HTTP 401\b|Authentication failed|terminal prompts disabled", own):
         return "credentials refused; the token may have been revoked. Ask for a new invite."
@@ -199,6 +178,16 @@ def _explain(stderr: str) -> str:
     return lines[-1] if lines else "git failed"
 
 
+IN_PLACE = "your clone and credentials are in place"
+
+
+def _stranded(why: str, done: str, finish: str) -> GraphError:
+    """A refusal AFTER something already landed. git's error alone reads as "nothing
+    happened", so people re-ran the command and met "already exists" with no idea which
+    half had worked. Say which half did, then how to finish without redoing it."""
+    return GraphError(f"{why}. But {done}, so do not start over: {finish}.")
+
+
 def _relay(stderr: str) -> None:
     """The gate's own output arrives as `remote:` lines. Show those, and only those."""
     for line in stderr.splitlines():
@@ -210,9 +199,8 @@ def _relay(stderr: str) -> None:
 
 def _my_key(contribs: dict, name: str) -> Path:
     """The private key already on THIS machine for `name`, checked against what
-    contributors.yaml lists for them -- checked BEFORE anything (`ensure_key` included)
-    can generate a fresh, mismatched keypair under that name. `ensure_key` never
-    regenerates an existing key, so a wrong key made here would be wrong forever."""
+    contributors.yaml lists -- BEFORE anything can generate a fresh, mismatched keypair
+    under that name. `ensure_key` never regenerates, so a wrong key is wrong forever."""
     priv = key_dir() / name
     if not priv.exists() or (contribs.get(name) or {}).get("key") != public_line(priv):
         raise GraphError(f"{C.FILE} lists a different key for '{name}' than {priv}; "
@@ -221,10 +209,9 @@ def _my_key(contribs: dict, name: str) -> Path:
 
 
 def _commit_file(repo: Path, pathspec: str, message: str) -> str | None:
-    """Stage exactly `pathspec` and commit it -- never `add -A`, which in the enclosing
-    repo would also stage every unrelated untracked file a monorepo layout allows next to
-    the graph. `None` on success; the first non-empty stderr line on failure, so the
-    caller can say what that means and how to recover."""
+    """Stage exactly `pathspec` and commit it -- never `add -A`, which would also stage
+    every unrelated file a monorepo layout allows beside the graph. `None` on success,
+    the first non-empty stderr line on failure."""
     _git(repo, "add", "--", pathspec)
     r = _git(repo, "commit", "-q", "-m", message)
     if r.returncode != 0:
@@ -234,9 +221,8 @@ def _commit_file(repo: Path, pathspec: str, message: str) -> str | None:
 
 def _graph_name(root: Path) -> str:
     """The graph's own `name:`, read straight from `graph.yaml` -- not through
-    `validate.load_config`, whose full schema check would refuse an invite over a
-    problem (an unknown key, a bad `node_types` entry) that has nothing to do with
-    inviting anyone."""
+    `load_config`, whose full schema check would refuse an invite over an unknown key
+    that has nothing to do with inviting anyone."""
     f = Path(root) / "graph.yaml"
     if not f.exists():
         raise GraphError(f"{f} is missing; is this a graph directory?")
@@ -248,10 +234,9 @@ def _graph_name(root: Path) -> str:
 
 
 def _graph_subdir(repo: Path) -> str | None:
-    """Which directory inside `repo` holds ITS graph, at HEAD: `''` for the root, a
-    subpath in a monorepo layout. `None` when there is no graph at all. More than one is
-    refused here in one line -- exactly the ambiguity the gate itself would face, and
-    `join` cannot guess which one a newcomer means to join."""
+    """Which directory inside `repo` holds ITS graph at HEAD: `''` for the root, a
+    subpath in a monorepo layout, `None` for no graph. More than one is refused: `join`
+    cannot guess which one a newcomer means."""
     dirs = gate.graph_dirs("HEAD", repo=repo)
     if len(dirs) > 1:
         raise GraphError(
@@ -263,9 +248,8 @@ def _graph_subdir(repo: Path) -> str | None:
 
 def default_signing_name(cwd: Path | None = None) -> str:
     """Who this machine signs as when nobody said: git's own `user.name`, lower-cased and
-    hyphenated into an id. Raises rather than returning "" -- an empty name reached
-    `ensure_key` as a key file with no name, and the refusal it gave there blamed the
-    name instead of saying what to do about it."""
+    hyphenated. Raises rather than returning "", which reached `ensure_key` as a key file
+    with no name and a refusal that blamed the name instead of saying what to do."""
     name = _git(cwd or Path.cwd(), "config", "user.name").stdout.strip().lower().replace(" ", "-")
     if not name:
         raise GraphError("pass a name or set git config user.name")
@@ -336,13 +320,9 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
     r = _git(repo, "push", "-u", "origin", "HEAD")
     _relay(r.stderr)
     if r.returncode != 0:
-        # The graph was created two calls up. Reporting only git's error read as "nothing
-        # happened", so people re-ran the command and met "already exists" with no idea
-        # which half had worked.
-        raise GraphError(
-            f"{_explain(r.stderr)}. The graph now EXISTS on {on} and your token is saved, "
-            f"so do not create it again: fix the above, then `knoten push` here, or "
-            f"`knoten remote add {on}/{name}` in a fresh clone.")
+        raise _stranded(_explain(r.stderr), f"the graph now EXISTS on {on} and your token "
+                        f"is saved", f"fix the above and `knoten push` here, or "
+                        f"`knoten remote add {on}/{name}` in a fresh clone")
     return f"{on}/{name}"
 
 
@@ -368,8 +348,7 @@ def push(root: Path) -> int:
     repo = _toplevel(root)
     _origin(repo)
     # `knoten commit` files a node on disk and git commits nothing; `push` sends HEAD.
-    # Without this check a collaborator files a node, pushes, sees a tick, and has sent
-    # nothing -- the one mistake every first-time contributor made.
+    # Without this a collaborator files a node, pushes, sees a tick, and has sent nothing.
     dirty = _git(repo, "status", "--porcelain", "--", str(root))
     if dirty.stdout.strip():
         n = len(dirty.stdout.strip().splitlines())
@@ -387,8 +366,8 @@ def pull(root: Path) -> int:
     repo = _toplevel(root)
     _origin(repo)
     # Rebase, never merge: the gate refuses a merge commit, so a merge is a pull that can
-    # never be pushed. The clone signs every commit it makes, and a rebase makes commits,
-    # so what comes out is signed again. Autostash keeps a half-written node out of the way.
+    # never be pushed. A rebase makes commits, which this clone signs. Autostash keeps a
+    # half-written node out of the way.
     r = _git(repo, "pull", "-q", "--rebase", "--autostash", "origin")
     if r.returncode != 0:
         raise GraphError(_explain(r.stderr))
@@ -411,9 +390,8 @@ def invite(root: Path, name: str, role: str = "write", days: int = 7) -> str:
     body = {"name": name, "role": role, "days": days}
     contribs = C.load(root)
     if contribs is not None:
-        # Bounded before it ever reaches timedelta: unbounded, a huge --expires overflows
-        # timedelta with a raw OverflowError, well before the server gets a chance to
-        # enforce the very same bound itself.
+        # Bounded before timedelta sees it: a huge --expires overflows with a raw
+        # OverflowError before the server can enforce the same bound itself.
         if not 1 <= int(days) <= MAX_DAYS:
             raise GraphError(f"days must be between 1 and {MAX_DAYS}")
         priv = _my_key(contribs, auth[0])
@@ -443,13 +421,10 @@ def revoke(root: Path, name: str) -> None:
                              f"Pull or resolve that yourself, then run "
                              f"`knoten revoke {name}` again")
         contribs = C.load(root)
-        # `auth[0]` is this machine's OWN identity for this remote -- the same name
-        # `invite` trusts for the same reason. It signs with whatever key this repo is
-        # configured to sign with, so that has to actually be configured before anything
-        # else is checked against it: an admin clone recovered with a bare `git clone` +
-        # `knoten remote add` (skipping `remote create`/`join`, which both call
-        # `configure_signing`) has no `user.signingkey` at all, and `_my_key` below would
-        # otherwise be asked to check a key file whose name is the empty string.
+        # `auth[0]` is this machine's OWN identity for this remote. Signing has to be
+        # configured before `_my_key` checks anything against it: an admin clone recovered
+        # with a bare `git clone` + `knoten remote add` has no `user.signingkey` at all,
+        # and `_my_key` would then be asked to check a key file with an empty name.
         if not _git(repo, "config", "user.signingkey").stdout.strip():
             raise GraphError(
                 f"this clone has no signing key configured; run `knoten key {auth[0]}` "
@@ -462,11 +437,9 @@ def revoke(root: Path, name: str) -> None:
         if name not in contribs:
             raise GraphError(f"'{name}' is not listed in {C.FILE}")
         if not contribs[name].get("revoked"):
-            # The mark first, the token second. The mark is what the gate enforces and
-            # what a clone can still read a year on; the token is convenience. If the
-            # push is refused, nothing has changed and the message says why. Already
-            # revoked is not refused here: it is what lets a failed `/revoke` call below
-            # be retried by simply running `revoke` again, without redoing the mark.
+            # The mark first, the token second: the mark is what the gate enforces and
+            # what a clone can still read a year on. Already-revoked is not refused, so a
+            # failed `/revoke` below can be retried without redoing the mark.
             contribs[name]["revoked"] = today()
             C.dump(root, contribs)
             fail = _commit_file(repo, str(root / C.FILE), f"{auth[0]} revokes {name}")
@@ -479,10 +452,9 @@ def revoke(root: Path, name: str) -> None:
         try:
             _api(f"{base}/revoke", {"name": name}, auth)
         except GraphError as e:
-            # The graph mark landed and already locks this person out at the gate, but
-            # their token is not dead until the server hears about it too -- that must
-            # not be silently swallowed, or `knoten revoke` reports success while a live
-            # token still works.
+            # The mark landed and locks them out at the gate, but the token is not dead
+            # until the server hears about it: swallowing this would report success while
+            # a live token still works.
             raise GraphError(
                 f"the graph already marks '{name}' revoked, but the server refused the "
                 f"token call: {e}; '{name}' can still connect with a live token until "
@@ -499,9 +471,9 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str, 
     url = url.rstrip("/")
     git_url = url + ".git"
     got = _api(f"{url}/join", {"code": code})
-    # The server is not trusted with the contents of the credentials file. That file is
-    # one line per remote, so a `name` carrying a newline appends a whole second line to
-    # it: a credential for a remote the user never joined, on a host they never named.
+    # The server is not trusted with the contents of the credentials file: it is one line
+    # per remote, so a `name` carrying a newline appends a credential for a remote the
+    # user never joined, on a host they never named.
     user, role = got.get("name", ""), got.get("role", "")
     token = got.get("token", "")
     if (not ID_RE.match(user or "") or len(user) > MAX_NAME
@@ -514,24 +486,17 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str, 
                         "-c", "credential.useHttpPath=true",
                         "clone", "-q", git_url, str(target)], capture_output=True, text=True)
     if r.returncode != 0:
-        # The server already consumed the code in the _api call above, one line up. git's
-        # own error alone reads like the code is still good and worth retrying — it is
-        # not, so say what actually happened and how to finish without it.
-        raise GraphError(
-            f"clone failed: {_explain(r.stderr)}. The invite is spent but your credentials "
-            f"are saved, so finish by hand: git clone {git_url} <dir> && cd <dir> && "
-            f"knoten remote add {url}")
+        raise _stranded(f"clone failed: {_explain(r.stderr)}",
+                        "the invite is spent but your credentials are saved",
+                        f"git clone {git_url} <dir> && cd <dir> && knoten remote add {url}")
     _wire(target, git_url)
     if role == "read":
-        # A reader is not listed. contributors.yaml says who may WRITE here, and every
-        # entry in it is a key the gate will accept a commit from; a reader has nothing to
-        # sign and no commit to make, so making them a key and pushing an entry only asked
-        # the server for a write it would refuse anyway. Their token is the whole of their
-        # access, and it is the admin's to revoke.
+        # A reader is NOT listed: every entry in contributors.yaml is a key the gate will
+        # accept a commit from, and a reader has nothing to sign. Their token is the whole
+        # of their access, and it is the admin's to revoke.
         return target, user, role, False
-    # A hosted graph may sit at the clone's root or, in a monorepo layout, a subdirectory
-    # of it -- the gate itself has to answer this same question on every push, so it is
-    # asked here rather than assumed to be the root.
+    # A hosted graph may sit at the clone's root or in a monorepo subdirectory: asked,
+    # not assumed, because the gate asks the same on every push.
     gname = _graph_subdir(target)
     gdir = target / gname if gname is not None else None
     contribs = C.load(gdir) if gdir is not None else None
@@ -548,27 +513,23 @@ def join(url: str, code: str, dest: str | None = None) -> tuple[Path, str, str, 
                           "invited_by": got.get("by", ""),
                           "invite": {"blob": blob, "sig": sig}}
         C.dump(gdir, contribs)
-        # git refuses to commit without an identity, and a fresh clone under
-        # GIT_ISOLATION (or on a bare new machine) has none configured yet.
+        # git refuses to commit without an identity, and a fresh clone has none.
         for k, v in (("user.name", user), ("user.email", f"{user}@knoten")):
             if not _git(target, "config", k).stdout.strip():
                 _git(target, "config", k, v)
-        # `-C target` already anchors the command there, so the pathspec must be
-        # relative to it -- `target / C.FILE` looked right but resolved against the
-        # PROCESS's cwd first, one directory too deep, and silently added nothing.
+        # `-C target` anchors the command, so the pathspec is relative to it: an absolute
+        # `target / C.FILE` resolved one directory too deep and silently added nothing.
         pathspec = f"{gname}/{C.FILE}" if gname else C.FILE
         fail = _commit_file(target, pathspec, f"{user} joins as {role}")
         if fail:
-            raise GraphError(
-                f"could not commit your entry: {fail}. Your clone and credentials "
-                f"are in place at {target}; fix the problem and commit {C.FILE} yourself, "
-                f"or run `knoten join` again with --dest pointing at a new directory.")
+            raise _stranded(f"could not commit your entry: {fail}", IN_PLACE,
+                            f"commit {C.FILE} yourself, or run `knoten join` again "
+                            f"with --dest pointing at a new directory")
         r = _git(target, "push", "origin", "HEAD")
         _relay(r.stderr)
         if r.returncode != 0:
-            raise GraphError(
-                f"the gate refused your join commit: {_explain(r.stderr)}. Your clone and "
-                f"credentials are in place; ask the admin for a fresh invite and run "
-                f"`knoten join` again with --dest pointing at a new directory.")
+            raise _stranded(f"the gate refused your join commit: {_explain(r.stderr)}",
+                            IN_PLACE, "ask the admin for a fresh invite and run `knoten "
+                            "join` again with --dest pointing at a new directory")
         return target, user, role, True
     return target, user, role, False

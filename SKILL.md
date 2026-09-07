@@ -20,16 +20,15 @@ next, or write any code, run steps 1-4 below. They take seconds and they answer 
 things your own context cannot: what is already dead, what is already open, and what a
 result has to survive here.
 
-Skipping them has a price you pay in compute. Gates are the checks this graph declares,
-so read `knoten gates` before designing the experiment: one designed blind can produce a
-result that fails a check you never saw, and you run it again having already spent the
-budget once. File `kn:survivedGate` or `kn:killedByGate` on the claim once you have
-checked it against one.
+Skipping them has a price you pay in compute: an experiment designed blind can fail a
+check you never saw, and you run it again having already spent the budget once. Read
+`knoten gates` first, and file `kn:survivedGate` or `kn:killedByGate` on the claim once
+you have checked it against one.
 
-If you realise you have already done the work without doing this: run 1-4 now, before
-writing anything. The question may already be settled, and the gates still apply, even
+If you realise you have already done the work without doing this, run 1-4 now, before
+writing anything. The question may already be settled, and the gates still apply even
 though citing none is not refused: `knoten frontier` lists an alive claim with no gate as
-unchecked, and a graph may turn that into a refusal by enabling the rule in `graph.yaml`.
+unchecked, and a graph may turn that into a refusal by enabling the rule.
 
 ## How the graph is shaped
 
@@ -83,20 +82,17 @@ forward edge and never authored.
     prov:wasDerivedFrom                 claim ──▶ what it came from
 
 `knoten validate` lists every relation it knows when you name one it does not, so ask it
-rather than guessing. `kn:explains`, `kn:generalises` and `kn:followsFrom` name the KIND
-of a derivation when that matters.
-
-Writing the generated name (`kn:testedBy` where you meant `kn:tests`) is refused. Writing
-the right relation on the wrong node is NOT detectable: the back-link lands and the graph
-reports itself healthy, with the claim reversed. A correction is a NEW node that supersedes
-or retracts the old one, never an edit to it.
+rather than guessing; `kn:explains`, `kn:generalises` and `kn:followsFrom` name the KIND
+of a derivation when that matters. Writing the generated name (`kn:testedBy` where you
+meant `kn:tests`) is refused. Writing the right relation on the wrong node is NOT
+detectable: the back-link lands and the graph reports itself healthy, with the claim
+reversed. A correction is a NEW node, never an edit.
 
 ## Before you work
 
 If the graph has a remote, `knoten pull` FIRST. Every read below answers from the files
-on disk, so a stale clone reports work a collaborator settled days ago as still open.
-That is the exact failure this graph exists to prevent, arriving through the back door.
-See "In a shared graph" below for the rest of what a remote changes.
+on disk, so a stale clone reports work a collaborator settled days ago as still open:
+the exact failure this graph exists to prevent, arriving through the back door.
 
 1. `knoten frontier` says what is worth doing next: open work, dead ends whose stated
    reopen condition may now hold, and gates nothing has been through.
@@ -116,10 +112,9 @@ See "In a shared graph" below for the rest of what a remote changes.
    when it failed. A dead hypothesis with a stated cause is the most valuable node in the
    graph and the one that would otherwise be lost. Use `knoten update <id> --status dead
    --append <file> --field cause=<value>` instead if you opened the node earlier.
-6. `knoten attach <id> <files...>`: the script that ran it and the plot that shows it.
-   A claim nobody can re-run is a claim nobody trusts in six months. If the graph has a
-   remote, git commit the node and `knoten push` now, not at the end of the session; the
-   server runs the same rules and refuses what this clone would have.
+6. `knoten attach <id> <files...>`: the script that ran it and the plot that shows it. A
+   claim nobody can re-run is a claim nobody trusts in six months. With a remote, git
+   commit and `knoten push` now, not at the end of the session.
 
 ## In a shared graph
 
@@ -129,19 +124,16 @@ to. Three things change, and nothing else does:
 - `knoten pull` before step 1, every session. Your own unpushed commits are replayed on
   top of what arrived; there is never a merge commit, because the server refuses one.
 - `knoten commit` writes a node to disk and git has not seen it. Filing is finished when
-  you run `git add -A && git commit -m "<id>: what was found"`; the clone signs the
-  commit for you. `knoten push` refuses while anything is uncommitted, so it cannot
-  claim to have sent what it did not.
-- `knoten push` after each filed node. Three refusals to know:
-  `moved on since your last pull` means somebody was faster: `knoten pull`, then push
-  again. A rule violation is the refusal step 5 would have given you, applied on the
-  server for everyone: fix the node, push again. `not signed` means this clone was not
-  set up by `knoten join`, `knoten remote create` or `knoten remote add`; stop and say
-  so rather than working around it.
+  you run `git add -A && git commit -m "<id>: what was found"`; the clone signs the commit
+  for you, and `knoten push` refuses while anything is uncommitted.
+- `knoten push` after each filed node. Three refusals to know: `moved on since your last
+  pull` means somebody was faster, so pull and push again; a rule violation is step 5's
+  refusal applied on the server for everyone, so fix the node and push again; `not
+  signed` means this clone was never set up by `knoten join`, `knoten remote create` or
+  `knoten remote add`, so stop and say so rather than working around it.
 
 Never edit a node somebody else filed, not even to fix it: supersede or retract it with a
-new node, as above. Two people editing one file is the only way a pull ends in a
-conflict here, and `knoten pull` then names the file and what to run next.
+new node. Two people editing one file is the only way a pull ends in a conflict here.
 
 ## Compress before you accumulate
 
@@ -155,15 +147,14 @@ superseded, with their numbers; `knoten index` stops listing them. A general nod
 to the union of the bars its specifics faced, so a compression is not a summary, it is a
 stronger claim.
 
-The graph will refuse a new finding once a question holds more live findings than its
-budget. That refusal is not an error; it is the graph telling you it has learned enough
-specifics to deserve a rule.
+Nothing refuses a finding for being one too many: there is no quota to satisfy and no
+number to game. The `COMPRESSIBLE` band is the whole of the nudge, and the reward is that
+the frontier gets shorter. A refused compression costs nothing but the attempt; a lazy
+one cannot land, because the bar is checked.
 
-The graph rewards compression in the only currency it has: budget under the question
-comes back, the frontier gets shorter, and the commit tells you exactly what you freed. A
-refused compression costs nothing but the attempt; a lazy one cannot land, because the
-bar is checked, so every general node that exists is one the graph considers stronger
-than what it replaced.
+Retracting a general node stops it covering anything. The specifics it retired stay
+`superseded` until you revive them yourself (`knoten update <id> --status alive`): only a
+person can say whether they are worth having back.
 
 ## Stage prompts
 
@@ -185,14 +176,11 @@ close it with a reason rather than leaving it open forever.
 
 ## When you run out of ideas
 
-`knoten frontier` is also how you learn the well is dry: nothing `open` you can act on, no
-reopen condition that now holds, no untested gate left. That is not a signal to invent a
-hypothesis out of your own context and file it. It is a signal to go and read.
-
-Do a compression pass first: a general node often opens ideas the specifics hid.
-
-Then start a new source round, and put what you find in the graph before you reason from
-it:
+`knoten frontier` is also how you learn the well is dry: nothing `open` you can act on,
+no reopen condition that now holds, no untested gate left. That is not a signal to invent
+a hypothesis out of your own context and file it; it is a signal to go and read. Do a
+compression pass first, since a general node often opens ideas the specifics hid. Then
+start a new source round, and put what you find in the graph before you reason from it:
 
 - search the web, arXiv, the venue's or vendor's own docs, blog posts, forum and Reddit
   threads, and the issue trackers of anything you depend on
@@ -200,18 +188,14 @@ it:
   or path so somebody can go back to it
 - derive `idea` nodes from those sources, then hypotheses from the ideas
 
-Two things to check on the way back through, because a source round is exactly the event
-that changes them:
+Two things to check on the way back through, since a source round is exactly what
+changes them: the reopen conditions on dead nodes, because a dead end whose stated
+condition the new reading satisfies is a cheaper experiment than a new idea; and the
+untested gates, because a gate nothing has been through is a check nobody is running.
 
-- the reopen conditions on dead nodes (`knoten frontier`). A dead end whose stated
-  condition the new reading satisfies is a cheaper experiment than a new idea, because the
-  design is already written down.
-- the untested gates. A gate nothing has been through is a check nobody is running.
-
-If the work really did start in your own head rather than in something you read, that is
-allowed: write `source-own-intuition` and cite it like any paper. What is not allowed is
-an idea that came from nowhere, because six months from now nobody can tell whether it
-came from evidence or from a mood.
+If the work really did start in your own head, that is allowed: cite
+`source-own-intuition` like any paper. What is not allowed is an idea that came from
+nowhere, because six months from now nobody can tell evidence from a mood.
 
 ## Writing details
 
