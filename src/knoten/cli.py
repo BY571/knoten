@@ -335,7 +335,10 @@ def serve_cmd(data, bind) -> int:
 
 def render_get(payload: dict) -> None:
     print(f"{payload['id']}  [{MARK.get(payload['verdict'], payload['verdict'])}]  "
-          f"type={payload['type']}\n")
+          f"type={payload['type']}")
+    if warning := payload.get("warning"):
+        print(f"  ! {warning}")
+    print()
     for l in payload["links"]:
         print(f"  {l['rel']:22} -> {l['to']}")
     for b in payload["backlinks"]:
@@ -408,12 +411,35 @@ def _links(pairs) -> list[dict]:
     return out
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def render_reward(c: dict) -> None:
+    """What a compression freed, in the numbers a reader would praise. Printed by both
+    commit and update, so a general node built either way is told the same thing."""
+    if len(c["targets"]) == 1:
+        t = c["targets"][0]
+        print(f"    replaces {t}; {t} is now superseded")
+        return
+    print(f"    compressed {_plural(len(c['targets']), 'finding')} into 1 under {c['question'] or '(no question)'}")
+    if c["gates_bonus"]:
+        print(f"    survived {_plural(c['gates'], 'gate')}, one more than any of them faced alone")
+    else:
+        print(f"    survived the {_plural(c['gates'], 'gate')} they faced")
+    if c["free"] is not None:
+        print(f"    {c['free']} of {c['count']} slots free under this question again")
+    print(f"    this graph now stands on {_plural(c['rules'], 'rule')} and {_plural(c['specifics'], 'specific')}")
+
+
 def render_commit(payload: dict) -> None:
     print(f"  + {payload['path']}  ({payload['graph_size']} nodes)")
     if warning := payload.get("warning"):
         print(f"\n  ! {warning}")
         for s in payload["similar"]:
             print(f"    {s['id']}  [{MARK.get(s['verdict'], s['verdict'])}]  {s['title']}")
+    if compressed := payload.get("compressed"):
+        render_reward(compressed)
 
 
 def commit_cmd(root, nid, frontmatter, body, as_json) -> int:
@@ -427,6 +453,8 @@ def commit_cmd(root, nid, frontmatter, body, as_json) -> int:
 
 def render_update(payload: dict) -> None:
     print(f"  {payload['node']} -> {payload['node_status']}")
+    if compressed := payload.get("compressed"):
+        render_reward(compressed)
 
 
 def update_cmd(root, nid, status, append, results, links, fields, as_json) -> int:

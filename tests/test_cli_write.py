@@ -237,3 +237,74 @@ def test_new_scaffolds_a_required_field_blank_so_validate_still_names_it(tmp_pat
 
     assert "origin:\n" in (root / "nodes" / "src-a.md").read_text()
     assert main(["validate"]) == 1
+
+
+COMP = """\
+name: t
+statuses: [open, alive, superseded]
+node_types: [question, finding, gate]
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {type: finding, per: question, count: 6}
+    message: Compress first.
+"""
+
+
+@pytest.fixture
+def four_findings(graph, monkeypatch, tmp_path):
+    graph.rules(COMP)
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: open", "# B\n")
+    for i in range(1, 5):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                   f"  - {{rel: kn:survivedGate, to: {'gate-a' if i < 3 else 'gate-b'}}}",
+                   f"# {i}\n")
+    fm = tmp_path / "fm.yaml"
+    fm.write_text("type: finding\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: finding-1}\n"
+                  "  - {rel: npx:supersedes, to: finding-2}\n"
+                  "  - {rel: npx:supersedes, to: finding-3}\n"
+                  "  - {rel: kn:survivedGate, to: gate-a}\n"
+                  "  - {rel: kn:survivedGate, to: gate-b}\n", encoding="utf-8")
+    body = tmp_path / "body.md"
+    body.write_text("# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n- finding-3: c\n", encoding="utf-8")
+    monkeypatch.chdir(graph.root)
+    return fm, body
+
+
+def test_a_compression_is_rewarded_in_the_commit_output(four_findings, capsys):
+    fm, body = four_findings
+
+    assert main(["commit", "finding-g", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "compressed 3 findings into 1 under question-q" in out
+    assert "survived 2 gates, one more than any of them faced alone" in out
+    assert "4 of 6 slots free under this question again" in out
+    assert "this graph now stands on 1 rule and 1 specific" in out
+
+
+def test_the_reward_is_in_the_json_payload_too(four_findings, capsys):
+    fm, body = four_findings
+
+    assert main(["commit", "finding-g", "--frontmatter", str(fm), "--body", str(body), "--json"]) == 0
+    c = json.loads(capsys.readouterr().out)["compressed"]
+
+    assert c["targets"] == ["finding-1", "finding-2", "finding-3"]
+    assert c["gates"] == 2 and c["gates_bonus"] and (c["free"], c["count"]) == (4, 6)
+
+
+def test_a_single_replacement_says_so_in_one_line(four_findings, tmp_path, capsys):
+    fm, body = four_findings
+    fm.write_text("type: finding\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: finding-4}\n"
+                  "  - {rel: kn:survivedGate, to: gate-b}\n", encoding="utf-8")
+    body.write_text("# R\n\n## Covers\n- finding-4: it\n", encoding="utf-8")
+
+    assert main(["commit", "finding-r", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "replaces finding-4; finding-4 is now superseded" in out
+    assert "compressed" not in out

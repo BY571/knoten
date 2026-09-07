@@ -470,3 +470,15 @@ def test_show_prints_covers_before_the_body_of_a_general_node(graph, monkeypatch
     out = capsys.readouterr().out
     assert out.index("covers:") < out.index("finding-1: small")
     assert "finding-1: small" in out
+
+
+def test_show_prints_the_warning_on_a_superseded_node(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [finding]\nstatuses: [alive, superseded]\nrules: []\n")
+    graph.node("finding-old", "id: finding-old\ntype: finding\nstatus: superseded", "# old\n")
+    graph.node("finding-new", "id: finding-new\ntype: finding\nstatus: alive\nlinks:\n"
+                              "  - {rel: npx:supersedes, to: finding-old}", "# new\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["show", "finding-old"]) == 0
+    out = capsys.readouterr().out
+    assert "! This claim was superseded by finding-new. Read that node before relying on this one." in out
