@@ -334,11 +334,15 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
             # A target is spent, not disqualified, once Task 4's `knoten update
             # --status superseded` runs: it stays clear of the bar as long as THIS
             # node is the (sole) one that retired it. A target already claimed by
-            # some other node's `npx:supersedes` is refused by naming that node.
+            # some other node's `npx:supersedes` is refused by naming that node --
+            # unless this node has itself stopped being alive, in which case it is a
+            # record of a compression rather than a claim on anything, and the node
+            # rescuing its orphaned targets must not be refused on its behalf.
             other = next(iter(sorted(_alive_backers(nodes, t) - {n.id})), None)
-            if t.status == "alive" or (t.status == "superseded" and other is None):
+            if t.status == "alive" or (t.status == "superseded"
+                                       and (other is None or n.status != "alive")):
                 pass
-            elif t.status == "superseded" and other:
+            elif t.status == "superseded":
                 vio(f"{n.id} supersedes {tid}, which {other} already superseded")
             else:
                 vio(f"{n.id} supersedes {tid}, which is {t.status}, not alive")
