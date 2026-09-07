@@ -40,9 +40,8 @@ def _emit(payload: dict, as_json: bool, render) -> None:
 
 
 def _fail(payload: dict, reason, as_json: bool) -> int:
-    """Every failure on this surface, one contract. --json keeps the structured payload on
-    stdout even on failure, so a machine reader never has to check a second stream for the
-    error; prose puts it on stderr, where every other command's GraphError goes."""
+    """Every failure on this surface, one contract. --json keeps the payload on stdout
+    even on failure, so a machine reader never checks a second stream for the error."""
     if as_json:
         print(json.dumps(payload, indent=2, default=str))
     else:
@@ -82,9 +81,8 @@ def render_query(payload: dict) -> None:
     if payload["related"]:
         print("  also: " + ", ".join(payload["related"]))
     if note := payload.get("note"):
-        # The guard against the one failure knoten exists to prevent (a false
-        # "untested") lives in `note`. Dropping it in prose left an agent reading the
-        # surface SKILL.md tells it to prefer with no caveat at all.
+        # `note` carries the caveat against a false "untested", the one failure knoten
+        # exists to prevent. Prose must print it too.
         print(f"\n  {note}")
 
 
@@ -95,10 +93,9 @@ def query(root, term, as_json=False) -> int:
 
 
 def _pairs(pairs, msg):
-    """Yield (key, raw value) for each `KEY=VALUE` string in `pairs` — only the key is
-    stripped here, since `_kv` deliberately leaves its value alone while `_where` and
-    `_links` strip theirs. `msg` is the caller's own error text, with `{}` for the
-    offending item."""
+    """(key, raw value) for each `KEY=VALUE` in `pairs`. Only the key is stripped: `_kv`
+    leaves its value alone where `_where` and `_links` strip theirs. `msg` is the caller's
+    error text, with `{}` for the offending item."""
     for p in pairs or []:
         if "=" not in p:
             raise GraphError(msg.format(p))
@@ -138,9 +135,8 @@ def render_index(payload: dict) -> None:
 
 def index(root, tags, status, ntype, where, since, limit, query=None, as_json=False,
          all=False) -> int:
-    """The whole graph, one line per node. The answer to "have we done anything LIKE
-    this?" that keyword search cannot give: a reader — human or agent — judges
-    relatedness from the claims themselves."""
+    """The whole graph, one line per node: the answer to "have we done anything LIKE
+    this?" that keyword search cannot give."""
     payload = ops.index(root, query=query, tags=tags, status=status, type=ntype,
                         where=_where(where), since=since, limit=limit, all=all)
     _emit(payload, as_json, render_index)
@@ -229,13 +225,9 @@ def path(root, a, b, as_json=False) -> int:
 
 
 def viz_cmd(root, out, show, watch) -> int:
-    """One HTML file. Read-only, self-contained, no server.
-
-    `--watch` rewrites it whenever the graph changes and tells the open page to reload,
-    so you can leave it up beside an agent loop. Still no server: the page reloads
-    itself from disk, and it remembers which view you were in, what you had selected and
-    where you had panned to.
-    """
+    """One HTML file. Read-only, self-contained, no server. `--watch` rewrites it when
+    the graph changes and the page reloads itself from disk, remembering which view you
+    were in, what you had selected and where you had panned to."""
     reload_ms = int(watch * 1000) if watch else 0
     dest = viz.write(root, Path(out), reload_ms)
     print(f"wrote {dest}  ({dest.stat().st_size // 1024} KB)")
@@ -244,8 +236,7 @@ def viz_cmd(root, out, show, watch) -> int:
     if not watch:
         return 0
 
-    # Flushed: a watch loop whose output only appears when it exits is a watch loop
-    # you cannot tell is running.
+    # Flushed: output that only appears on exit cannot show the loop is running.
     print(f"watching {root}/ — the page reloads itself every {watch:g}s. ctrl-c to stop.",
           flush=True)
     seen = viz.fingerprint(root)
@@ -259,8 +250,7 @@ def viz_cmd(root, out, show, watch) -> int:
                 viz.write(root, Path(out), reload_ms)
                 print(f"  {today()}  redrew {len(load(root))} nodes", flush=True)
             except GraphError as e:
-                # A half-written node is normal while an agent is mid-commit: say so and
-                # keep the last good page up rather than tearing the window down.
+                # A half-written node is normal mid-commit: keep the last good page up.
                 print(f"  skipped: {e}", flush=True)
     except KeyboardInterrupt:
         print("\nstopped.")
@@ -278,7 +268,7 @@ def hook(root, force) -> int:
 
 def server_hook(repo, force) -> int:
     """The gate for a graph several people push to. Run it ON the server, in the repo
-    they push to — there is no graph there to `find_root`, which is why it bypasses it."""
+    they push to: there is no graph there to `find_root`."""
     h = install_server(Path(repo), force=force)
     print(f"  ✓ installed {h}")
     print("    `git push` now runs `knoten validate` on the pushed tree and refuses a")
@@ -320,8 +310,8 @@ def render_invites(payload: dict) -> None:
 
 
 def invites_cmd(root, as_json=False) -> int:
-    """Who was invited and has not arrived. Without this an admin cannot tell a forgotten
-    invite from a revoked one, and an invite is a bearer secret sitting on the server."""
+    """Who was invited and has not arrived. An invite is a bearer secret sitting on the
+    server, and without this an admin cannot tell a forgotten one from a revoked one."""
     _emit({"invites": remote.invites(root)}, as_json, render_invites)
     return 0
 
@@ -334,7 +324,7 @@ def revoke_cmd(root, name) -> int:
 
 def serve_cmd(data, bind) -> int:
     """Run on the server. Prints the owner secret the first time a data directory is
-    used, because that is the one moment the owner is certainly at the keyboard."""
+    used: that is the one moment the owner is certainly at the keyboard."""
     host, _, port_str = bind.rpartition(":")
     host = host or "127.0.0.1"
     # Parse and validate the port before any file is written; a crash after the owner
@@ -410,12 +400,11 @@ def _read(arg: str) -> str:
 
 
 def _kv(pairs) -> dict:
-    """`--result acc=0.7`, repeatable. Typed rather than left as strings, because
-    `require_result_min` compares numerically."""
+    """`--result acc=0.7`, repeatable. Typed, not left as strings, because
+    `require_result_min` compares numerically. Values are NOT stripped, alone among the
+    four parsers: `--result "note= fine "` writes ' fine ' as-is."""
     out = {}
     for k, v in _pairs(pairs, "--result takes key=value, got '{}'"):
-        # Deliberately NOT stripped — alone among the four parsers. `--result "note= fine "`
-        # writes ' fine ' to disk as-is. That asymmetry is existing behaviour, kept.
         try:
             v = float(v)
         except ValueError:
@@ -425,14 +414,9 @@ def _kv(pairs) -> dict:
 
 
 def _fields(pairs) -> dict:
-    """`--field cause=weak_baseline`, repeatable. Left as STRINGS, unlike `_kv`.
-
-    `_kv` coerces because `require_result_min` compares numerically. `require_field_one_of`
-    and `--where` both compare with `str()`, so coercing `--field seed=2` to 2.0 made it
-    match nothing the graph declared — and the refusal quoted `seed=2.0`, a value the user
-    never typed. Stripped, because this is the write side of `--where`, which strips: the
-    two must round-trip.
-    """
+    """`--field cause=weak_baseline`, repeatable. Left as STRINGS unlike `_kv`, because
+    `require_field_one_of` and `--where` both compare with `str()` and `seed=2.0` matches
+    nothing the graph declared. Stripped, so it round-trips with `--where`."""
     return {k: v.strip() for k, v in _pairs(pairs, "--field takes key=value, got '{}'")}
 
 
@@ -486,8 +470,6 @@ def render_update(payload: dict) -> None:
 
 
 def update_cmd(root, nid, status, append, results, links, fields, as_json) -> int:
-    # ops.update() is the ONE shape for both outcomes — this used to build its own
-    # dict here, and a different one on a second surface since removed, and they drifted.
     payload = ops.update(root, nid, status=status, append=_read(append) if append else None,
                          results=_kv(results), links=_links(links), fields=_fields(fields))
     if payload["status"] == "REJECTED":
@@ -513,190 +495,21 @@ def detach(root, nid, name) -> int:
     return 0
 
 
-TEMPLATE_GRAPH = """\
-# {name} — a knoten research graph.
-#
-# The core knows NOTHING about this domain. Every rule below is declared HERE, as
-# data. Write a rule only when you have a corpse: a rule without a body behind it is
-# just friction.
-name: {name}
-description: TODO — what question is this graph about?
 
-# Enforced. A node whose type or status is not declared here is a typo — and a claim with
-# a typo'd status silently drops out of every query. Edit these for YOUR topic.
-#
-# The meanings are not decoration: knoten defines none of these words, so this is the only
-# place they ARE defined, and `knoten viz` shows them beside each column.
-node_types:
-  question:   what this graph exists to answer — a question, a statement or a task
-  source:     where the work came from — a paper, dataset, search, or your own intuition
-  idea:       what you took from a source; a direction, not yet a testable claim
-  hypothesis: a falsifiable claim derived from an idea
-  experiment: the test built to verify or falsify a hypothesis
-  finding:    what the experiment showed, expected or not — new ideas come from these
-  retraction: a claim withdrawn after the fact
-  gate:       a standing rule every claim must survive; a bar, not a stage
-statuses:   [open, alive, dead, retracted, superseded, active]
 
-# The axis `knoten index --tag` filters on. Declare them and a typo is a violation;
-# declare none and tagging is free. Add tags as the topic tells you what they are.
-# tags: [decoding, evaluation]
-
-# Reused standards: mp:supports / mp:challenges (Micropublications),
-#   npx:retracts / npx:supersedes (Nanopublications),
-#   prov:wasDerivedFrom / prov:used (PROV-O)
-# knoten adds:  kn:survivedGate  (claim -> the gate it PASSED)
-#               kn:killedByGate  (claim -> the gate that KILLED it)
-#               kn:blockedBy     (claim -> a structural wall, not a result)
-
-rules:
-  # --- the two that make a graph worth keeping -----------------------------------
-  # Gates are advisory by default here: `knoten frontier` lists an unchecked alive claim,
-  # it does not refuse it. Uncomment this rule to make citing a gate mandatory instead.
-  # - id: live-claims-must-cite-their-gates
-  #   when_status: alive
-  #   when_type: hypothesis, finding
-  #   require_edge: kn:survivedGate
-  #   message: An unchallenged claim is not a finding, it is a hope.
-
-  - id: dead-claims-must-say-why
-    when_status: dead, retracted
-    require_sections: Why it died, What would reopen this
-    message: The post-mortem IS the asset. A dead end must become a standing offer.
-
-  # --- the loop: every step records where it came from ---------------------------
-  # Delete any of these that your topic does not want. They are this graph's opinion,
-  # not knoten's: the core checks only what is declared here.
-  - id: sources-must-be-findable-again
-    when_type: source
-    require_field: origin
-    message: >
-      A source you cannot go back to is a rumour. Record a url, a doi, a file path
-      or "own intuition" if the work started in your head.
-
-  - id: ideas-must-cite-what-prompted-them
-    when_type: idea
-    require_edge_target: {{rel: prov:wasDerivedFrom, type: question, min: 1}}
-    message: Cite the question this idea serves.
-
-  - id: hypotheses-must-say-what-they-do-not-test
-    when_type: hypothesis
-    require_sections: The claim, What this does not test
-    message: >
-      A hypothesis is a pull request: one change, one thing tested. If you cannot say
-      what this does NOT test, it is testing more than one thing. Open a second
-      hypothesis instead of widening this one.
-
-  - id: hypotheses-are-claims-not-runs
-    when_type: hypothesis
-    forbid_fields: results, repro
-    message: >
-      A hypothesis is a claim. The run that tested it is an experiment and the number it
-      produced is a finding — put `results` and `repro` on those. One node holding all
-      three is how a loop stops having stages.
-
-  - id: alive-hypotheses-must-have-been-tested
-    when_type: hypothesis
-    when_status: alive
-    require_backlink: {{rel: kn:testedBy, type: experiment, min: 1}}
-    message: >
-      A hypothesis is alive because something tested it. Record the run as an experiment
-      that `kn:tests` this node.
-
-  - id: experiments-must-be-rerunnable
-    when_type: experiment
-    require_sections: Setup, How to reproduce, Result
-    message: An experiment I cannot rerun is an anecdote.
-
-  # --- the round -------------------------------------------------------------------
-  # Each step names the one before it, so a claim can always be walked back to what was
-  # read. When `knoten frontier` reports a COMPRESSIBLE cluster, write the rule.
-  - id: ideas-come-from-sources
-    when_type: idea
-    require_edge_target: {{rel: prov:wasDerivedFrom, type: source, finding, min: 1}}
-    message: >
-      An idea comes from somewhere: a source you read, or a finding that changed the
-      picture. If it came out of your own head, cite `source-own-intuition` (`knoten idea`
-      does that for you). An idea citing nothing cannot be traced back to what prompted it.
-
-  - id: hypotheses-come-from-ideas
-    when_type: hypothesis
-    require_edge_target: {{rel: prov:wasDerivedFrom, type: idea, min: 1}}
-    message: >
-      Every hypothesis descends from an idea. One idea can produce several hypotheses,
-      that is the point of splitting them, but a claim with no idea behind it cannot be
-      traced back to what prompted it. If it came out of a finding, write the idea that
-      finding gave you and derive the hypothesis from that.
-
-  - id: experiments-test-a-hypothesis
-    when_type: experiment
-    require_edge_target: {{rel: kn:tests, type: hypothesis, min: 1}}
-    message: >
-      An experiment tests a claim. One that names none is a measurement nobody can
-      interpret six months later: was it exploratory, or did it settle something? If the
-      run explored rather than tested, write the hypothesis it was exploring, however
-      obvious it looks now.
-
-  - id: experiments-must-record-what-they-measured
-    when_type: experiment
-    require_field: results
-    message: >
-      The run that produced the number is the node that should carry it. A `## Result`
-      section is prose nothing can filter on; put the figures in `results:` as well.
-
-  - id: findings-come-from-experiments
-    when_type: finding
-    unless_edge: npx:supersedes
-    require_edge_target: {{rel: prov:wasDerivedFrom, type: experiment, min: 1}}
-    message: >
-      A finding that no experiment produced is an opinion. Cite the experiment; a general
-      finding that supersedes others cites those instead.
-
-  - id: findings-cite-the-run-rather-than-repeat-it
-    when_type: finding
-    forbid_fields: repro
-    message: >
-      How to rerun it belongs on the experiment. A finding that carries its own `repro`
-      is a second copy that will drift from the first.
-
-"""
-
-TEMPLATE_QUESTION = """\
----
-id: question-{name}
-type: question
-status: open
----
-# TODO — the question, statement or task this graph exists to answer
-
-## Why it matters
-<what changes once this is answered — and for whom>
-
-## What would count as an answer
-<the shape of a result that would settle it, so you can tell when to stop>
-
-Replace this with the real question. Everything else in this graph descends from it.
-"""
-
-TEMPLATE_GATE = """\
----
-id: gate-example
-type: gate
-status: active
----
-# Gate: <the test every claim in this graph must survive>
-
-## The rule
-<what to run>
-
-## Why it exists
-<what went wrong that made this necessary>
-
-Replace this with a real gate. Delete it if you have none yet — but you will.
-"""
 
 
 OWN_INTUITION = "source-own-intuition"
+
+# The starter graph, as the three files it becomes. Data, not string literals: a rule set
+# is easier to read and to edit as YAML than as an escaped Python triple-quote.
+TEMPLATE = Path(__file__).parent / "template"
+
+
+def _template(file: str, name: str = "") -> str:
+    """A starter file with `{name}` filled in. `str.replace`, not `str.format`: the rule
+    set is full of `{rel: ..., to: ...}` flow mappings, which format() reads as fields."""
+    return (TEMPLATE / file).read_text(encoding="utf-8").replace("{name}", name)
 
 
 def _slug(text: str) -> str:
@@ -715,12 +528,9 @@ def _slug(text: str) -> str:
 def idea(root, text, source) -> int:
     """Drop your own idea into the graph in one line, for the agent to pick up.
 
-    An idea has to cite what prompted it, so this wires the edges for you: the graph's
-    single question (what it serves) and, unless `--from` names a source or a finding,
-    `source-own-intuition`, the source SKILL.md says a human's own head is recorded as.
-    Made once, on first use. The node lands `status: open`, which is what puts it at the
-    top of `knoten frontier`, where an agent that runs the loop sees it before choosing.
-    """
+    An idea has to cite what prompted it, so this wires the edges: the graph's single
+    question and, unless `--from` names a source or finding, `source-own-intuition`, made
+    once on first use. The node lands `open`, which puts it at the top of `frontier`."""
     nodes = load(root)
     if source is not None and source not in nodes:
         raise GraphError(f"no node '{source}' to derive this from")
@@ -762,19 +572,16 @@ def idea(root, text, source) -> int:
 
 def new(root, ntype, nid, status) -> int:
     """Scaffold a node carrying every section and field THIS graph's rules demand.
-
-    Nothing here is knoten's opinion — it reads the graph's own declarations. The values
-    are TODO on purpose: `knoten validate` then names the ones you still owe it, so `new`
-    + `validate` is a checklist rather than a guessing game.
-    """
+    Nothing here is knoten's opinion. The values are TODO on purpose: `validate` then
+    names the ones you still owe, so `new` + `validate` is a checklist."""
     nf = node_path(root, nid)
     if nf.exists():
         raise GraphError(f"'{nid}' already exists. Supersede or retract it — corrections "
                          f"are nodes, not edits.")
 
     cfg = load_config(root)
-    # `new` used to skip this while knoten commit enforced it: the same node was accepted
-    # by one entry point and rejected by the other.
+    # `commit` enforces this; without it the same node is accepted by one entry point
+    # and rejected by the other.
     for field, declared in [("type", cfg.get("node_types")), ("status", cfg.get("statuses"))]:
         value = ntype if field == "type" else status
         if declared and value not in declared:
@@ -792,12 +599,11 @@ def new(root, ntype, nid, status) -> int:
         blanks += [k for k in [r.get("require_field")] if k]
 
     fm = [f"id: {nid}", f"type: {ntype}", f"status: {status}", f"created: {today()}"]
-    # The allowed values go in the scaffold as a comment: a closed vocabulary the author
-    # has to go and look up is a closed vocabulary they will guess at.
+    # The allowed values go in as a comment: a closed vocabulary the author has to look up
+    # is one they will guess at.
     fm += [f"{k}: TODO   # one of: {', '.join(map(str, v))}" for k, v in fields.items()]
-    # Left EMPTY, not TODO. `require_field` takes any non-empty value, so a placeholder
-    # would satisfy it and `new` + `validate` would stop being a checklist. Blank is both
-    # the prompt and the violation.
+    # Left EMPTY, not TODO: `require_field` takes any non-empty value, so a placeholder
+    # would satisfy it and stop `new` + `validate` being a checklist.
     fm += [f"{k}:" for k in dict.fromkeys(blanks) if k not in fields]
     if results:
         fm.append("results:")
@@ -821,12 +627,13 @@ def init(name) -> int:
     if root.exists():
         raise GraphError(f"{root} already exists")
     (root / "nodes").mkdir(parents=True)
-    (root / "graph.yaml").write_text(TEMPLATE_GRAPH.format(name=name), encoding="utf-8")
+    (root / "graph.yaml").write_text(_template("graph.yaml", name),
+                                     encoding="utf-8")
     # knoten's own write lock. Nobody should have to see it in `git status`.
     (root / ".gitignore").write_text(f"{LOCK}\n", encoding="utf-8")
     (root / "nodes" / f"question-{name}.md").write_text(
-        TEMPLATE_QUESTION.format(name=name), encoding="utf-8")
-    (root / "nodes" / "gate-example.md").write_text(TEMPLATE_GATE, encoding="utf-8")
+        _template("question.md", name), encoding="utf-8")
+    (root / "nodes" / "gate-example.md").write_text(_template("gate.md"), encoding="utf-8")
     print(f"created graph '{name}'\n")
     print(f"  {name}/nodes/question-{name}.md  <- start here: what this graph answers")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
@@ -1064,8 +871,7 @@ def main(argv=None) -> int:
             "revoke": lambda: revoke_cmd(root, args.name),
         }[args.cmd]()
     except (GraphError, OSError) as e:
-        # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error,
-        # not a traceback. Every entry point owes the user one line, not a stack.
+        # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error.
         return _fail({"error": str(e)}, e, getattr(args, "json", False))
 
 

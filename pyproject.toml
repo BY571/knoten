@@ -37,6 +37,6 @@ where = ["src"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-# `viz.py` reads this at runtime. `packages.find` collects *.py only, so without this the
-# wheel ships a `knoten viz` that cannot find its own template.
-knoten = ["viz.html"]
+# Read at runtime by `knoten viz`, `knoten init` and the skill. `packages.find` collects
+# *.py only, so without this the wheel ships commands that cannot find their own data.
+knoten = ["viz.html", "template/*", "prompts/*"]
