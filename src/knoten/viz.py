@@ -186,7 +186,8 @@ SECTION_LIMIT = 4000
 # matched against the aliases an author might use and rendered in this fixed order. A node
 # whose headings match no label renders under its own headings, so nothing is lost.
 PANEL_SECTIONS = [
-    {"label": "Claim", "aliases": ["The claim", "The idea", "The direction"]},
+    {"label": "Origin", "aliases": ["Where it came from", "What it says"]},
+    {"label": "Claim", "aliases": ["The claim", "The idea", "The direction", "What it shows"]},
     {"label": "Scope", "aliases": [
         "What this does not test", "What it excludes", "What is out of scope",
         "Out of scope", "What it is not"]},
@@ -197,14 +198,15 @@ PANEL_SECTIONS = [
         "Why it might be false", "Why it fails", "Why it won't work", "Risks", "Doubts",
         "Why it might not hold"]},
     {"label": "Method", "aliases": [
-        "The setup", "Test", "Method", "The test", "How I tested it", "Design",
-        "How it was tested"]},
+        "The setup", "Setup", "How to reproduce", "Test", "Method", "The test",
+        "How I tested it", "Design", "How it was tested"]},
     {"label": "Result", "aliases": [
         "Result", "The outcome", "Conclusion", "What I found", "The result"]},
     {"label": "Evidence", "aliases": [
         "Evidence", "The number", "Numbers", "The figures"]},
     {"label": "Kill criterion", "aliases": [
-        "Kill criterion", "Kill condition", "When this is wrong", "Kill threshold"]},
+        "Kill criterion", "Kill condition", "When this is wrong", "Kill threshold",
+        "What would make it false"]},
 ]
 
 

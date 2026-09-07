@@ -1,31 +1,33 @@
-# knoten stage - idea
+# knoten stage: idea
 
-You are turning a source into a direction, still before any claim. An idea is a thing you
-might test, not something you have argued is true. It carries its source like a label, so
-the graph can always walk backwards from "what could we try" to "why we tried it".
+An idea is a direction you might test, derived from something you read (a `source`) or
+something you found (a `finding`). It is not yet a claim. Status `open`.
 
-Cite the `source` you derived from via prov:wasDerivedFrom. Without that link the idea has
-no parent, and a hypothesis following it cannot name where it came from.
+Frontmatter it needs (the graph refuses it otherwise):
 
-Scaffold:
+```yaml
+type: idea
+status: open
+links:
+  - {rel: prov:wasDerivedFrom, to: <the question this serves>}
+  - {rel: prov:wasDerivedFrom, to: <the source or finding it came from>}
+```
+
+Body, in this order:
 
 # <the direction, one sentence>
 
 ## Where it came from
-The `source` node this names. No source, no idea.
+The source or finding, and the one thing in it that suggested this.
 
 ## Why it might hold
-The mechanism, if you have one, or the honest "I think so because". An unstated reason
-that later turns out to be wrong is worse than none.
+The mechanism, or an honest "because I think so".
 
 ## Why it might not hold
-The strongest case against it, written now, before the experiment has incentive to disagree.
+The strongest case against it, written before any experiment has a stake.
 
 ## What would make it false
-The observation that would kill the idea. A direction with no kill is a preference, not a
-claim waiting to be one.
+The observation that would end this direction. Without one it is a preference.
 
-Rules that matter here:
-
-- An idea cites a source, not a hypothesis. If you cannot point at what you read, you are
-  filing a wish, and it will read like one.
+If you have no idea to file, do not invent one: go back to sources. Read
+`prompt-source.md`, which says where to look and how to file what you read.

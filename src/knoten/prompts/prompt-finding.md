@@ -1,33 +1,37 @@
-# knoten stage - finding
+# knoten stage: finding
 
-You are recording what came out. File it even when it failed: a dead hypothesis with a
-stated cause is the most valuable node in the graph, and the one that would otherwise be
-lost. New ideas come from findings, so write enough that the next idea has something to
-react to.
+A finding says what an `experiment`'s numbers mean for the claim it tested, and whether
+the claim is `alive` or `dead`. File it when it failed too: a dead end with a stated cause
+is the node that saves the next person a week. New ideas come from findings.
 
-Cite the `experiment` via kn:testedBy, and the `hypothesis` that experiment tested, so the
-finding is the reason the whole chain exists and can be walked.
+Frontmatter it needs:
 
-Scaffold:
+```yaml
+type: finding
+status: alive            # or dead
+links:
+  - {rel: prov:wasDerivedFrom, to: <the experiment>}
+  - {rel: kn:survivedGate, to: <the gate it passed>}      # or kn:killedByGate
+cause: <one of the graph's causes>     # dead findings only, if the graph declares them
+```
 
-# <what the experiment showed, one sentence>
+No `repro:` here (it lives on the experiment; a copy would drift).
 
-## The result
-The number, first. "No edge" is only a finding if it names the measure and the threshold.
+Body, in this order:
+
+# <what it shows, one sentence>
+
+## What it shows
+The verdict in words, with the number that decides it.
 
 ## Evidence
-The figure, the test it came from, and whether the gate held. Cite the experiment.
+Which experiment, which figure, how it compares to the baseline and to the kill criterion.
 
-## Why it died / why it held
-If it died, the cause in one or two sentences. State it as a relationship between measured
-quantities, not a story glued to a number, if that is what actually happened.
+## Why it died
+Only when dead: the cause, as a relationship between measured things.
 
 ## What would reopen this
-The condition under which this verdict would reverse. A finding with no reopen is a
-verdict that can never be revisited, even when a new source changes everything.
+Only when dead: the condition under which this verdict would reverse. Required.
 
-Rules that matter here:
-
-- A live claim (alive) must cite a gate it survived. Without it the finding is a hope.
-- To change what a dead node said, add a NEW node that supersedes or retracts it. Never
-  edit the old one.
+A general finding that supersedes several findings (`npx:supersedes` to each) names each
+of them in a `## Covers` section instead of citing an experiment.

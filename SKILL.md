@@ -182,26 +182,24 @@ close it with a reason rather than leaving it open forever.
 
 ## When you run out of ideas
 
-`knoten frontier` is also how you learn the well is dry: nothing `open` you can act on,
-no reopen condition that now holds, no untested gate left. That is not a signal to invent
-a hypothesis out of your own context and file it; it is a signal to go and read. Do a
-compression pass first, since a general node often opens ideas the specifics hid. Then
-start a new source round, and put what you find in the graph before you reason from it:
+`knoten frontier` tells you the well is dry: nothing `open` you can act on, no reopen
+condition that now holds, no untested gate. Do not invent a hypothesis from your own
+context. Compress first (a general node often opens ideas the specifics hid), then go
+and read, in this order, filing each thing you actually read as a `source` node with its
+`origin`:
 
-- search the web, arXiv, the venue's or vendor's own docs, blog posts, forum and Reddit
-  threads, and the issue trackers of anything you depend on
-- file each thing you actually read as a `source` node, with `origin` set to the url, doi
-  or path so somebody can go back to it
-- derive `idea` nodes from those sources, then hypotheses from the ideas
+- papers (arXiv, Semantic Scholar, the venue of the last good one you cited)
+- the docs and changelogs of what you depend on
+- blog posts and write-ups from people who ship this
+- books and surveys for the settled parts
+- forums and issue trackers for what breaks in practice
+- a general web search last
 
-Two things to check on the way back through, since a source round is exactly what
-changes them: the reopen conditions on dead nodes, because a dead end whose stated
-condition the new reading satisfies is a cheaper experiment than a new idea; and the
-untested gates, because a gate nothing has been through is a check nobody is running.
-
-If the work really did start in your own head, that is allowed: cite
-`source-own-intuition` like any paper. What is not allowed is an idea that came from
-nowhere, because six months from now nobody can tell evidence from a mood.
+Then derive `idea` nodes from those sources, and hypotheses from the ideas. On the way
+back through, check two things a source round changes: dead nodes whose reopen
+condition the new reading now satisfies (a cheaper experiment than a new idea), and gates
+nothing has been through. Work from your own head is allowed if you cite
+`source-own-intuition`; an idea from nowhere is not.
 
 ## Writing details
 
