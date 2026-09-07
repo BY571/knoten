@@ -38,6 +38,12 @@ def g(graph):
     graph.node("gate-idle", "id: gate-idle\ntype: gate\nstatus: active", "# Gate B\n")
     graph.node("hyp-killed", "id: hyp-killed\ntype: hypothesis\nstatus: dead\nlinks:\n"
                              "  - {rel: kn:killedByGate, to: gate-used}", "# Killed\n")
+    graph.node("hyp-unchecked-b", "id: hyp-unchecked-b\ntype: hypothesis\nstatus: alive",
+              "# Nobody has checked this\n")
+    graph.node("finding-unchecked-a", "id: finding-unchecked-a\ntype: finding\nstatus: alive",
+              "# Nor this\n")
+    graph.node("finding-checked", "id: finding-checked\ntype: finding\nstatus: alive\nlinks:\n"
+                                  "  - {rel: kn:survivedGate, to: gate-used}", "# Checked\n")
     return graph
 
 
@@ -68,19 +74,38 @@ def test_a_gate_that_killed_something_is_not_untested(g):
     assert "gate-used" not in [n.id for n in frontier(load(g.root))["untested_gates"]]
 
 
+def test_alive_claims_with_no_gate_are_unchecked_in_id_order(g):
+    """Gates are advisory by default (`live-claims-must-cite-their-gates` ships
+    commented out), so an alive hypothesis or finding citing no gate is not refused --
+    it shows up here instead, so it does not pass for settled."""
+    assert [n.id for n in frontier(load(g.root))["unchecked"]] == \
+        ["finding-unchecked-a", "hyp-unchecked-b"]
+
+
+def test_an_alive_claim_that_survived_a_gate_is_not_unchecked(g):
+    assert "finding-checked" not in [n.id for n in frontier(load(g.root))["unchecked"]]
+
+
+def test_a_dead_claim_killed_by_a_gate_is_not_unchecked(g):
+    """`hyp-killed` cites `kn:killedByGate`, but it is dead, not alive -- the unchecked
+    band is for claims nobody has ruled on, not ones that already lost."""
+    assert "hyp-killed" not in [n.id for n in frontier(load(g.root))["unchecked"]]
+
+
 # ------------------------------------------------------------------ surfaces
 
 
 
-def test_the_agent_surface_returns_all_three_buckets(g):
+def test_the_agent_surface_returns_all_buckets(g):
     res = ops.frontier(g.root)
 
     assert [r["id"] for r in res["open"]] == ["hyp-open"]
+    assert [r["id"] for r in res["unchecked"]] == ["finding-unchecked-a", "hyp-unchecked-b"]
     assert res["reopenable"][0]["reopen_if"].startswith("A task where")
     assert [r["id"] for r in res["untested_gates"]] == ["gate-idle"]
 
 
-def test_the_cli_prints_all_three_buckets(g, monkeypatch, capsys):
+def test_the_cli_prints_all_buckets(g, monkeypatch, capsys):
     from knoten.cli import main
     monkeypatch.chdir(g.root)
 
@@ -88,6 +113,7 @@ def test_the_cli_prints_all_three_buckets(g, monkeypatch, capsys):
     out = capsys.readouterr().out
 
     assert "hyp-open" in out
+    assert "UNCHECKED" in out and "hyp-unchecked-b" in out
     assert "hyp-dead" in out and "A task where" in out
     assert "gate-idle" in out
 

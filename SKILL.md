@@ -20,13 +20,16 @@ next, or write any code, run steps 1-4 below. They take seconds and they answer 
 things your own context cannot: what is already dead, what is already open, and what a
 result has to survive here.
 
-Skipping them has a price you pay in compute. A claim cannot be filed `alive` without
-citing a gate it survived, so an experiment designed without reading `knoten gates`
-produces a result you cannot file. You run it again, against the gate, having already
-spent the budget once.
+Skipping them has a price you pay in compute. Gates are the checks this graph declares,
+so read `knoten gates` before designing the experiment: one designed blind can produce a
+result that fails a check you never saw, and you run it again having already spent the
+budget once. File `kn:survivedGate` or `kn:killedByGate` on the claim once you have
+checked it against one.
 
 If you realise you have already done the work without doing this: run 1-4 now, before
-writing anything. The question may already be settled, and the gates still apply.
+writing anything. The question may already be settled, and the gates still apply, even
+though citing none is not refused: `knoten frontier` lists an alive claim with no gate as
+unchecked, and a graph may turn that into a refusal by enabling the rule in `graph.yaml`.
 
 ## How the graph is shaped
 
@@ -104,7 +107,9 @@ See "In a shared graph" below for the rest of what a remote changes.
 3. `knoten show <id>` gives the full node: edges, results, and the path of the script that
    produced them, for anything that looks close.
 4. `knoten gates`: what a result must survive here. Read this BEFORE designing the
-   experiment; a claim cannot be filed as alive without citing a gate it survived.
+   experiment; file `kn:survivedGate` or `kn:killedByGate` once you have checked one. An
+   alive claim that cites no gate is listed by `knoten frontier` as unchecked, not
+   refused, unless this graph has enabled the rule that refuses it.
 ## When the work concludes
 
 5. `knoten commit <id> --frontmatter <file> --body <file>`: file the claim, INCLUDING

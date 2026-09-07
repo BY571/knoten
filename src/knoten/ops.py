@@ -60,6 +60,7 @@ def frontier(root: Path) -> dict:
         "shape": s,
         "compressible": f["compressible"],
         "open": [{"id": n.id, "title": n.title} for n in f["open"]],
+        "unchecked": [{"id": n.id, "title": n.title} for n in f["unchecked"]],
         "reopenable": [{"id": n.id, "title": n.title, "reopen_if": offer}
                        for n, offer in f["reopenable"]],
         "untested_gates": [{"id": n.id, "title": n.title} for n in f["untested_gates"]],

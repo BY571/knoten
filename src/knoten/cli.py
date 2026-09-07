@@ -196,6 +196,10 @@ def render_frontier(payload: dict) -> None:
         print("\n  OPEN — started, never settled")
         for n in payload["open"]:
             print(f"    {n['id']:24}  {n['title']}")
+    if payload["unchecked"]:
+        print("\n  UNCHECKED — alive, but no gate has ruled on them")
+        for n in payload["unchecked"]:
+            print(f"    {n['id']:24}  {n['title']}")
     if payload["reopenable"]:
         print("\n  REOPENABLE — died, but said what would bring them back")
         for n in payload["reopenable"]:
@@ -205,7 +209,8 @@ def render_frontier(payload: dict) -> None:
         print("\n  UNTESTED GATES — no claim has been through them")
         for n in payload["untested_gates"]:
             print(f"    {n['id']:24}  {n['title']}")
-    if not (payload["open"] or payload["reopenable"] or payload["untested_gates"]):
+    if not (payload["open"] or payload["unchecked"] or payload["reopenable"]
+            or payload["untested_gates"]):
         print("  nothing open, nothing reopenable, every gate has fired.")
     if note := payload.get("note"):
         print(f"\n  {note}")
@@ -565,11 +570,13 @@ statuses:   [open, alive, dead, retracted, superseded, active]
 
 rules:
   # --- the two that make a graph worth keeping -----------------------------------
-  - id: live-claims-must-cite-their-gates
-    when_status: alive
-    when_type: hypothesis, finding
-    require_edge: kn:survivedGate
-    message: An unchallenged claim is not a finding, it is a hope.
+  # Gates are advisory by default here: `knoten frontier` lists an unchecked alive claim,
+  # it does not refuse it. Uncomment this rule to make citing a gate mandatory instead.
+  # - id: live-claims-must-cite-their-gates
+  #   when_status: alive
+  #   when_type: hypothesis, finding
+  #   require_edge: kn:survivedGate
+  #   message: An unchallenged claim is not a finding, it is a hope.
 
   - id: dead-claims-must-say-why
     when_status: dead, retracted
