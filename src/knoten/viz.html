@@ -945,7 +945,14 @@ function chart(m){
   const short = id => { const n = byId[id]; const t = (n && n.type || "") + "-";
     return id.startsWith(t) ? id.slice(t.length) : id; };
   pts.forEach((p, i) => {
-    const [cx, cy] = at[p.id], dead = (byId[p.id] || {}).status === "dead";
+    // A run is "dead" on the chart when what it tested or what came out of it died:
+    // the experiment itself ran fine, the claim did not survive it.
+    const n = byId[p.id] || {links: [], backlinks: []};
+    const died = id => (byId[id] || {}).status === "dead";
+    const dead = n.status === "dead"
+      || n.links.some(l => l.rel === "kn:tests" && died(l.to))
+      || n.backlinks.some(b => b.rel === "prov:hadDerivation" && died(b.to));
+    const [cx, cy] = at[p.id];
     if (p.best) svg.append(mk("circle", {class:"ring", cx, cy, r:9}));
     const dot = mk("circle", {class:"pt" + (dead ? " dead" : ""), cx, cy, r:4.5});
     const delta = p.delta === null ? "baseline" : (p.delta > 0 ? "+" : "") + p.delta;
