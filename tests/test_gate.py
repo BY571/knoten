@@ -1030,3 +1030,51 @@ def test_a_constitution_in_an_option_shaped_directory_is_refused(signed):
     assert "would be parsed as a git option" in r.stderr
     assert "-x/contributors.yaml" not in git("ls-tree", "-r", "--name-only", "master",
                                              cwd=origin).stdout
+
+
+def _finding(nid, title):
+    return (f"---\nid: {nid}\ntype: finding\nstatus: alive\n"
+            "links:\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-h}\n"
+            f"---\n\n# {title}\n")
+
+
+def test_a_compression_by_a_writer_passes_the_gate(signed, keys_dir):
+    """A general node flips other people's nodes to superseded. That is a status change
+    to files the writer did not author, and the gate must read it as ordinary writing,
+    not as a constitution change.
+
+    The flip is produced by `knoten commit` itself, not hand-written here, so what the
+    gate sees is exactly what a contributor's clone would send."""
+    from knoten.commit import commit
+
+    origin, work, k = signed
+    maria = make_key(keys_dir, "maria")
+    add_person(work, "maria", maria, "write")
+    g = work / "g"
+    (g / "nodes" / "question-q.md").write_text(
+        "---\nid: question-q\ntype: question\nstatus: open\n---\n\n# q\n", encoding="utf-8")
+    (g / "nodes" / "gate-h.md").write_text(
+        "---\nid: gate-h\ntype: gate\nstatus: active\n---\n\n# h\n", encoding="utf-8")
+    (g / "nodes" / "finding-1.md").write_text(_finding("finding-1", "small"), encoding="utf-8")
+    (g / "nodes" / "finding-2.md").write_text(_finding("finding-2", "large"), encoding="utf-8")
+    commit_signed(work, "seb adds maria and two findings", k["seb"])
+    assert push(work).returncode == 0
+
+    res = commit(g, "finding-g", "id: finding-g\ntype: finding\nstatus: alive\n"
+                 "links:\n"
+                 "  - {rel: npx:supersedes, to: finding-1}\n"
+                 "  - {rel: npx:supersedes, to: finding-2}\n"
+                 "  - {rel: kn:survivedGate, to: gate-h}\n",
+                 "# the general claim\n\n## Covers\n- finding-1: the small half\n"
+                 "- finding-2: the large half\n")
+    assert res["status"] != "REJECTED", res
+    commit_signed(work, "maria compresses two findings into one", maria)
+
+    r = push(work)
+
+    assert r.returncode == 0, r.stderr
+    for nid in ("finding-1", "finding-2"):
+        blob = git("show", f"master:g/nodes/{nid}.md", cwd=origin).stdout
+        assert "status: superseded" in blob, blob

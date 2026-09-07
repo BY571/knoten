@@ -10,7 +10,9 @@ Every idea you test is a markdown file in git, marked **alive**, **dead** or
 **retracted**. A dead one carries the reason it died, the condition that would bring it
 back, and the script that killed it. Nothing is deleted and nothing is overwritten: a
 correction is a new node that supersedes the old one, so six months later the graph can
-tell you not just what you believe but what you already ruled out and why.
+tell you not just what you believe but what you already ruled out and why. A graph that
+only grows is a notebook; a general finding that supersedes several specific ones is how
+it gets wiser, and the graph rewards that.
 
 It exists because research loops forget, whether they are run by a human or an agent.
 They re-propose an idea that was settled last month under a different name, and they file
@@ -139,6 +141,77 @@ node_types:
   gate:       a standing rule every claim must survive; a bar, not a stage
 statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation]
+```
+
+## Compress
+
+Sooner or later several findings under one question are saying the same thing in
+different numbers. Write the statement that makes them unnecessary, and point it at each
+of them:
+
+````markdown
+---
+id: finding-sc-needs-scale
+type: finding
+status: alive
+tags: [decoding]
+created: 2026-09-06
+links:
+  - {rel: npx:supersedes, to: finding-sc-small-models}
+  - {rel: npx:supersedes, to: finding-sc-large-models}
+  - {rel: kn:survivedGate, to: gate-compute-matched-baseline}
+---
+
+# Self-consistency pays only above a size the budget can afford
+
+Compute-matched, sampling more chains buys nothing below ~7B and about two points above it.
+
+## Covers
+- finding-sc-small-models: the within-noise result; what it drops is the per-size table
+- finding-sc-large-models: the two-point gain; what it drops is the exact token count
+````
+
+The engine checks the claim before anything reaches disk. Every target has to be alive
+and of a type the graph lets you supersede, and it has to stand under the same question
+as the general node. The general node has to carry `kn:survivedGate` to every gate any
+target survived, so a general claim faces the union of the bars its specifics faced. And
+`## Covers` has to name each target by id, because a compression that cannot say what it
+drops is a summary. Then the targets flip to `superseded` in the same operation, keeping
+their numbers, and `knoten index` stops listing them:
+
+```
+  2 superseded hidden; --all shows them
+```
+
+`knoten frontier` opens with the shape of the graph, and with what compression is
+available:
+
+```
+  0 rules over 2 specifics · 10 of 12 slots free under question-what-improves-reasoning
+```
+
+Three or more alive findings under one question that share a gate or a tag are a
+`COMPRESSIBLE` cluster, printed above the open work: the graph pointing at the rule it is
+ready for. The slots are yours to declare:
+
+```yaml
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {type: finding, per: question, count: 12}
+    message: Twelve live findings under one question and no rule above them. Compress first.
+```
+
+Past the ceiling the next finding is refused, and the newest ones under that question are
+the ones blamed. That refusal is not an error; it is the graph saying it has learned
+enough specifics to deserve a rule. Compressing hands the budget back, and the commit
+says what you freed:
+
+```
+  + nodes/finding-sc-needs-scale.md  (8 nodes)
+    compressed 2 findings into 1 under question-what-improves-reasoning
+    survived the 1 gate they faced
+    11 of 12 slots free under this question again
+    this graph now stands on 1 rule and 0 specifics
 ```
 
 ## A shared graph

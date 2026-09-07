@@ -95,6 +95,9 @@ open ──► alive ──────► superseded
    └───► retracted     (WE WERE WRONG: the most valuable node type)
 ```
 
+The engine applies the superseded arrow: a node that supersedes another flips it, and must
+first face every gate it survived.
+
 Every arrow is walkable via `knoten update`, which appends and moves the status but cannot
 rewrite a claim. Immutability protects **what was claimed**, never the status: the status
 *is* the lifecycle, and git holds the before and after (§7). Without it an agent could open
@@ -226,6 +229,8 @@ rules:
 | `id` | **required.** Names the rule in the violation. |
 | `message` | what the human reads when it fires. |
 | `when_status` / `when_type` | only apply to these statuses / types (comma-separated). |
+| `unless_edge` | `<rel>`: skip the rule for a node that declares that relation. |
+| `max_alive` | `{type, per, count}`: a graph-level ceiling, attributed to the newest nodes past it. |
 | `require_edge` | node must declare this relation. |
 | `require_sections` | body must contain these `## ` headings. |
 | `require_field` | frontmatter must carry this key, with any non-empty value. |
@@ -272,7 +277,9 @@ would silently vanish from every query.
 Always-on structural checks, which no graph declares: `dangling-edge`,
 `missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
 `unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`, `mismatched-id`,
-`malformed-results`, `malformed-repro`, and `not-a-gate` (a migration aid, deletable once
+`malformed-results`, `malformed-repro`, `supersession` (the bar of §3: alive targets of a
+compressible type, one shared question, the union of the gates they survived, and a
+`## Covers` section naming each), and `not-a-gate` (a migration aid, deletable once
 graphs written before the gate rename have moved).
 
 A biology graph declares entirely different rules. The core never changes.
