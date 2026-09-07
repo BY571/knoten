@@ -122,6 +122,11 @@ MAX_DAYS = 365
 # opaque OSError after the data directory had already been touched.
 MAX_NAME = 64
 
+# Undated work sorts LAST, with the newest. Empty-string-first put it in slot 0 of the viz
+# layout and pushed every node along, and it would make an undated node the baseline every
+# later result is measured against.
+UNDATED = "9999"
+
 
 @contextmanager
 def graph_lock(root: Path):
@@ -593,6 +598,104 @@ def compressible_types(cfg: dict) -> tuple[str, ...]:
     return tuple(str(t) for t in v)
 
 
+# What "better" means for a declared metric. A graph tracking loss, tokens or latency
+# wants the smallest number and one tracking accuracy the largest; knoten cannot guess
+# which, and a metric whose direction is assumed is a leaderboard pointing backwards.
+GOALS = ("max", "min")
+
+# How far a data point's lineage is walked. Six hops covers source -> idea -> hypothesis
+# -> experiment -> finding and one more; past that "builds on" stops being a fact about
+# this run and becomes the history of the whole question.
+METRIC_DEPTH = 6
+
+
+def metrics_declared(cfg: dict) -> dict:
+    """`graph.yaml: metrics:` read as name -> goal, goal defaulting to max. `load_config`
+    has already refused every other shape, so this reads and does not re-check."""
+    return {str(name): str((spec or {}).get("goal", "max"))
+            for name, spec in (cfg.get("metrics") or {}).items()}
+
+
+def _better(a, b, goal: str) -> bool:
+    """Is `a` strictly better than `b`? THE one comparison, so the delta, the best marker
+    and the summary row cannot each decide what an improvement is."""
+    return a < b if goal == "min" else a > b
+
+
+def _value(n: Node, name: str):
+    """The number this node records for `name`, or None. `bool` is an int in Python, and
+    `converged: true` is a flag, not a measurement: without this guard it plotted as 1."""
+    v = n.results.get(name)
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _builds_on(nodes: dict[str, Node], nid: str, earlier: set) -> list[str]:
+    """Which earlier data points this one stands on: the metric-bearing nodes a rooting
+    walk from `nid` reaches within METRIC_DEPTH hops, in id order.
+
+    Derived, never authored. The edges are already there -- `kn:followsFrom` among them,
+    since ROOTING_RELS names it -- and asking an agent to ALSO declare its lineage is
+    asking it to declare it wrong on the day the two disagree.
+    """
+    seen, layer, out = {nid}, [nid], set()
+    for _ in range(METRIC_DEPTH):
+        nxt = []
+        for cur in (nodes.get(x) for x in layer):
+            for l in (cur.links if cur else []):
+                if l["rel"] in ROOTING_RELS and l["to"] not in seen:
+                    seen.add(l["to"])
+                    nxt.append(l["to"])
+                    if l["to"] in earlier:
+                        out.add(l["to"])
+        layer = nxt
+    return sorted(out)
+
+
+def metric(nodes: dict[str, Node], name: str, goal: str = "max") -> list[dict]:
+    """Every node that recorded `name`, oldest first, each read against what came before.
+
+    `delta` is measured against the BEST earlier point, not the previous one: a run that
+    lands between two better ones has moved nothing, and calling the gap to its immediate
+    predecessor an improvement is how a metric flatters itself.
+    """
+    points = sorted(((n, v) for n in nodes.values() if (v := _value(n, name)) is not None),
+                    key=lambda p: (str(p[0].frontmatter.get("created") or UNDATED), p[0].id))
+    out: list[dict] = []
+    # `earlier` grows as the walk goes: a point can only ever build on one already
+    # emitted, which is what keeps the lineage a fact about the past.
+    best, earlier = None, set()
+    for n, v in points:
+        out.append({"id": n.id, "type": n.type,
+                    "created": str(n.frontmatter.get("created") or ""), "value": v,
+                    "delta": None if best is None else v - best,
+                    # Best SO FAR, ties included: two runs holding the same record both
+                    # hold it, and marking only one of them is a judgement about which.
+                    "best": best is None or not _better(best, v, goal),
+                    "builds_on": _builds_on(nodes, n.id, earlier)})
+        if best is None or _better(v, best, goal):
+            best = v
+        earlier.add(n.id)
+    return out
+
+
+def metrics_summary(nodes: dict[str, Node], cfg: dict) -> list[dict]:
+    """One row per declared metric: where the number stands and who put it there. The
+    strip `knoten frontier` prints and the page's own header both read this, so the two
+    surfaces cannot disagree about the best result in the graph."""
+    out = []
+    for name, goal in metrics_declared(cfg).items():
+        points, top = metric(nodes, name, goal), None
+        for p in points:
+            # The FIRST point at the best value, not the last: the run that set the
+            # record is the one worth naming, and a later tie moved nothing.
+            if top is None or _better(p["value"], top["value"], goal):
+                top = p
+        out.append({"name": name, "goal": goal, "count": len(points),
+                    "best": top["value"] if top else None,
+                    "best_id": top["id"] if top else None})
+    return out
+
+
 def _csv(v) -> list[str]:
     """A rule value that may be written as a YAML list or a comma-separated string, read
     the same way everywhere. A hand-rolled split at one call site is how they drift:
@@ -609,5 +712,9 @@ def shape(nodes: dict[str, Node], cfg: dict) -> dict:
     commit and head `frontier`."""
     alive = [n for n in nodes.values() if n.status == "alive"]
     still = standing(nodes, compressible_types(cfg))
+    # The metrics ride along because the frontier header and the page strip are drawn
+    # from `shape` and nothing else: a number shown in one and not the other is the
+    # second opinion this dict exists to prevent.
     return {"rules": len([n for n in alive if is_general(n)]),
-            "specifics": len([n for n in still if not is_general(n)])}
+            "specifics": len([n for n in still if not is_general(n)]),
+            "metrics": metrics_summary(nodes, cfg)}

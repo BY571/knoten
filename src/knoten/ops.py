@@ -9,7 +9,8 @@ from pathlib import Path
 
 from .core import (GATE_SECTIONS, GATE_TYPE, VERDICT, GraphError, Node,
                    compressible_types, frontier as _frontier, gates as _gates, is_general,
-                   load, retrieve, section, shape, shortest_path, supersedes)
+                   load, metric as _metric, metrics_declared, metrics_summary, retrieve,
+                   section, shape, shortest_path, supersedes)
 from .update import update_with_report
 from .validate import check, load_config
 
@@ -64,6 +65,39 @@ def frontier(root: Path) -> dict:
         "note": ("A reopenable claim states its own condition. Judge whether it holds now "
                  "— knoten does not, because that is the research."),
     }
+
+
+def metrics(root: Path, name: str | None = None) -> dict:
+    """Where a declared number stands: every metric at a glance, or one of them in full.
+
+    A metric is not a new kind of node. It is `results:` read along the time axis, so
+    nothing has to be written twice, and a graph that declares none pays nothing.
+    """
+    nodes, cfg = load(root), load_config(root)
+    declared = metrics_declared(cfg)
+    if name is None:
+        rows = []
+        for row in metrics_summary(nodes, cfg):
+            best = nodes.get(row["best_id"]) if row["best_id"] else None
+            rows.append({**row, "best_created":
+                         str(best.frontmatter.get("created") or "") if best else None})
+        return {"metrics": rows,
+                "note": ("Read the best point and what it built on before choosing what "
+                         "to try. knoten does not judge whether the move was worth it.")}
+    if name not in declared:
+        # Naming the declared ones is the whole refusal: a typo'd metric is otherwise
+        # indistinguishable from one nothing has recorded yet.
+        return {"error": (f"no metric '{name}' declared in graph.yaml"
+                          + (f". Declared: {', '.join(sorted(declared))}" if declared else
+                             ". This graph declares none; add `metrics:` to graph.yaml")),
+                "declared": sorted(declared)}
+    goal = declared[name]
+    points = _metric(nodes, name, goal)
+    # The best point is whichever row `metrics_summary` named, looked up here rather than
+    # decided again: a header that disagrees with the strip above it is two answers.
+    top = next(r for r in metrics_summary(nodes, cfg) if r["name"] == name)
+    return {"name": name, "goal": goal, "points": points,
+            "best": next((p for p in points if p["id"] == top["best_id"]), None)}
 
 
 def index(root: Path, query=None, tags=None, status=None, type=None,

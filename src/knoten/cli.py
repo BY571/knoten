@@ -104,6 +104,12 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+def _num(v) -> str:
+    """15, not 15.0. A metric written as a whole number in `results:` must not grow a
+    decimal point on the way to the screen, and 0.792 must not lose one."""
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
 def render_index(payload: dict) -> None:
     shown = payload["nodes"]
     width = max((len(n["id"]) for n in shown), default=0)
@@ -146,6 +152,11 @@ def render_frontier(payload: dict) -> None:
     head = [f"{_plural(s['rules'], 'rule')} over {_plural(s['specifics'], 'specific')}"]
     if s["clusters"]:
         head.append(_plural(s["clusters"], "compressible cluster"))
+    # A metric with no points yet says nothing about the graph, so it stays off the one
+    # line that has to stay readable; `knoten metric` still lists it.
+    for m in s.get("metrics", []):
+        if m["count"]:
+            head.append(f"{m['name']}: best {_num(m['best'])} ({m['best_id']})")
     print("  " + " · ".join(head))
     if payload["compressible"]:
         print("\n  COMPRESSIBLE — do these before the next experiment")
@@ -167,6 +178,42 @@ def render_frontier(payload: dict) -> None:
         print("  nothing open, nothing reopenable, every gate has fired.")
     if note := payload.get("note"):
         print(f"\n  {note}")
+
+
+def _best_of(value, nid, created) -> str:
+    """`best 15  exp-x  2026-09-07`: the same three facts wherever a metric is headed,
+    whether the caller holds a summary row or the point itself."""
+    return f"best {_num(value)}  {nid}  {created or ''}".rstrip()
+
+
+def render_metric(payload: dict) -> None:
+    """Every declared metric in one line each, or one metric's whole series. One renderer
+    because it is one command: `points` is in the payload only when a name was given, and
+    two renderers would be two places to change the way a best point is written."""
+    if "points" not in payload:
+        if not payload["metrics"]:
+            print("  no metric declared; add `metrics:` to graph.yaml")
+        for m in payload["metrics"]:
+            # A declared metric nothing has recorded still gets its line: it is a number
+            # the graph said it cares about and has not measured.
+            head = f"  {m['name']} ({m['goal']})"
+            print(f"{head}  {_best_of(m['best'], m['best_id'], m['best_created'])}  "
+                  f"({_plural(m['count'], 'point')})"
+                  if m["count"] else f"{head}  no node records it yet")
+        if note := payload.get("note"):
+            print(f"\n  {note}")
+        return
+    b, head = payload["best"], f"  {payload['name']} ({payload['goal']})"
+    print(f"{head}   {_best_of(b['value'], b['id'], b['created'])}" if b
+          else f"{head}   no node records it yet")
+    for p in payload["points"]:
+        # `baseline`, not `+0`: the first point moved nothing because there was nothing
+        # to move it against, and a signed zero reads as a run that changed nothing.
+        delta = "baseline" if p["delta"] is None else f"{p['delta']:+g}"
+        builds = f"  builds on {', '.join(p['builds_on'])}" if p["builds_on"] else ""
+        print(f"    {p['created'] or '-':10}  {p['id']:24}  {_num(p['value']):>10}  "
+              f"{delta:>9}{'  ★' if p['best'] else '   '}{builds}")
+
 
 
 def render_path(payload: dict) -> None:
@@ -348,6 +395,7 @@ READ = {
                                            limit=a.limit, all=a.all), render_index),
     "frontier": (lambda a, root: ops.frontier(root), render_frontier),
     "gates":    (lambda a, root: ops.gates(root), render_gates),
+    "metric":   (lambda a, root: ops.metrics(root, a.name), render_metric),
     "path":     (lambda a, root: ops.path(root, a.a, a.b), render_path),
     "show":     (lambda a, root: ops.get(root, a.node), render_get),
 }
@@ -665,6 +713,10 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("gates", help="what must a claim survive here?")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
 
+    s = sub.add_parser("metric", help="where a declared number stands, over time")
+    s.add_argument("name", nargs="?", help="one metric; omit for every declared one")
+    s.add_argument("--json", action="store_true", help="emit the raw payload")
+
     s = sub.add_parser("path", help="how did we get from A to B?")
     s.add_argument("a")
     s.add_argument("b")
@@ -822,6 +874,7 @@ def main(argv=None) -> int:
         if args.cmd in READ:
             return read_cmd(args.cmd, args, root)
         return {
+
             "new":    lambda: new(root, args.type, args.id, args.status),
             "idea":   lambda: idea(root, args.text, args.source),
             "commit": lambda: commit_cmd(root, nid=args.id, frontmatter=args.frontmatter,

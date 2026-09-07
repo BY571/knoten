@@ -12,8 +12,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import (GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _csv,
-                   _yaml, compressible_types, question_of, section, supersedes)
+from .core import (GATE_TYPE, GENERATED, GOALS, ID_RE, INVERSE, SUPERSEDES, GraphError,
+                   Node, _csv, _yaml, compressible_types, question_of, section,
+                   supersedes)
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -35,7 +36,8 @@ RULE_KEYS = {
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
-GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules", "compressible"}
+GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules",
+              "compressible", "metrics"}
 
 # The rule ids the engine emits on its own, whatever the graph declares. A graph rule may
 # not take one of these names: a shadowed check reports green forever.
@@ -109,6 +111,24 @@ def load_config(root: Path) -> dict:
                 unknown := sorted({t for t in comp if t not in declared})):
             raise GraphError(f"graph.yaml: `compressible` names type(s) not in node_types: "
                              f"{', '.join(unknown)}")
+
+    # A metric is what the graph is trying to move. Refused the same way a rule is: a
+    # `goal: minimise` nobody understands would silently read as `max` and rank every
+    # result upside down, and a metric name that is not an id cannot be a CLI argument.
+    if (metrics := cfg.get("metrics")) is not None:
+        if not isinstance(metrics, dict) or not metrics:
+            raise GraphError("graph.yaml: `metrics` must be a non-empty mapping of name -> "
+                             f"{{goal: max|min}}, got {metrics!r}")
+        for name, spec in metrics.items():
+            if not ID_RE.match(str(name)):
+                raise GraphError(f"graph.yaml: metric name {name!r} must be lowercase "
+                                 f"letters, digits, - and _, starting with a letter or digit")
+            if not isinstance(spec, dict) or set(spec) - {"goal"}:
+                raise GraphError(f"graph.yaml: metric '{name}' must be a mapping with at "
+                                 f"most a `goal` key, got {spec!r}")
+            if spec.get("goal", "max") not in GOALS:
+                raise GraphError(f"graph.yaml: metric '{name}': `goal` must be one of "
+                                 f"{', '.join(GOALS)}, got {spec['goal']!r}")
 
     rules = cfg.get("rules") or []
     if not isinstance(rules, list):

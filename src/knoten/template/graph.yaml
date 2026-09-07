@@ -26,6 +26,12 @@ statuses:   [open, alive, dead, retracted, superseded, active]
 # declare none and tagging is free. Add tags as the topic tells you what they are.
 # tags: [decoding, evaluation]
 
+# The number this graph is trying to move, if there is one. `knoten metric` reads it back
+# out of the `results:` your nodes already record, oldest first. `goal` says which
+# direction counts as better and defaults to max; declare none and nothing changes.
+# metrics:
+#   accuracy: {goal: max}
+
 # Reused standards: mp:supports / mp:challenges (Micropublications),
 #   npx:retracts / npx:supersedes (Nanopublications),
 #   prov:wasDerivedFrom / prov:used (PROV-O)
