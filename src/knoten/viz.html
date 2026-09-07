@@ -47,6 +47,28 @@ header .sub{display:block;margin-top:4px;font:600 9px/1 var(--mono);letter-spaci
 #strip{flex:none;align-self:center;max-width:min(30vw,340px);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;font:11.5px var(--mono);color:var(--ink-2)}
 
+/* Metrics: a scrolling column of charts, not a pannable stage. It is the one view whose
+   x axis is the order results arrived rather than the graph itself, so there is nothing
+   to pan and the page must not pretend otherwise. */
+#charts{position:absolute;inset:0;overflow:auto;padding:22px 24px 30px;display:none}
+body.metrics #charts{display:block}
+body.metrics #stage,body.metrics #trail,body.metrics #clegend,body.metrics #klegend,
+body.metrics footer{display:none}
+body.metrics #viewport{cursor:default}
+.chart{max-width:760px;margin:0 0 26px}
+.chart h3{margin:0 0 3px;font-size:14px;font-weight:620;letter-spacing:-.01em}
+.chart .best{margin:0 0 9px;font:11.5px var(--mono);color:var(--ink-2)}
+.chart svg{display:block;width:100%;height:auto;background:var(--surface);
+  border:1px solid var(--line);border-radius:var(--r)}
+.chart .axis{stroke:var(--line-2);stroke-width:1}
+.chart .line{fill:none;stroke:var(--ink-2);stroke-width:1.75}
+.chart .pt{fill:var(--surface);stroke:var(--ink);stroke-width:1.75;cursor:pointer}
+.chart .pt:hover{fill:var(--ink)}
+/* The best point so far, ringed rather than recoloured: colour on this page already
+   means a verdict, and a record is not a verdict. */
+.chart .ring{fill:none;stroke:var(--alive);stroke-width:1.75}
+.chart text{font:9.5px var(--mono);fill:var(--ink-3)}
+
 main{flex:1;display:flex;min-height:0}
 #viewport{flex:1;position:relative;overflow:hidden;cursor:grab}
 #viewport.drag{cursor:grabbing}
@@ -222,6 +244,7 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
     <div class=viewsw role=group aria-label="View">
       <button id=v-columns aria-pressed=true>columns</button>
       <button id=v-map aria-pressed=false>map</button>
+      <button id=v-metrics aria-pressed=false>metrics</button>
     </div>
     <div class=viewsw role=group aria-label="Fold" id=foldsw>
       <button id=f-folded aria-pressed=true>folded</button>
@@ -237,6 +260,7 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
     <div id=viewport>
       <div id=stage><svg id=edges><g id=walls></g><g id=links></g><g id=elabels></g>
         <g id=dots></g></svg></div>
+      <div id=charts></div>
       <div id=trail></div>
       <details id=clegend></details>
       <details id=klegend>
@@ -248,8 +272,8 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
           stroke="#9AA0BC" stroke-width=1.5 stroke-dasharray="2 4"></line></svg>
           <span><b style="width:auto">related</b> — everything else</span></div>
       </details>
-      <footer>drag to pan · wheel to zoom · <b>f</b> fit · <b>v</b> switch · <b>a</b> fold ·
-        <b>o</b> open a rule · <b>esc</b> clear</footer>
+      <footer>drag to pan · wheel to zoom · <b>f</b> fit · <b>v</b> switch · <b>m</b> metrics ·
+        <b>a</b> fold · <b>o</b> open a rule · <b>esc</b> clear</footer>
     </div>
     <div id=grip title="drag to resize · double-click to reset"></div>
     <aside id=panel><div class=blank>Select a node to read its record.</div></aside>
@@ -708,6 +732,15 @@ const notHung = n => to => {
   if (to === n.id) return "not hung: itself";
   return "not hung: " + (t.status === "alive" ? "not retired" : "not alive");
 };
+// What a node's result stood on, per metric, keyed by node. Derived in the payload from
+// the rooting edges the author already wrote, so the record can show a lineage nobody had
+// to declare -- and nobody could declare wrongly.
+const BUILDS = {};
+for (const m of DATA.metrics || [])
+  for (const p of m.points)
+    if (p.builds_on.length)
+      (BUILDS[p.id] ||= []).push(...p.builds_on.map(to => ({rel: m.name, to})));
+
 const CALLOUT = ["Why it died", "What would reopen this"];
 function select(id){
   sel = id; const n = byId[id];
@@ -769,6 +802,9 @@ function select(id){
   const covers = opens(n);
   if (covers) relations(`covers ${hung(n).length}`,
                         n.covers.map(to => ({rel:"npx:supersedes", to})), notHung(n));
+  // Before the citations: which earlier result this number was measured against is the
+  // first thing to know about a point on the chart, and it is not one of `cites`' edges.
+  relations("builds on", BUILDS[n.id] || []);
   // Those same edges under `cites` too would read as a second, longer set of targets.
   relations("cites", covers ? n.links.filter(l => l.rel !== "npx:supersedes") : n.links);
   relations("cited by", n.backlinks);
@@ -828,9 +864,78 @@ function drawTrail(){
 {
   const s = DATA.shape || {rules:0, specifics:0};
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  document.getElementById("strip").textContent =
-    `${plural(s.rules, "rule")} over ${plural(s.specifics, "specific")}`;
+  const head = [`${plural(s.rules, "rule")} over ${plural(s.specifics, "specific")}`];
+  // The same clause `render_frontier` appends, off the same summary. A metric nothing
+  // has recorded yet stays off a line that has to stay readable.
+  for (const m of (s.metrics || []))
+    if (m.count) head.push(`${m.name}: best ${m.best} (${m.best_id})`);
+  document.getElementById("strip").textContent = head.join(" · ");
 }
+
+// ---------------- metrics: the graph read along its time axis ----------------
+// x is a point's place in the order results arrived, not a date scale. Two runs a day
+// apart and two runs six months apart are both "the next result", and spacing them by
+// calendar distance squeezes a year of work into the left edge of the chart.
+const CW = 720, CH = 230, PADL = 58, PADR = 16, PADT = 16, PADB = 36;
+function chart(m){
+  const box = el("div", "chart"), pts = m.points;
+  box.append(el("h3", null, `${m.name} (${m.goal})`));
+  if (!pts.length){
+    box.append(el("p", "best", "no node records it yet"));
+    return box;
+  }
+  const vals = pts.map(p => p.value), lo = Math.min(...vals), hi = Math.max(...vals);
+  // Which point holds the record is read off the same summary the header strip prints,
+  // never decided again here: a chart captioned with a different best than the strip
+  // above it is the second opinion this page refuses to give.
+  const top = (DATA.shape.metrics || []).find(r => r.name === m.name) || {};
+  const set = pts.find(p => p.id === top.best_id) || pts[0];
+  box.append(el("p", "best", `best ${set.value} · ${set.id} · ${set.created}`));
+  const x = i => pts.length > 1 ? PADL + i * (CW - PADL - PADR) / (pts.length - 1)
+                                : (PADL + CW - PADR) / 2;
+  // A series that never moved has no range to scale against. It draws on the middle
+  // line, which says "flat"; dividing by a zero range would say NaN and draw nothing.
+  const y = v => hi === lo ? (PADT + CH - PADB) / 2
+                           : CH - PADB - (v - lo) * (CH - PADB - PADT) / (hi - lo);
+  const svg = mk("svg", {viewBox: `0 0 ${CW} ${CH}`, role: "img",
+    "aria-label": `${m.name}, ${pts.length} point(s), best ${set.value} at ${set.id}`});
+  svg.append(mk("line", {class:"axis", x1:PADL-8, y1:PADT, x2:PADL-8, y2:CH-PADB}),
+             mk("line", {class:"axis", x1:PADL-8, y1:CH-PADB, x2:CW-PADR, y2:CH-PADB}));
+  for (const v of (hi === lo ? [hi] : [hi, lo])){
+    const tick = mk("text", {x:PADL-13, y:y(v)+3.5, "text-anchor":"end"});
+    tick.textContent = v; svg.append(tick);
+  }
+  svg.append(mk("polyline", {class:"line",
+    points: pts.map((p, i) => `${x(i)},${y(p.value)}`).join(" ")}));
+  // Enough date labels to read the axis and never so many that they overlap: every point
+  // while there are few, then a fixed handful plus the last one.
+  const step = Math.ceil(pts.length / 8);
+  pts.forEach((p, i) => {
+    if (p.best) svg.append(mk("circle", {class:"ring", cx:x(i), cy:y(p.value), r:8.5}));
+    const dot = mk("circle", {class:"pt", cx:x(i), cy:y(p.value), r:4.5});
+    const delta = p.delta === null ? "baseline" : (p.delta > 0 ? "+" : "") + p.delta;
+    const tip = mk("title");
+    tip.textContent = `${p.id} · ${p.value} · ${delta}`
+      + (p.builds_on.length ? ` · builds on ${p.builds_on.join(", ")}` : "");
+    dot.append(tip);
+    dot.onclick = () => select(p.id);
+    svg.append(dot);
+    if (i % step === 0 || i === pts.length - 1){
+      const lab = mk("text", {x:x(i), y:CH-PADB+15, "text-anchor":"middle"});
+      lab.textContent = p.created || p.id; svg.append(lab);
+    }
+  });
+  box.append(svg);
+  return box;
+}
+{
+  const host = document.getElementById("charts"), ms = DATA.metrics || [];
+  // The empty state names the fix. A blank third view reads as a broken page.
+  if (!ms.length) host.append(el("div", "blank",
+    "no metric declared; add `metrics:` to graph.yaml"));
+  ms.forEach(m => host.append(chart(m)));
+}
+
 
 // Both legends are reference, not chrome: shut by default, and the choice is remembered
 // so `--watch` does not reopen them under you every couple of seconds.
@@ -893,24 +998,29 @@ function fit(){
   view.x = (r.width - w*view.k)/2; view.y = (r.height - h*view.k)/2;
   apply();
 }
-vp.onmousedown = e => { if (e.target.closest(".card")) return;
+vp.onmousedown = e => { if (VIEW === "metrics" || e.target.closest(".card")) return;
   drag = {x:e.clientX, y:e.clientY, vx:view.x, vy:view.y}; vp.classList.add("drag"); };
 addEventListener("mousemove", e => { if (!drag) return;
   view.x = drag.vx + e.clientX - drag.x; view.y = drag.vy + e.clientY - drag.y; apply(); });
 addEventListener("mouseup", () => { drag = null; vp.classList.remove("drag"); });
-vp.addEventListener("wheel", e => { e.preventDefault();
+vp.addEventListener("wheel", e => { if (VIEW === "metrics") return;   // let it scroll
+  e.preventDefault();
   const r = vp.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
   const k = Math.min(2.4, Math.max(.12, view.k * Math.exp(-e.deltaY * .0015)));
   view.x = mx - (mx-view.x)*(k/view.k); view.y = my - (my-view.y)*(k/view.k);
   view.k = k; apply(); }, {passive:false});
+const VIEWS = ["columns", "map", "metrics"];
 function setView(v){
-  VIEW = v; document.body.classList.toggle("map", v === "map");
-  document.getElementById("v-columns").setAttribute("aria-pressed", v === "columns");
-  document.getElementById("v-map").setAttribute("aria-pressed", v === "map");
-  place(); fit();
+  VIEW = v;
+  document.body.classList.toggle("map", v === "map");
+  document.body.classList.toggle("metrics", v === "metrics");
+  for (const name of VIEWS)
+    document.getElementById("v-" + name).setAttribute("aria-pressed", v === name);
+  // The charts are drawn once and scroll on their own. Laying out and fitting a stage
+  // nobody can see would fit it to a viewport the charts are covering.
+  if (v !== "metrics"){ place(); fit(); }
 }
-document.getElementById("v-columns").onclick = () => setView("columns");
-document.getElementById("v-map").onclick = () => setView("map");
+VIEWS.forEach(v => document.getElementById("v-" + v).onclick = () => setView(v));
 document.getElementById("f-folded").onclick = () => setFold(true);
 document.getElementById("f-all").onclick = () => setFold(false);
 addEventListener("keydown", e => {
@@ -919,6 +1029,7 @@ addEventListener("keydown", e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "f") fit();
   if (e.key === "v") setView(VIEW === "columns" ? "map" : "columns");
+  if (e.key === "m") setView(VIEW === "metrics" ? "columns" : "metrics");
   if (e.key === "a") setFold(!FOLD);
   // The chip is a pointer target; this is the same fold from the keyboard, on whatever
   // rule the record is currently showing.
@@ -942,7 +1053,7 @@ if (RELOAD_MS){
       // and restoring the selection before the fold would select a hidden card.
       (seat.open || []).forEach(id => { if (byId[id]) open.add(id); });
       if (seat.fold === false) setFold(false); else place();
-      if (seat.mode === "map") setView("map");
+      if (seat.mode === "map" || seat.mode === "metrics") setView(seat.mode);
       if (seat.sel && byId[seat.sel]) select(seat.sel);
       // After select/setView, which both reset things. A map that jumps back to the
       // origin — or a record that jumps back to its first line — every two seconds is
