@@ -422,40 +422,67 @@ const open = new Set();
 // `under` is who the payload settled on when two alive rules claimed the same node, and
 // only the second decides where a card is drawn.
 const hung = r => (r.covers || []).filter(id => byId[id] && byId[id].under === r.id);
-// The row a hung card takes in its rule's column, 1-based, leaving room for the cards
-// hanging under an opened rule in front of it. `slot(r, null)` is therefore one past the
-// last row: the number of rows the whole open subtree costs, plus one.
-function slot(r, id){
-  let k = 1;
-  for (const c of hung(r)){
-    if (c === id) return k;
-    k += 1 + (open.has(c) ? openCount(byId[c]) : 0);
-  }
-  return k;
+
+// Every rule's hung rows, once per frame. For each rule: which row each hung card takes
+// (leaving room for the subtree of an opened rule in front of it), which slot it has on
+// the map's spiral, and how many rows the whole open subtree costs. Rebuilt per card this
+// walked `covers` again for every card it had already walked.
+//
+// `seen` is the cycle guard, and it is not hypothetical: two alive nodes superseding each
+// other pass `validate` today, and each is then `under` the other. A walk that follows
+// `under` without one recurses until the stack gives out — a blank page, from a graph the
+// tools called legal.
+let ROWS = {}, SIZE = {};
+function rowmap(){
+  const rows = {}, size = {};
+  const walk = (r, seen) => {
+    if (size[r.id] !== undefined) return size[r.id];
+    if (seen.has(r.id)) return 0;                    // a supersedes cycle: costs no rows
+    seen.add(r.id);
+    const at = {};
+    let row = 1, i = 0;
+    for (const c of hung(r)){
+      at[c] = {row, i: ++i};
+      row += 1 + (open.has(c) && byId[c] ? walk(byId[c], seen) : 0);
+    }
+    rows[r.id] = at;
+    return size[r.id] = row - 1;
+  };
+  for (const n of DATA.nodes) if (n.rule) walk(n, new Set());
+  return {rows, size};
 }
-const openCount = r => slot(r, null) - 1;
 
 // What the page draws. Folded, a covered node is inside its rule until you open it — and
-// inside a rule that is itself covered and shut, it stays shut.
-function visible(id){
+// inside a rule that is itself covered and shut, it stays shut. Two nodes covering each
+// other are inside each other: neither is ever a card you can start from, so neither is
+// drawn folded, and `all` is how you read a graph in that state.
+function visible(id, seen){
   const n = byId[id];
-  return !FOLD || n.under == null || (open.has(n.under) && visible(n.under));
+  if (!FOLD || n.under == null) return true;
+  seen = seen || new Set();
+  if (seen.has(id)) return false;
+  seen.add(id);
+  return open.has(n.under) && visible(n.under, seen);
 }
 
 // Where a node sits, in the current view. Covered nodes have no position of their own in
 // the payload — a hung card is derived from its rule's, so opening one is a local reflow
-// and appending a node still moves nothing.
-function posOf(n){
+// and appending a node still moves nothing. A node already on the walk falls back to its
+// own position rather than hanging off itself.
+function posOf(n, seen){
   if (!FOLD) return VIEW === "map" ? n.map : n.columns;
   if (n.under == null) return DATA.folded[n.id][VIEW];
-  const r = byId[n.under], at = posOf(r);
+  seen = seen || new Set();
+  if (seen.has(n.id)) return VIEW === "map" ? n.map : n.columns;
+  seen.add(n.id);
+  const r = byId[n.under], at = posOf(r, seen), slot = (ROWS[r.id] || {})[n.id];
   if (VIEW === "map"){
     // The same golden-angle spiral the layout itself uses, at a tighter spacing: index k
     // always lands in the same place, so opening a rule cannot shuffle its siblings.
-    const k = hung(r).indexOf(n.id) + 1, rad = HUNG * Math.sqrt(k);
+    const k = slot ? slot.i : 1, rad = HUNG * Math.sqrt(k);
     return [at[0] + rad * Math.cos(k * GOLDEN), at[1] + rad * Math.sin(k * GOLDEN)];
   }
-  return [at[0] + HUNGX, at[1] + (CARDH + GAP) * slot(r, n.id)];
+  return [at[0] + HUNGX, at[1] + (CARDH + GAP) * (slot ? slot.row : 1)];
 }
 const GOLDEN = Math.PI * (3 - Math.sqrt(5)), HUNG = 18, HUNGX = 18;
 
@@ -463,6 +490,7 @@ const GOLDEN = Math.PI * (3 - Math.sqrt(5)), HUNG = 18, HUNGX = 18;
 // cluster circles and the viewBox cannot disagree. Copies: `posOf` may hand back an array
 // that lives in the payload, and the column reflow below writes into these.
 function positions(){
+  const rm = rowmap(); ROWS = rm.rows; SIZE = rm.size;
   const P = {};
   for (const n of DATA.nodes) if (visible(n.id)) P[n.id] = posOf(n).slice();
   if (VIEW === "map" || !FOLD) return P;
@@ -472,14 +500,17 @@ function positions(){
   for (const n of DATA.nodes){
     if (!visible(n.id)) continue;
     if (n.under == null){ (cols[P[n.id][0]] ||= []).push(n); continue; }
-    let r = n; while (r.under != null) r = byId[r.under];
+    // Up to the card this one is hanging off, stopping at a node already walked: the
+    // same cycle guard, and without it a mutual pair loops here for ever.
+    let r = n, seen = new Set();
+    while (r.under != null && !seen.has(r.id)){ seen.add(r.id); r = byId[r.under]; }
     (family[r.id] ||= []).push(n.id);
   }
   for (const x in cols){
     let extra = 0;
     for (const n of cols[x].sort((a, b) => P[a.id][1] - P[b.id][1])){
       for (const id of [n.id, ...(family[n.id] || [])]) P[id][1] += extra;
-      if (open.has(n.id)) extra += (CARDH + GAP) * openCount(n);
+      if (open.has(n.id)) extra += (CARDH + GAP) * (SIZE[n.id] || 0);
     }
   }
   return P;
@@ -492,8 +523,11 @@ function place(){
     const on = visible(n.id);
     dotOf[n.id].g.classList.toggle("hidden", !on);
     cardOf[n.id].classList.toggle("hidden", !on);
-    if (chipOf[n.id])
+    if (chipOf[n.id]){
       chipOf[n.id].textContent = `covers ${hung(n).length} ${open.has(n.id) ? "▾" : "▸"}`;
+      // The card is the control that expands; a reader on a screen reader is told so.
+      cardOf[n.id].setAttribute("aria-expanded", open.has(n.id));
+    }
     if (on) dotOf[n.id].g.setAttribute("transform", `translate(${P[n.id][0]},${P[n.id][1]})`);
   }
   for (const p of paths){
@@ -606,6 +640,7 @@ const shared = c => Object.values(c.shared)[0];
 function drawClusters(P){
   for (const n of DATA.nodes){
     cardOf[n.id].style.outline = "";
+    cardOf[n.id].style.boxShadow = "";
     delete cardOf[n.id].dataset.cluster;
   }
   if (!CLUSTERS) return;
@@ -615,8 +650,14 @@ function drawClusters(P){
     if (!ids.length) return;           // every member is folded away: nothing to circle
     const col = CPAL[i % CPAL.length];
     for (const id of ids){
-      cardOf[id].style.outline = "2px solid " + col;
-      cardOf[id].dataset.cluster = i;
+      // A card is usually in more than one cluster — the same findings share a gate AND
+      // a tag. Overwriting the outline said it was in one, and which one depended on the
+      // order the payload happened to list them in. It keeps every index it is in; the
+      // first two get a ring each, the rest are readable in the legend.
+      const card = cardOf[id], had = card.dataset.cluster;
+      card.dataset.cluster = had ? had + " " + i : String(i);
+      if (!had) card.style.outline = "2px solid " + col;
+      else if (!card.style.boxShadow) card.style.boxShadow = "0 0 0 5px " + col;
     }
     if (VIEW !== "map") return;
     const cx = ids.reduce((t, id) => t + P[id][0], 0) / ids.length;
@@ -702,7 +743,9 @@ const CALLOUT = ["Why it died", "What would reopen this"];
 function select(id){
   sel = id; const n = byId[id];
   panel.textContent = ""; panel.scrollTop = 0;
-  const eyebrow = n.rule ? `${n.type} · rule · covers ${n.covers.length}` : n.type;
+  // `hung`, not `covers`: the same count the chip and the dot show, so the record cannot
+  // say 3 where the page folds 2.
+  const eyebrow = n.rule ? `${n.type} · rule · covers ${hung(n).length}` : n.type;
   panel.append(el("div", "eyebrow", eyebrow), el("h2", null, n.title || n.id), lifecycle(n));
   const broke = (DATA.violations || {})[n.id] || [];
   if (broke.length){
@@ -815,9 +858,10 @@ function drawTrail(){
   const head = [`${plural(s.rules, "rule")} over ${plural(s.specifics, "specific")}`];
   if (s.clusters) head.push(plural(s.clusters, "compressible cluster"));
   const rows = (s.budget || []).map(budget);
-  // The tightest row only — `budget` is sorted by how little room is left. The rest are
-  // in the tooltip, because a header that wraps is a header nobody reads.
-  if (rows.length) head.push(rows[0]);
+  // The three tightest rows, which is what `render_frontier` prints — `budget` is sorted
+  // by how little room is left. The rest are in the tooltip, because a header that wraps
+  // is a header nobody reads.
+  head.push(...rows.slice(0, 3));
   const strip = document.getElementById("strip");
   strip.textContent = head.join(" · ");
   strip.title = rows.join("\n");
@@ -834,8 +878,16 @@ function drawTrail(){
     const row = el("div", "crow");
     row.style.setProperty("--cc", CPAL[i % CPAL.length]);
     const h = el("div", "ch");
-    h.append(el("b", null, c.question), document.createTextNode(` · ${shared(c)} · ${c.ids.length}`));
+    h.append(el("b", null, `#${i} ${c.question}`),
+             document.createTextNode(` · ${shared(c)} · ${c.ids.length}`));
     row.append(h);
+    // Which clusters this one is the same nodes as. Two clusters over one set of cards
+    // is the common case, not an edge case, and the outline can only show two.
+    const also = cl.map((o, j) => [j, o.ids.filter(id => c.ids.includes(id)).length])
+                   .filter(([j, n]) => j !== i && n);
+    if (also.length)
+      row.append(el("div", "ch", also.map(([j, n]) =>
+        `(shares ${n} card${n === 1 ? "" : "s"} with cluster ${j})`).join(" · ")));
     for (const id of c.ids){
       const b = el("button", null, id);
       b.onclick = () => select(id);
@@ -982,7 +1034,9 @@ if (RELOAD_MS){
   const live = el("span", "live" + (stale ? " stale" : ""),
     stale ? `stale — last built ${new Date(BUILT_AT).toLocaleTimeString()}` : "live");
   live.title = stale ? "the --watch process is not running; this page is not updating" : "";
-  document.querySelector("header .viewsw").after(live);
+  // After the last of the header's switches. `header .viewsw` is now the view switch
+  // alone, which put the badge in the middle of the controls.
+  document.getElementById("clusters").after(live);
 }
 /*__WATCH__*/
 </script>

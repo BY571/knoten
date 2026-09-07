@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from knoten import viz
+from knoten import ops, viz
 from knoten.cli import main
 from knoten.core import load
 
@@ -521,3 +521,36 @@ def test_the_watch_seat_remembers_the_fold(small):
     html = viz.render(small.root, reload_ms=2000)
 
     assert "fold: FOLD" in html and "open: [...open]" in html
+
+
+def test_a_supersedes_cycle_cannot_hang_the_page(small):
+    """Two alive nodes superseding each other pass `validate` today, and each is then
+    `under` the other. Every walk that follows `under` carries a seen set, or opening
+    both recurses until the stack gives out — a blank page from a legal graph."""
+    html = viz.render(small.root)
+
+    assert "function visible(id, seen)" in html
+    assert "function posOf(n, seen)" in html
+    assert html.count("seen.has") >= 3          # visible, posOf, the walk up to the card
+
+
+def test_the_strip_prints_the_budget_rows_the_frontier_prints(graph):
+    """The strip and `knoten frontier`'s header are built from the same `shape`, and the
+    CLI prints up to three budget rows. A page that prints one says a graph with three
+    caps is tighter than it is."""
+    graph.rules("name: t\nnode_types: [question, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules:\n"
+                "  - id: cap-q\n    max_alive: {type: finding, per: question, count: 4}\n"
+                "    message: m\n"
+                "  - id: cap-g\n    max_alive: {type: finding, per: graph, count: 9}\n"
+                "    message: m\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2, 3):
+        graph.node(f"finding-{i}", _finding(i), f"# {i}\n")
+
+    p = viz.payload(graph.root)
+    html = viz.render(graph.root)
+
+    assert p["shape"] == ops.frontier(graph.root)["shape"]      # the CLI's own numbers
+    assert len(p["shape"]["budget"]) == 2
+    assert "rows.slice(0, 3)" in html                          # and its own three rows
