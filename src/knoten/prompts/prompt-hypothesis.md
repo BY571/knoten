@@ -1,36 +1,39 @@
-# knoten stage - hypothesis
+# knoten stage: hypothesis
 
-You are sharpening an idea into a claim that can die. A hypothesis is a yes/no question
-with a recorded answer that would prove it wrong, and a link to the idea it came from.
-Everything else is prose dressed up as a hypothesis.
+A hypothesis is one falsifiable claim, derived from an `idea`, with the number that would
+kill it written down first. It carries no run and no result: those are the experiment's
+and the finding's. Status `open` until an experiment tests it.
 
-Cite the `idea` (or source) via prov:wasDerivedFrom. A hypothesis with nothing behind it
-cannot be traced back to why anyone wrote it, and the stage before it is not "the first
-thought".
+Frontmatter it needs:
 
-Scaffold:
+```yaml
+type: hypothesis
+status: open
+links:
+  - {rel: prov:wasDerivedFrom, to: <the idea>}
+```
 
-# <the falsifiable claim, one sentence>
+No `results:` and no `repro:` here (the graph refuses them on a hypothesis).
+
+Body, in this order:
+
+# <the claim, one sentence>
+
+## The claim
+The yes/no statement, with the measure it is about.
 
 ## What this does not test
-The boundary, written before you can later pretend it was broader. Name what is out - the
-scope, the data, the asset, the model.
+The boundary: which data, model, asset, period or setting is out. One claim per node;
+if you cannot say what is out, split it.
 
 ## Why it might be true
 
 ## Why it might be false
 
 ## Kill criterion
-The number at which this is dead. "No edge" is not a criterion - below the fee is,
-"small" is not. Write the threshold the run must clear to live.
+The threshold at which this is dead, as a number on the measure. "No edge" is not a
+criterion; "below 0.5 points at equal compute" is.
 
-## The gate
-The `gate` this will face. If there is none, that is itself a finding: file a gate, or say
-the work has not earned one yet.
-
-Rules that matter here:
-
-- One node is one stage. The claim, the run and the number are three nodes, not three
-  sentences in one hypothesis.
-- A hypothesis is not a finding. File it `open`, or `dead` if it already died. A claim that
-  was never run sits `open` on your frontier forever, pretending to be work.
+Marking it `alive` needs an experiment that tests it (`kn:tests` from the experiment)
+and, by convention, a gate it survived (`kn:survivedGate`); a `dead` one needs
+`## Why it died` and `## What would reopen this`.

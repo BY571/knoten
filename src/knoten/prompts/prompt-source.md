@@ -1,31 +1,38 @@
-# knoten stage - source
+# knoten stage: source
 
-You are recording where work came from before you reason from it. knoten's first move is
-never a claim out of your own head; it is a source read, so every idea can name the thing
-it descends from.
+A source is something you read before you reason from it: a paper, a blog post, a book
+chapter, a doc page, a dataset, a forum thread, or your own head (`source-own-intuition`).
+Every idea descends from one, so the graph can always answer "why did we try this".
 
-Search the web, arXiv, the venue's docs, blog posts, forum threads, and the issue trackers
-of anything you depend on. Read it, then file it.
+When to do a source round: when `knoten frontier` shows nothing open you can act on, no
+reopen condition that holds, and no untested gate. Then, in this order:
 
-Write the `source` node. Name the origin - url, doi, or path - so someone can go back to
-it.
+- papers: arXiv, Semantic Scholar, the venue of the last good paper you cited
+- the docs and changelogs of anything you depend on
+- blog posts and engineering write-ups from people who ship this
+- books and surveys, for the settled parts
+- forums, issue trackers, discussion threads, for what breaks in practice
+- a general web search last, for what the above missed
 
-Scaffold:
+File each thing you actually read, then derive ideas from the sources, not from memory.
 
-# <what you read, one line>
+Frontmatter it needs:
 
-## The thing
-What the source is and what it says, in your own words. Quoting it back is not reading it.
+```yaml
+type: source
+status: alive
+origin: <url, doi, or path>     # required: someone must be able to go back to it
+```
+
+Body, in this order:
+
+# <what it is, one line>
+
+## What it says
+In your own words. Quoting it back is not reading it.
 
 ## Why it is here
-The question it might answer, in one or two lines. Not a hypothesis yet - a direction.
+The question it might answer, in a line or two. A direction, not a hypothesis.
 
 ## What it is not
-What the source does NOT cover, so you do not later cite it for something it cannot bear.
-
-Rules that matter here:
-
-- A source whose `origin` is missing is a source nobody can return to. File it, with an
-  origin, before you reason from it.
-- If the work really started in your own head, write `source-own-intuition` and cite it
-  like any paper. That is allowed; an idea from nowhere is what is not.
+What it does not cover, so it is never cited for something it cannot bear.

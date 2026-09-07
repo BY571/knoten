@@ -7,28 +7,18 @@
 </p>
 
 Every idea you test is a markdown file in git, marked **alive**, **dead** or
-**retracted**. A dead one carries the reason it died, the condition that would bring it
-back, and the script that killed it. Nothing is deleted and nothing is overwritten: a
-correction is a new node that supersedes the old one, so six months later the graph can
-tell you not just what you believe but what you already ruled out and why. A graph that
-only grows is a notebook; a general finding that supersedes several specific ones is how
-it gets wiser, and the graph rewards that.
+**retracted**. A dead one carries why it died, what would bring it back, and the script
+that killed it. Nothing is deleted or overwritten: a correction is a new node that
+supersedes the old one, so six months later the graph tells you not just what you believe
+but what you already ruled out and why.
 
-It exists because research loops forget, whether they are run by a human or an agent.
-They re-propose an idea that was settled last month under a different name, and they file
-the wins while the failures evaporate. knoten makes the failure the artifact: a claim
-marked alive with no test cited is not refused, but `knoten frontier` lists it as
-unchecked so it cannot quietly pass as settled, and a dead end has to say what
-would reopen it. Your graph declares its own rules in `graph.yaml`; the tool enforces them
-and knows nothing else about your field.
-
-The point is to run it **before** the work, not after. `knoten frontier` says what is worth
-doing next, `knoten index` says whether it has been tried in different words, and
-`knoten gates` says what the result will have to survive. Used the other way round, as a
-place to file results once they exist, it is a tidy record that changes no decision.
-
-One graph can be shared by a team, humans and agents alike. The rules are enforced on the
-server, for everyone, rather than on trust.
+Research loops forget, whether a human or an agent runs them: they re-propose what was
+settled last month under another name, and they file the wins while the failures
+evaporate. knoten runs **before** the work: `knoten frontier` says what is worth doing
+next, `knoten index` whether it has been tried in other words, `knoten gates` what a
+result has to survive. Your graph declares its own rules in `graph.yaml`; the tool
+enforces them and knows nothing else about your field. One graph can be shared by a team,
+humans and agents alike, with the rules enforced on the server for everyone.
 
 ## A node
 
@@ -77,45 +67,27 @@ GSM8K is not that task.
 ## The loop
 
 ```bash
-pip install git+https://github.com/BY571/knoten   # or `pip install -e .` from a clone
-knoten init my-topic                                # a graph is a folder
-```
+pip install git+https://github.com/BY571/knoten
+knoten init my-topic          # a graph is a folder
 
-```bash
 knoten frontier               # what should I work on next?
 knoten index --tag decoding   # anything LIKE this been tried?
-knoten query self-consistency # ...or by keyword, if it has a name
-knoten show hyp-self-consistency
 knoten gates                  # what must a claim survive here?
-
-knoten new hypothesis hyp-idea                   # scaffolded from this graph's rules
-knoten commit hyp-idea --frontmatter fm --body b # gate-checked before it touches disk
-knoten update hyp-idea --status dead --append post-mortem.md --field cause=weak_baseline
-knoten attach hyp-idea run.py accuracy.png       # the code and the plot
-
-knoten validate               # enforce this graph's rules
-knoten hook                   # make `git commit` refuse a broken graph
+knoten new hypothesis hyp-x   # scaffolded from this graph's rules
+knoten commit hyp-x --frontmatter fm --body b   # checked before it touches disk
+knoten update hyp-x --status dead --append post-mortem.md --field cause=weak_baseline
+knoten attach hyp-x run.py accuracy.png
 knoten viz --open             # the whole graph as one HTML file
-
-knoten remote create my-topic --on https://graphs.example   # share it
-knoten invite maria --role write                            # let someone in
-knoten pull                   # what they added
-knoten push                   # what you added, through the gate
 ```
 
-Every read command takes `--json`. Exit `0` succeeded, `1` refused, and a refusal is the
-feature: read it, fix the node, run it again.
+A round goes source, idea, hypothesis, experiment, finding; a scaffolded graph refuses a
+step that skips the one before it. Every read command takes `--json`. Exit `0` succeeded,
+`1` refused, and a refusal is the feature: read it, fix the node, run it again.
 
 ## Rules are data
 
 ```yaml
 rules:
-  # - id: live-claims-must-cite-their-gates
-  #   when_status: alive
-  #   when_type: hypothesis, finding
-  #   require_edge: kn:survivedGate
-  #   message: An unchallenged claim is not a finding, it is a hope.
-
   - id: deaths-must-name-a-cause
     when_status: dead
     require_field_one_of:
@@ -123,59 +95,33 @@ rules:
     message: A cause of death you cannot filter on is a story, not an index.
 ```
 
-The first is advisory by default: a scaffolded graph ships it commented out, so a
-good-looking result that was never checked against a gate is not refused, only listed by
-`knoten frontier` under `UNCHECKED`. Uncomment it to make citing `kn:survivedGate` or
-`kn:killedByGate` mandatory for an alive hypothesis or finding. The second is what makes a
-dead end *reusable*. Once the cause is a field rather than a sentence, the question you
-ask six months later is a query:
-
-```bash
-knoten index --where cause=weak_baseline    # we have a stronger baseline now. what reopens?
-```
-
-Your graph declares its vocabulary the same way, and typos in it are violations rather
-than new types:
-
-```yaml
-node_types:
-  question:   what this graph exists to answer, be it a question, statement or task
-  source:     where the work came from, such as a paper, dataset or your own intuition
-  hypothesis: a falsifiable claim derived from an idea
-  gate:       a standing rule every claim must survive; a bar, not a stage
-statuses:   [open, alive, dead, retracted, superseded, active]
-tags:       [decoding, reasoning, prompting, evaluation]
-```
+Once the cause is a field rather than a sentence, six months later it is a query:
+`knoten index --where cause=weak_baseline`. Your graph declares its node types, statuses
+and tags the same way, and a typo is a violation, not a new type. A `gate` is a check a
+result should survive; by default an alive claim that cites none is listed by
+`knoten frontier` as unchecked, not refused, and one commented rule makes it mandatory.
 
 ## Track a number
-
-A graph usually has one number it is trying to move. Name it, and every result that
-already records it becomes a data point:
 
 ```yaml
 metrics:
   tokens_per_question: {goal: min}
 ```
 
-Nothing new gets written: the numbers are the `results:` your nodes already carry.
-`knoten metric tokens_per_question` reads them back along the time axis, each result
-against the best one before it, with the lineage the edges already describe:
+`knoten metric tokens_per_question` reads the `results:` your nodes already carry, along
+the time axis, each against the best before it, with what it built on:
 
 ```
   tokens_per_question (min)   best 290  hyp-few-shot-format  2026-03-14
     2026-03-02  hyp-self-consistency            1420   baseline  ★
     2026-03-14  hyp-few-shot-format              290      -1130  ★
     2026-08-21  finding-sc-large-models         1260       +970     builds on hyp-self-consistency
-    2026-08-21  finding-sc-small-models         1180       +890     builds on hyp-self-consistency
 ```
-
-`knoten frontier` and `knoten viz` carry the best point in their header, and the page
-gains a `metrics` view that plots each declared number as a chart you can click into.
 
 ## Compress
 
-Sooner or later several findings under one question say the same thing in different
-numbers. Write the statement that makes them unnecessary, and point it at each of them:
+When several findings under one question say the same thing, write the statement that
+makes them unnecessary and point it at each of them:
 
 ````markdown
 ---
@@ -199,19 +145,11 @@ Compute-matched, sampling more chains buys nothing below ~7B and about two point
 - finding-sc-large-models: the two-point gain; what it drops is the exact token count
 ````
 
-The engine checks the claim before anything reaches disk. Every target has to be alive,
-of a type the graph lets you supersede, and standing under the same question as the
-general node; the general node has to carry `kn:survivedGate` to every gate any target
-survived, so a general claim faces the union of the bars its specifics faced; and
-`## Covers` has to name each target by id, because a compression that cannot say what it
-drops is a summary. The targets then flip to `superseded` in the same operation, keeping
-their numbers, and `knoten index` stops listing them.
-
-`knoten frontier` opens with the shape of the graph (`0 rules over 2 specifics` here).
-Three or more alive findings under one question that share a gate or a tag are a
-`COMPRESSIBLE` cluster, printed above the open work: the graph pointing at the rule it is
-ready for. This example is one finding short of one. There is no ceiling and no quota;
-the band is the whole of the nudge, and the commit says what a compression bought:
+The general node must face every gate its specifics faced and name each of them in
+`## Covers`; they flip to `superseded` in the same commit and `knoten index` stops listing
+them. `knoten frontier` opens with the shape of the graph and lists `COMPRESSIBLE`
+clusters (three or more alive findings sharing a gate or a tag). The commit says what it
+bought:
 
 ```
   + nodes/finding-sc-needs-scale.md  (8 nodes)
@@ -224,93 +162,33 @@ the band is the whole of the nudge, and the commit says what a compression bough
     this graph now stands on 1 rule and 0 specifics
 ```
 
-That is the whole of what the command prints. The resemblance warning never names what
-the node just superseded, since resembling them is the point; it names the experiment and
-the dead hypothesis still standing behind them, and leaves the judgement to you.
-Retracting a general node stops it covering anything, and the specifics it retired stay
-`superseded` until a person revives them.
-
 ## A shared graph
 
-One graph, several people, one set of rules enforced for all of them. A remote is a
-`knoten serve` process on any machine you can reach over HTTPS. Seb runs the graph and
-the server; Maria contributes from another city; an agent works in Maria's clone. Nothing
-below needs a shared machine, a VPN, or an account anywhere.
+A remote is a `knoten serve` process on any machine you reach over HTTPS. Who may write
+is written in the graph itself (`contributors.yaml`, signed commits), not on the server.
 
 ```bash
-# seb, once, on a small VPS with a reverse proxy terminating TLS in front of it
-knoten serve --data ~/knoten-remotes           # localhost:8899; put caddy or nginx in front
-
-# seb, once, in the graph on his laptop
+knoten serve --data ~/knoten-remotes                 # on a box behind TLS; prints the owner secret once
 knoten remote create trading --on https://graphs.example --as seb
-knoten invite maria --role write               # a one-time code, good for 7 days; send it
+knoten invite maria --role write                     # a one-time code; send it to her
 
-# maria, once
-knoten join https://graphs.example/trading --invite 7f3a9c...
-cd trading                                     # a clone that signs as maria
-
-# maria, or her agent, every session
-knoten pull                                    # what arrived; her own commits go on top
-knoten frontier                                # the loop is unchanged from here
-knoten commit hyp-14 --frontmatter fm.yaml --body body.md
-git add -A && git commit -m "hyp-14: batch size does not close the gap"
-knoten push                                    # signed as maria, checked by the gate
-
-# seb, whenever
-knoten pull                                    # maria's nodes, into his
-knoten invites                                 # who has a code and has not arrived
-knoten revoke maria                            # a signed mark in the graph, then her token
+knoten join https://graphs.example/trading --invite 7f3a9c...   # maria, once
+knoten pull                                          # every session: what arrived
+knoten commit ...; git add -A && git commit -m "hyp-14: ..."; knoten push
+knoten revoke maria                                  # seb, whenever
 ```
 
-`knoten commit` files a node; git commits it; `knoten push` sends the commits and refuses
-while anything is still uncommitted, so it never reports a push that sent nothing. When
-two people push the same afternoon, the second sees `the graph moved on since your last
-pull`, pulls, and pushes: `knoten pull` replays your commits on top of theirs, and the
-server refuses a merge commit if you make one by hand.
-
-Every push runs `knoten validate` on the server before the ref moves, so a node that
-breaks the graph's rules is refused for everyone, including whoever wrote them and anyone
-who never installed `knoten hook`. `read` can clone and pull, `write` can push, `admin`
-can invite and revoke. The server holds only hashed tokens and open invites; everything
-that means anything lives in the graph, so losing the server loses availability and not
-the answer to who said what. A shared graph is one line of history: the first push
-creates the only branch it will ever have, and after that a new branch, a tag, a deletion
-and a force push are each refused with the reason.
-
-Who may write is written down in the graph, not on the server. `knoten remote create`
-makes you a signing key and lists you as admin in `contributors.yaml`; from then on every
-commit is signed and the server refuses one signed by nobody that file lists. Only the
-admin's own token may lay down that first `contributors.yaml`, and that commit may touch
-nothing else. An invite is signed on the admin's machine, so a stolen admin token mints
-nothing. Revoking is a signed commit marking the entry, never a line deleted, so a clone
-a year later still says who could write and who let them in. Readers are not listed: the
-file is the list of people who may write.
-
-`knoten key <name>` prints the public line the graph lists you under; the private half
-lives at `~/.config/knoten/keys/<name>` (`KNOTEN_KEYS` moves that directory). One name,
-one key: copy that file to a second machine to sign there, lose it and an admin adds you
-back under a new name. `knoten serve --data <dir>` prints the owner secret once, on the
-run that creates it; it creates graphs and nothing else, binds localhost and speaks plain
-HTTP, so put TLS in front. For a bare repo you administer yourself,
-`knoten hook --server <repo.git>` installs the same gate.
-
-Reading needs nothing installed. Nodes are markdown, and `knoten viz` writes the graph as
-one self-contained HTML file you can hand to someone who has never heard of knoten.
-Superseded nodes fold under the rule that covers them: click `covers N` on a rule's card,
-press `o` with the rule selected, or switch to `all` to see everything at once. The strip
-at the top gives you the same `N rules over M specifics` that `knoten frontier` opens
-with.
+`knoten commit` files a node; git commits it; `knoten push` sends it through the gate,
+which runs the graph's rules and checks the signature for everyone. `knoten pull`
+replays your commits on top of what arrived; a hosted graph is one line of history. A
+revoked person keeps their clone; only their token and future signatures stop working.
 
 ## For agents
 
-[`SKILL.md`](SKILL.md) is how a coding agent learns knoten: point Claude Code, or
-anything with a shell, at it. It teaches the loop above, which types of node a graph
-holds and which way an edge points.
-
----
-
-See [`examples/llm-research/`](examples/llm-research) for a worked graph and
-[SPEC.md](SPEC.md) for the design and the evidence behind it.
+[`SKILL.md`](SKILL.md) teaches the loop; [`src/knoten/prompts/`](src/knoten/prompts)
+says how to write each kind of node, and where to look when there are no ideas left.
+[`examples/llm-research/`](examples/llm-research) is a worked graph;
+[SPEC.md](SPEC.md) the design.
 
 MIT. One dependency: PyYAML. No framework, no database, no build step, and no server until
 you share a graph.
