@@ -1,25 +1,17 @@
-"""The docs are executable.
-
-Earlier in this project's life, SPEC.md documented a rule syntax the engine did not
-implement — so a graph copied from the spec parsed fine and enforced NOTHING. Then a new
-rule was added and the README's own flagship node stopped satisfying it, and nobody
-noticed until someone thought to check.
-
-A tool whose thesis is "enforcement beats good intentions" should enforce its own
-documentation. Every node and every rules block in README.md and SPEC.md is extracted and
-run against the real example graph.
-"""
+"""The docs are executable."""
 import re
 import shutil
 from pathlib import Path
 
 import pytest
 
-from knoten.core import load, parse_text
+from knoten.cli import main
+from knoten.core import FM_RE, load, parse_text
 from knoten.validate import check, load_rules
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ["README.md", "SPEC.md"]
+PROSE = ["README.md", "SKILL.md", "SPEC.md"]
 
 # The closing fence must be the SAME length as the opening one. The README's node example
 # is a ````markdown fence wrapping an inner ```python block; a naive `^`{3,}` closer stops
@@ -43,8 +35,6 @@ def rule_blocks():
 
 @pytest.fixture
 def example(tmp_path):
-    """A real copy of the shipped example graph, so a documented node is checked against
-    the rules the example actually declares."""
     dst = tmp_path / "g"
     shutil.copytree(ROOT / "examples" / "llm-research", dst)
     return dst
@@ -58,26 +48,52 @@ def test_the_docs_actually_contain_the_examples_we_think_they_do():
 
 @pytest.mark.parametrize("doc,block", node_blocks(), ids=lambda v: v if v in DOCS else "")
 def test_a_documented_node_parses_and_obeys_the_example_graphs_rules(doc, block, example):
-    """This is the check that would have caught the README's flagship node failing the
-    `underpowered` rule the moment that rule was added."""
     # Written under the id the block declares, not a fixed name: the filename IS the id,
     # so renaming a documented node here would trip `mismatched-id` on the harness's own
     # doing rather than on anything the docs got wrong.
     node = parse_text(block, "doc-example")
     nid = str(node.frontmatter.get("id") or "doc-example")
     assert node.type
-
     (example / "nodes" / f"{nid}.md").write_text(block, encoding="utf-8")
     violations = [v for v in check(load(example), example) if v.node == nid]
-
     assert not violations, f"{doc}: documented node violates the example graph's own rules: " \
                            + "; ".join(f"[{v.rule}] {v.message}" for v in violations)
 
 
 @pytest.mark.parametrize("doc,block", rule_blocks(), ids=lambda v: v if v in DOCS else "")
 def test_a_documented_rules_block_is_accepted_by_the_engine(doc, block, tmp_path):
-    """SPEC.md once documented `when: {status: alive}`, which the engine silently ignored.
-    Any config we print must be config we accept."""
     (tmp_path / "graph.yaml").write_text(block, encoding="utf-8")
-
     load_rules(tmp_path)         # raises GraphError on an unknown key
+
+
+@pytest.mark.parametrize("doc", PROSE)
+def test_the_prose_docs_use_no_em_dashes(doc):
+    text = (ROOT / doc).read_text(encoding="utf-8")
+    assert "\u2014" not in text, f"{doc} contains an em dash"
+
+
+@pytest.fixture
+def readme_compression(example, tmp_path, monkeypatch, capsys):
+    block = next(b for b in blocks("README.md") if "npx:supersedes" in b)
+    fm, body = FM_RE.match(block).groups()
+    (tmp_path / "fm").write_text(fm, encoding="utf-8")
+    (tmp_path / "body").write_text(body, encoding="utf-8")
+    monkeypatch.chdir(example)
+    assert main(["commit", "finding-sc-needs-scale",
+                 "--frontmatter", str(tmp_path / "fm"), "--body", str(tmp_path / "body")]) == 0
+    return capsys.readouterr().out
+
+
+def test_the_readmes_reward_block_is_what_the_command_actually_prints(readme_compression):
+    """The numbers in that block are the reward the whole feature exists to hand out."""
+    quoted = next(b for b in blocks("README.md") if b.startswith("  + nodes/"))
+    # One contiguous slice, not line by line: a block whose lines all appear somewhere is
+    # still a block nobody ever saw, and the order and the blank line are part of it.
+    assert quoted.rstrip("\n") in readme_compression
+
+
+def test_a_compression_is_not_warned_about_resembling_what_it_just_superseded(readme_compression):
+    warned = readme_compression.split("! This resembles")[1:]
+    assert warned, "the example no longer trips the resemblance warning at all"
+    assert "finding-sc-small-models" not in warned[0]
+    assert "finding-sc-large-models" not in warned[0]

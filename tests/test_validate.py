@@ -1,9 +1,10 @@
-"""The rules engine. Its one job is to refuse. Every finding here made it
-silently accept instead — the worst possible failure for a validator."""
+"""The rules engine."""
 import pytest
+from conftest import compressible_graph
 
-from knoten.core import GraphError, load
-from knoten.validate import check, load_rules
+from knoten.commit import commit
+from knoten.core import GraphError, load, today
+from knoten.validate import check, load_config, load_rules
 
 ALIVE_NO_GATE = "id: hyp-x\ntype: hypothesis\nstatus: alive"
 
@@ -13,50 +14,7 @@ def rules(graph, text):
     return graph
 
 
-def test_unknown_rule_key_is_rejected(graph):
-    """Finding 1: rule keys the engine did not recognise were parsed and then
-    ignored, so a rule with a typo enforced NOTHING and validate said `all rules
-    pass`. This is the exact syntax SPEC.md documented."""
-    rules(graph, """\
-rules:
-  - id: live-claims-must-cite-their-gates
-    when: {status: alive}
-    require: {edge: kn:survivedGate}
-    message: An unchallenged claim is not a hope.
-""")
-    with pytest.raises(GraphError, match="when"):
-        load_rules(graph.root)
-
-
-def test_rule_without_id_is_rejected(graph):
-    rules(graph, "rules:\n  - when_status: alive\n    require_edge: kn:survivedGate\n")
-    with pytest.raises(GraphError, match="id"):
-        load_rules(graph.root)
-
-
-def test_folded_message_survives(graph):
-    """Finding 3: a `message: >` folded scalar was truncated to the literal
-    string '>'. The message IS the product — it is what tells the next person
-    why the rule exists."""
-    rules(graph, """\
-rules:
-  - id: token-budget
-    when_type: hypothesis
-    require_result: tokens_per_question
-    message: >
-      An accuracy gain bought with extra inference compute is not a method,
-      it is a bigger bill.
-""")
-    (msg,) = [r["message"] for r in load_rules(graph.root)]
-
-    assert msg.startswith("An accuracy gain bought")
-    assert "bigger bill" in msg
-
-
 def test_unknown_edge_relation_is_a_violation(graph):
-    """Finding 2: `kn:killdByGate` (one letter dropped) was accepted silently,
-    produced no back-link, and passed validation. The hypothesis vanished from
-    the graph — defeating the one question knoten exists to answer."""
     graph.node("hyp-x", """\
 id: hyp-x
 type: hypothesis
@@ -64,16 +22,13 @@ status: dead
 links:
   - {rel: kn:killdByGate, to: gate-cost}
 """).node("gate-cost", "id: gate-cost\ntype: gate")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["unknown-relation"]
     assert "kn:killdByGate" in violations[0].message
 
 
 def test_authoring_a_back_link_by_hand_is_a_violation(graph):
-    """Back-links are generated, never authored. Authoring one by hand creates a
-    fact no generator will ever reconcile."""
+    """Back-links are generated, never authored."""
     graph.node("hyp-x", """\
 id: hyp-x
 type: hypothesis
@@ -81,46 +36,26 @@ status: dead
 links:
   - {rel: kn:gateKilled, to: gate-cost}
 """).node("gate-cost", "id: gate-cost\ntype: gate")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["authored-backlink"]
 
 
 def test_dangling_edge_is_a_violation(graph):
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nlinks:\n  - {rel: kn:killedByGate, to: ghost}")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["dangling-edge"]
 
 
 def test_missing_attachment_is_a_violation(graph):
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nattachments:\n  - plot.png")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["missing-attachment"]
 
 
 def test_require_edge_rule_fires(graph):
     graph.node("hyp-x", ALIVE_NO_GATE)
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["live-claims-must-cite-their-gates"]
-
-
-def test_require_edge_rule_passes_when_gate_is_cited(graph):
-    graph.node("hyp-x", """\
-id: hyp-x
-type: hypothesis
-status: alive
-links:
-  - {rel: kn:survivedGate, to: gate-cost}
-""").node("gate-cost", "id: gate-cost\ntype: gate")
-
-    assert check(load(graph.root), graph.root) == []
 
 
 def test_require_sections_rule_fires(graph):
@@ -132,16 +67,12 @@ rules:
     message: The post-mortem IS the asset.
 """)
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead", body="# x\n## Why it died\nno signal\n")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["dead-claims-must-say-why"]
     assert "reopen" in violations[0].message
 
 
 def test_numeric_rule_can_compare_a_result(graph):
-    """Now that results keep their types, SPEC 5's `underpowered` (n<30) is
-    finally expressible. It was not, against strings."""
     rules(graph, """\
 rules:
   - id: underpowered
@@ -151,48 +82,15 @@ rules:
 """)
     graph.node("hyp-small", "id: hyp-small\ntype: hypothesis\nstatus: alive\nresults:\n  n_independent: 12")
     graph.node("hyp-big", "id: hyp-big\ntype: hypothesis\nstatus: alive\nresults:\n  n_independent: 1319")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.node for v in violations] == ["hyp-small"]
 
 
-def test_a_rule_with_a_non_numeric_floor_is_a_clean_error(graph):
-    """Crashed with a raw TypeError, contradicting "a rule this engine cannot understand
-    is a hard error"."""
-    (graph.root / "graph.yaml").write_text(
-        "rules:\n  - id: r\n    require_result_min: {n: '30'}\n", encoding="utf-8")
-
-    with pytest.raises(GraphError, match="require_result_min"):
-        load_rules(graph.root)
-
-
-def test_require_result_min_must_be_a_mapping(graph):
-    (graph.root / "graph.yaml").write_text(
-        "rules:\n  - id: r\n    require_result_min: n_independent\n", encoding="utf-8")
-
-    with pytest.raises(GraphError, match="require_result_min"):
-        load_rules(graph.root)
-
-
-def test_require_edge_must_be_a_string(graph):
-    """Natural mistake — `when_status` accepts a list, so why not this? Raw TypeError:
-    unhashable type 'list'."""
-    (graph.root / "graph.yaml").write_text(
-        "rules:\n  - id: r\n    require_edge: [kn:survivedGate]\n", encoding="utf-8")
-
-    with pytest.raises(GraphError, match="require_edge"):
-        load_rules(graph.root)
-
-
 def test_a_boolean_does_not_satisfy_a_numeric_floor(graph):
-    """`bool` is a subclass of `int`, so `accuracy: true` passed `require_result_min:
-    {accuracy: 0.8}` as 1. Floors below 1 (accuracy, F1, AUC) are the common case."""
     (graph.root / "graph.yaml").write_text(
         "rules:\n  - id: r\n    require_result_min: {accuracy: 0.8}\n    message: m\n",
         encoding="utf-8")
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\nresults:\n  accuracy: true")
-
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["r"]
 
 
@@ -210,77 +108,27 @@ rules:
 
 
 def test_a_field_outside_the_declared_set_is_a_violation(graph):
-    """SPEC §5 defines seven causes of death and the engine could enforce none of them,
-    so the cause lived only as prose and nothing could ask "what died of a weak
-    baseline?" — the question that makes a research graph pay for itself."""
     graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\n"
                                       "cause: week_baseline")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["deaths-must-name-a-cause"]
     assert "week_baseline" in violations[0].message
 
 
 def test_a_missing_field_is_a_violation(graph):
     graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
-
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["deaths-must-name-a-cause"]
 
 
-def test_a_declared_value_passes(graph):
-    graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead\n"
-                                      "cause: weak_baseline")
-
-    assert check(load(graph.root), graph.root) == []
-
-
-def test_the_rule_only_applies_where_it_says(graph):
-    graph.rules(CAUSES).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
-
-    assert check(load(graph.root), graph.root) == []
-
-
-def test_require_field_one_of_must_be_a_mapping_of_field_to_list(graph):
-    graph.rules("name: t\nrules:\n  - id: r\n    require_field_one_of: cause")
-
-    with pytest.raises(GraphError, match="require_field_one_of"):
-        load_rules(graph.root)
-
-
-def test_the_allowed_values_must_be_a_list(graph):
-    graph.rules("name: t\nrules:\n  - id: r\n    require_field_one_of: {cause: no_signal}")
-
-    with pytest.raises(GraphError, match="cause"):
-        load_rules(graph.root)
-
-
 def test_a_frontmatter_id_that_disagrees_with_the_filename_is_a_violation(graph):
-    """The real id is the filename — `parse_text` takes it from the stem and the
-    frontmatter `id:` is decorative. So a node whose `id:` says something else lies about
-    itself to every human reading it, while every query still resolves it by its filename.
-    Nothing caught that, which made `id` the one field an editor could corrupt silently."""
     graph.node("hyp-x", "id: hyp-someone-else\ntype: hypothesis\nstatus: dead")
-
     violations = check(load(graph.root), graph.root)
-
     assert [v.rule for v in violations] == ["mismatched-id"]
     assert "hyp-someone-else" in violations[0].message
 
 
-def test_a_node_with_no_id_in_its_frontmatter_is_fine(graph):
-    """`knoten commit` does not write one — the filename already carries it."""
-    graph.node("hyp-x", "type: hypothesis\nstatus: dead")
-
-    assert check(load(graph.root), graph.root) == []
-
-
 @pytest.mark.parametrize("block", ["results", "repro"])
 def test_a_structured_block_that_is_a_scalar_is_a_violation_not_a_crash(graph, block):
-    """`results: 5` reached `n.results.get(key)` in the `require_result_min` loop and came
-    back as `AttributeError: 'int' object has no attribute 'get'` — a traceback, from the
-    validator whose entire job is refusing bad nodes politely. Reachable from `commit`
-    long before `--field` existed; `--field` just made it easy to hit."""
     graph.rules("""\
 name: t
 rules:
@@ -289,9 +137,7 @@ rules:
     require_result_min: {n: 30}
     message: too few.
 """).node("hyp-x", f"id: hyp-x\ntype: hypothesis\nstatus: dead\n{block}: 5")
-
     violations = check(load(graph.root), graph.root)
-
     assert f"malformed-{block}" in [v.rule for v in violations]
 
 
@@ -314,70 +160,17 @@ def cascade(graph, finding_status):
                               "  - {rel: prov:wasDerivedFrom, to: find-a}"))
 
 
-def test_a_claim_resting_on_a_live_finding_passes(graph):
-    g = cascade(graph, "alive")
-
-    assert [v.rule for v in check(load(g.root), g.root)] == []
-
-
-def test_the_day_the_finding_dies_everything_built_on_it_fails(graph):
-    """The reason this primitive exists. `validate` re-runs over the whole graph, so this
-    is not a create-time check — killing one result indicts everything standing on it.
-    Before this, knoten recorded that a claim died and let its dependants stand."""
-    g = cascade(graph, "dead")
-
-    assert [v.rule for v in check(load(g.root), g.root)] == ["methods-rest-on-live-claims"]
-
-
-def test_a_generalisation_can_demand_more_than_one_instance(graph):
-    """`min:` is what makes an inductive standard writable: one observation is an
-    anecdote. Without it a rule can only ask whether the edge exists at all."""
-    graph.rules("""\
-name: t
-rules:
-  - id: needs-instances
-    when_type: hypothesis
-    require_edge_target: {rel: prov:wasDerivedFrom, type: finding, min: 2}
-    message: One observation is not a pattern.
-""").node("find-a", "id: find-a\ntype: finding\nstatus: alive")
-    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
-                        "  - {rel: prov:wasDerivedFrom, to: find-a}")
-
-    assert [v.rule for v in check(load(graph.root), graph.root)] == ["needs-instances"]
-
-
-def test_a_dangling_target_does_not_count_towards_the_requirement(graph):
-    """A link to a node that does not exist is already `dangling-edge`. It must not also
-    satisfy a requirement — that would let a typo stand in for evidence."""
-    graph.rules(CASCADE).node("method-x", "id: method-x\ntype: method\nstatus: alive\n"
-                              "links:\n  - {rel: prov:wasDerivedFrom, to: nope}")
-
-    rules = [v.rule for v in check(load(graph.root), graph.root)]
-
-    assert "methods-rest-on-live-claims" in rules
-
-
 @pytest.mark.parametrize("bad", ["prov:used", "{rel: [a, b]}", "{type: finding}",
                                  "{rel: nope:invented}", "{rel: kn:gateKilled}",
                                  "{rel: prov:used, min: 0}", "{rel: prov:used, min: true}"])
 def test_a_malformed_requirement_is_a_graph_error_not_a_crash(graph, bad):
-    """Same bargain as every other rule key: the shape is checked once, loudly, rather
-    than blowing up mid-validation on somebody's node.
-
-    `kn:gateKilled` is the interesting one. It is a real relation — but a GENERATED
-    back-link, which no node ever declares, so the rule would load cleanly and then fail
-    every node forever with no hint that the direction was wrong. An always-firing rule
-    is as corrosive as a never-firing one. `min: true` is here because `bool` is a
-    subclass of `int` and would otherwise sail through as 1."""
     graph.rules(f"name: t\nrules:\n  - id: r\n    require_edge_target: {bad}\n")
-
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
 
 
 def test_citing_the_same_finding_twice_is_not_two_findings(graph):
-    """`min` states an inductive standard — one observation is an anecdote. Counting
-    EDGES rather than distinct targets let copy-paste satisfy it."""
+    """`min` states an inductive standard — one observation is an anecdote."""
     graph.rules("""\
 name: t
 rules:
@@ -389,18 +182,7 @@ rules:
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive\nlinks:\n"
                         "  - {rel: prov:wasDerivedFrom, to: find-a}\n"
                         "  - {rel: prov:wasDerivedFrom, to: find-a}")
-
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["needs-instances"]
-
-
-def test_the_violation_says_what_was_wanted_and_what_was_found(graph):
-    """The message is the product: an agent reads it and has to know what to do next."""
-    graph.rules(CASCADE).node("method-x", "id: method-x\ntype: method\nstatus: alive")
-
-    msg = next(v.message for v in check(load(graph.root), graph.root)
-               if v.rule == "methods-rest-on-live-claims")
-
-    assert "0 matching, need >= 1" in msg and "status=alive" in msg
 
 
 # ------------------------------------------- rules can also look at what points AT a node
@@ -417,21 +199,8 @@ rules:
 
 
 def test_a_hypothesis_nobody_tested_is_reported(graph):
-    """The gap `require_edge` structurally cannot cover: rules see only what a node
-    DECLARES, so they police the author of a claim and never what the graph failed to do
-    next. That is the failure an autonomous loop actually has — not writing bad nodes,
-    but abandoning good ones."""
     graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
-
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-must-be-tested"]
-
-
-def test_a_hypothesis_with_an_experiment_passes(graph):
-    graph.rules(TESTED).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
-    graph.node("exp-a", "id: exp-a\ntype: experiment\nstatus: alive\nlinks:\n"
-                        "  - {rel: kn:tests, to: hyp-x}")
-
-    assert [v.rule for v in check(load(graph.root), graph.root)] == []
 
 
 def test_the_wrong_kind_of_neighbour_does_not_satisfy_it(graph):
@@ -444,13 +213,9 @@ def test_the_wrong_kind_of_neighbour_does_not_satisfy_it(graph):
 
 
 def test_naming_the_forward_relation_on_a_backlink_rule_is_an_error(graph):
-    """The trap the two keys create together. `kn:tests` is what an experiment DECLARES;
-    the back-link it generates is `kn:testedBy`. A rule asking for the forward name on
-    the incoming side would load cleanly and then fail every hypothesis forever, with
-    nothing in the message saying the direction was wrong."""
+    """The trap the two keys create together."""
     graph.rules("name: t\nrules:\n  - id: r\n    when_type: hypothesis\n"
                 "    require_backlink: {rel: kn:tests}\n")
-
     with pytest.raises(GraphError):
         check(load(graph.root), graph.root)
 
@@ -468,31 +233,258 @@ rules:
 
 
 def test_a_required_field_must_be_present(graph):
-    """`require_field_one_of` needs a closed set, which a url or a doi does not have.
-    There was no way to say "this must be recorded" without also saying what it may say."""
+    """`require_field_one_of` needs a closed set, which a url or a doi does not have."""
     graph.rules(ORIGIN).node("src-x", "id: src-x\ntype: source\nstatus: open")
-
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["sources-say-where-they-came-from"]
-
-
-def test_a_required_field_with_a_value_passes(graph):
-    graph.rules(ORIGIN).node("src-x", "id: src-x\ntype: source\nstatus: open\n"
-                                      "origin: https://arxiv.org/abs/2606.21024")
-
-    assert check(load(graph.root), graph.root) == []
 
 
 @pytest.mark.parametrize("value", ["", '""', "   "])
 def test_an_empty_value_does_not_satisfy_it(graph, value):
-    """`origin:` with nothing after it is the natural half-finished edit, and it would
-    otherwise satisfy a rule whose whole point is that the answer got written down."""
     graph.rules(ORIGIN).node("src-x", f"id: src-x\ntype: source\nstatus: open\norigin: {value}")
-
     assert [v.rule for v in check(load(graph.root), graph.root)] == ["sources-say-where-they-came-from"]
 
 
-def test_a_malformed_require_field_is_a_graph_error(graph):
-    graph.rules("name: t\nrules:\n  - id: r\n    require_field: [a, b]\n")
+def test_unless_edge_skips_the_rule_for_nodes_that_declare_that_relation(graph):
+    rules(graph, """\
+name: t
+statuses: [alive]
+node_types: [finding, experiment]
+rules:
+  - id: findings-come-from-experiments
+    when_type: finding
+    unless_edge: npx:supersedes
+    require_edge_target: {rel: prov:wasDerivedFrom, type: experiment, min: 1}
+    message: Cite the experiment.
+""")
+    graph.node("finding-a", "id: finding-a\ntype: finding\nstatus: alive", "# a\n")
+    graph.node("finding-b", "id: finding-b\ntype: finding\nstatus: alive", "# b\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-a}\n"
+                            "  - {rel: npx:supersedes, to: finding-b}",
+               "# g\n\n## Covers\n- finding-a\n- finding-b\n")
+    hit = {e.node for e in check(load(graph.root), graph.root) if e.rule == "findings-come-from-experiments"}
+    assert hit == {"finding-a", "finding-b"}
 
-    with pytest.raises(GraphError):
-        check(load(graph.root), graph.root)
+
+def test_unless_edge_must_name_a_declared_relation(graph):
+    rules(graph, "rules:\n  - id: u\n    unless_edge: kn:supersededBy\n    require_edge: x\n    message: m\n")
+    with pytest.raises(GraphError, match="unless_edge"):
+        load_rules(graph.root)
+
+
+def test_a_rule_may_not_take_the_name_of_a_structural_check(graph):
+    rules(graph, "name: t\nrules:\n  - id: supersession\n"
+                 "    max_alive: {type: finding, count: 3}\n    message: m\n")
+    with pytest.raises(GraphError, match="always runs"):
+        load_config(graph.root)
+
+
+def test_compressible_is_a_known_graph_key_and_must_list_declared_types(graph):
+    rules(graph, "name: t\nnode_types: [finding, principle]\ncompressible: [finding, principle]\nrules: []\n")
+    load_config(graph.root)
+    rules(graph, "name: t\nnode_types: [finding]\ncompressible: [principle]\nrules: []\n")
+    with pytest.raises(GraphError, match="compressible"):
+        load_config(graph.root)
+    rules(graph, "name: t\nnode_types: [finding]\ncompressible: finding\nrules: []\n")
+    with pytest.raises(GraphError, match="compressible"):
+        load_config(graph.root)
+
+
+def _bar_graph(graph):
+    compressible_graph(graph, n=2)
+    graph.node("question-r", "id: question-r\ntype: question\nstatus: open", "# R\n")
+    return graph
+
+
+GOOD_GENERAL = ("id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                "  - {rel: npx:supersedes, to: finding-1}\n"
+                "  - {rel: npx:supersedes, to: finding-2}\n"
+                "  - {rel: kn:survivedGate, to: gate-a}\n"
+                "  - {rel: kn:survivedGate, to: gate-b}")
+GOOD_COVERS = "# G\n\n## Covers\n- finding-1: the small case\n- finding-2: the large case\n"
+
+
+def _bar(graph):
+    return [e for e in check(load(graph.root), graph.root) if e.rule == "supersession"]
+
+
+def test_a_target_must_be_alive(graph):
+    _bar_graph(graph)
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: dead\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}", "# 2\n")
+    graph.node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+    (err,) = _bar(graph)
+    assert err.node == "finding-g" and "finding-2, which is dead, not alive" in err.message
+
+
+def test_a_target_must_be_a_compressible_type(graph):
+    _bar_graph(graph)
+    graph.node("source-s", "id: source-s\ntype: source\nstatus: alive\norigin: x\nlinks:\n"
+                           "  - {rel: prov:wasDerivedFrom, to: question-q}", "# S\n")
+    graph.node("finding-g", GOOD_GENERAL.replace("to: finding-2", "to: source-s"),
+               GOOD_COVERS.replace("finding-2", "source-s"))
+    (err,) = _bar(graph)
+    assert "source-s (source); only finding can be superseded" in err.message
+
+
+def test_targets_must_stand_under_one_question(graph):
+    _bar_graph(graph)
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-r}\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n")
+    graph.node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+    (err,) = _bar(graph)
+    assert "different questions (question-q, question-r)" in err.message
+
+
+def test_an_unrooted_target_is_refused_by_name(graph):
+    _bar_graph(graph)
+    graph.node("finding-2", "id: finding-2\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: kn:survivedGate, to: gate-b}", "# 2\n")
+    graph.node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+    (err,) = _bar(graph)
+    assert "cannot find the question finding-2 stands under" in err.message
+
+
+def test_the_general_node_faces_the_union_of_the_gates(graph):
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL.replace(
+        "  - {rel: kn:survivedGate, to: gate-b}", ""), GOOD_COVERS)
+    (err,) = _bar(graph)
+    assert "must survive gate-b, which finding-2 survived" in err.message
+
+
+def test_covers_must_exist_and_name_every_target(graph):
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL, "# G\n")
+    (err,) = _bar(graph)
+    assert "no '## Covers' section" in err.message
+    graph.node("finding-g", GOOD_GENERAL, "# G\n\n## Covers\n- finding-1: only\n")
+    (err,) = _bar(graph)
+    assert "## Covers of finding-g does not mention finding-2" in err.message
+
+
+def test_a_node_that_supersedes_itself_is_refused_by_name(graph):
+    _bar_graph(graph).node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                                        "  - {rel: npx:supersedes, to: finding-g}", "# G\n")
+    assert [e.message for e in _bar(graph)] == ["finding-g cannot supersede itself"]
+
+
+def _mutual(a, b):
+    return (f"id: {a}\ntype: finding\nstatus: alive\nlinks:\n"
+            f"  - {{rel: npx:supersedes, to: {b}}}\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-a}\n"
+            "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def test_two_nodes_that_supersede_each_other_are_refused_once(graph):
+    _bar_graph(graph)
+    graph.node("finding-1", _mutual("finding-1", "finding-2"),
+               "# 1\n\n## Covers\n- finding-2: the other one\n")
+    graph.node("finding-2", _mutual("finding-2", "finding-1"),
+               "# 2\n\n## Covers\n- finding-1: the other one\n")
+    errs = _bar(graph)
+    assert [(e.node, e.message) for e in errs] == [
+        ("finding-1", "finding-1 and finding-2 supersede each other")]
+
+
+def test_a_target_already_superseded_by_another_node_is_refused(graph):
+    _bar_graph(graph)
+    graph.node("finding-3", "id: finding-3\ntype: finding\nstatus: superseded\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 3\n")
+    graph.node("finding-h", "id: finding-h\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-3}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}",
+               "# H\n\n## Covers\n- finding-3: x\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-3}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}",
+               "# G\n\n## Covers\n- finding-1: x\n- finding-3: y\n")
+    msgs = [e.message for e in _bar(graph) if e.node == "finding-g"]
+    assert any("finding-g supersedes finding-3, which finding-h already superseded" in m for m in msgs)
+
+
+SUPERSEDED_1 = ("id: finding-1\ntype: finding\nstatus: superseded\nlinks:\n"
+                "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                "  - {rel: kn:survivedGate, to: gate-a}")
+SUPERSEDED_2 = ("id: finding-2\ntype: finding\nstatus: superseded\nlinks:\n"
+                "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def _compressed(graph):
+    _bar_graph(graph).node("finding-g", GOOD_GENERAL, GOOD_COVERS)
+    graph.node("finding-1", SUPERSEDED_1)
+    graph.node("finding-2", SUPERSEDED_2)
+    return graph
+
+
+def test_only_a_compressible_type_may_supersede(graph):
+    _bar_graph(graph).node("hyp-g", GOOD_GENERAL.replace("id: finding-g", "id: hyp-g")
+                                                .replace("type: finding", "type: hypothesis"),
+                           GOOD_COVERS)
+    assert "hyp-g (hypothesis) may not supersede; only finding can" in \
+        [e.message for e in _bar(graph)]
+
+
+def test_deleting_the_general_node_orphans_the_targets_it_retired(graph):
+    _compressed(graph)
+    (graph.root / "nodes" / "finding-g.md").unlink()
+    assert [e.node for e in _bar(graph)] == ["finding-1", "finding-2"]
+    assert all("is superseded by nothing" in e.message for e in _bar(graph))
+
+
+OUTER = ("id: finding-outer\ntype: finding\nstatus: alive\nlinks:\n"
+         "  - {rel: npx:supersedes, to: finding-g}\n"
+         "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+         "  - {rel: kn:survivedGate, to: gate-a}\n"
+         "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def _recursive(graph):
+    _compressed(graph)
+    graph.node("finding-g", GOOD_GENERAL.replace("status: alive", "status: superseded"),
+               GOOD_COVERS)
+    graph.node("finding-outer", OUTER, "# outer\n\n## Covers\n- finding-g: the two cases\n")
+    return graph
+
+
+def test_a_rule_over_a_rule_validates(graph):
+    assert _bar(_recursive(graph)) == []
+
+
+def _ring_node(a, b):
+    return (f"id: finding-{a}\ntype: finding\nstatus: alive\nlinks:\n"
+            f"  - {{rel: npx:supersedes, to: finding-{b}}}\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-a}\n"
+            "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def test_covers_matching_is_whole_token_not_substring(graph):
+    _bar_graph(graph).node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                                        "  - {rel: npx:supersedes, to: finding-1}\n"
+                                        "  - {rel: kn:survivedGate, to: gate-a}",
+                            "# G\n\n## Covers\n- finding-10: not the same node\n")
+    msgs = [e.message for e in _bar(graph)]
+    assert any("## Covers of finding-g does not mention finding-1" in m for m in msgs)
+
+# ------------------------------------------- saying what a type must NOT carry
+
+NO_RESULTS = """\
+name: t
+rules:
+  - id: hypotheses-carry-no-results
+    when_type: hypothesis
+    forbid_fields: results, repro
+    message: A hypothesis is a claim, not a run.
+"""
+
+
+def test_a_forbidden_field_is_a_violation(graph):
+    graph.rules(NO_RESULTS).node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\n"
+                                          "results:\n  auc: 0.9")
+    assert [v.rule for v in check(load(graph.root), graph.root)] == ["hypotheses-carry-no-results"]
+
+

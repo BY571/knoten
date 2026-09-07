@@ -27,6 +27,36 @@ except ImportError:                           # pragma: no cover
 
 LOCK = ".knoten.lock"
 
+# The ceiling on one push, named once so the server's read bound and the repo's own
+# `receive.maxInputSize` cannot drift apart: a body the HTTP layer accepts and git then
+# refuses is a push that spends the bandwidth before it is told no.
+MAX_PUSH_BYTES = 100 * 1024 * 1024
+
+# What every git the SERVER runs must be told, so the git that INSTALLS the gate and the
+# git that ENFORCES it agree on where hooks live: with `core.hooksPath` in the daemon's
+# ~/.gitconfig they did not, the hook landed where nothing would run it, and a push that
+# breaks the graph returned rc 0. A gate that fails OPEN reports green forever. Dropping
+# global config also drops `init.templateDir`, deliberately: a template directory is one
+# more place a hook can arrive from. Neither `knoten hook` nor `knoten hook --server` may
+# use this -- honouring core.hooksPath is right in a clone, and the second repo is served
+# by somebody else's receive-pack.
+SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                  # A graph directory named "*" once widened `git archive`'s pathspec to
+                  # the whole repo; literal pathspecs make every name a plain path, glob
+                  # metacharacters included.
+                  "GIT_LITERAL_PATHSPECS": "1"}
+
+
+def server_git_env() -> dict:
+    """The environment every server-side git subprocess must run under: the operator's
+    shell, minus every GIT_* variable it might carry, with SERVER_GIT_ENV then reapplied
+    on top. `-C <repo>` is not enough on its own -- an absolute GIT_DIR left in the
+    environment (the operator's shell, a stray export) outranks `-C` and points git at a
+    repo nobody asked for, silently: a `-C` flag was verified to lose that race. Every
+    site that reads a HOSTED repo from outside its own process (gate._git, Registry.create)
+    must build its env from this, never from `{**os.environ, **SERVER_GIT_ENV}` alone."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | SERVER_GIT_ENV
+
 
 class GraphError(Exception):
     """The graph on disk is malformed. Always name the file."""
@@ -43,11 +73,8 @@ INVERSE = {
     "npx:retracts":        "npx:retractedBy",
     "npx:supersedes":      "npx:supersededBy",
     "prov:wasDerivedFrom": "prov:hadDerivation",
-    # How a claim was reached, not merely that it was. `prov:wasDerivedFrom` records the
-    # fact of a derivation and never its kind; these three name the kind, so a rule can
-    # demand something of one without demanding it of all (SPEC §4). Plain verbs, and
-    # inverses read from the object, matching the gate pair above — Peirce's own words
-    # would be worse here: "abduced" reads as "abducted".
+    # How a claim was reached, not merely that it was: `prov:wasDerivedFrom` records the
+    # fact of a derivation and never its kind, so a rule can demand one kind (SPEC §4).
     "kn:explains":         "kn:explainedBy",
     "kn:generalises":      "kn:generalisedBy",
     "kn:followsFrom":      "kn:entails",
@@ -58,33 +85,54 @@ GENERATED = set(INVERSE.values())
 # The claim lifecycle. A node with any other status is not a claim (a gate, a source).
 VERDICT = {"alive": "ALIVE", "dead": "DEAD", "retracted": "RETRACTED"}
 
-# The three conventions `frontier` reads. They are conventions, not core vocabulary — a
-# graph that names things differently gets an empty bucket, not a wrong answer. They are
-# named here rather than buried so that stays obvious.
+# Conventions `frontier` reads, not core vocabulary: a graph that names things
+# differently gets an empty bucket, not a wrong answer. Named here so that stays obvious.
 OPEN = "open"
 REOPEN_SECTION = "What would reopen this"
 GATE_TYPE = "gate"
 GATE_SECTIONS = ("The rule", "Why it exists")
+# The claim types `frontier`'s `unchecked` band watches. Gates are advisory by default,
+# so this is the only place an alive claim with no gate shows up as unfinished.
+CLAIM_TYPES = ("hypothesis", "finding")
+
+SUPERSEDES = "npx:supersedes"
+QUESTION_TYPE = "question"
+# What a general node may supersede when the graph declares nothing. Named once so the
+# frontier, the clusterer and the validator cannot disagree.
+DEFAULT_COMPRESSIBLE = ("finding",)
+# The edges that lead back towards the question a node serves. A node no walk over them
+# reaches is unrooted, and compression refuses it: "same question" cannot be decided.
+ROOTING_RELS = ("prov:wasDerivedFrom", "kn:tests", "kn:explains", "kn:followsFrom",
+                "kn:generalises", SUPERSEDES, "mp:supports", "mp:challenges")
 
 FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 
-# An id becomes a filename, so anything else is a path traversal. Go through node_path()
-# for EVERY id -> file conversion: `knoten detach ../../x f` used to delete a file outside
-# the graph: an id authored by a model is not a path, and only one entry point
-# checked that — not the one people used.
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# An id becomes a filename, so anything else is a path traversal: go through node_path()
+# for EVERY id -> file conversion (`knoten detach ../../x f` once deleted a file outside
+# the graph). `\\Z`, not `$`: `$` lets a trailing newline through, and `"maria\\n"` goes on
+# to be a filename, a directory, a URL segment and a line in the credentials file.
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
+
+# An invite is a bearer secret. A year is already generous for one. Here rather than in
+# the registry so the client's own bound and the server's cannot drift apart.
+MAX_DAYS = 365
+
+# A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
+# bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an
+# opaque OSError after the data directory had already been touched.
+MAX_NAME = 64
+
+# Undated work sorts LAST, with the newest. Empty-string-first put it in slot 0 of the viz
+# layout and pushed every node along, and it would make an undated node the baseline every
+# later result is measured against.
+UNDATED = "9999"
 
 
 @contextmanager
 def graph_lock(root: Path):
-    """One writer at a time, for the read-modify-write windows.
-
-    `attach` reads a node's frontmatter, copies files, then rewrites the list. Two agents
-    doing that at once lost one of the two lists — and the file stayed parseable, so
-    `validate` passed while the frontmatter no longer mentioned a file on disk. Parallel
-    agents are the obvious way to scale a research loop, and this is the step most likely
-    to happen at the same moment.
-    """
+    """One writer at a time, for the read-modify-write windows. Two agents attaching to
+    one node at once lost a list, and the file stayed parseable, so `validate` passed
+    while the frontmatter no longer mentioned a file on disk."""
     if fcntl is None:                         # pragma: no cover
         yield
         return
@@ -97,9 +145,8 @@ def graph_lock(root: Path):
 
 
 def write_atomic(path: Path, text: str) -> None:
-    """Write via a temp file in the same directory, then rename. A reader either sees the
-    old node or the new one — never the half-written one, which does not parse and takes
-    the whole graph down with it, since load() raises rather than skips."""
+    """Temp file in the same directory, then rename: a reader sees the old node or the
+    new one, never a half-written one, which load() raises on rather than skips."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -111,8 +158,7 @@ def write_atomic(path: Path, text: str) -> None:
 
 
 def today() -> str:
-    """The stamp knoten writes. A plain ISO date: it sorts lexicographically, survives
-    the YAML 1.2 loader as a string, and diffs cleanly in git."""
+    """A plain ISO date: sorts lexicographically, survives the loader as a string."""
     return date.today().isoformat()
 
 
@@ -125,19 +171,11 @@ def node_path(root: Path, nid: str) -> Path:
 class _Loader(yaml.SafeLoader):
     """YAML 1.2 scalars, not YAML 1.1.
 
-    PyYAML is YAML 1.1, whose implicit typing silently rewrites `results:` — the block
-    holding the numbers this tool exists to protect:
-
-        tags: [no, off]     -> [False, False]   the "Norway problem"
-        wallclock: 12:30    -> 750              sexagesimal
-        seed: 042           -> 34               octal (but `08` stays a string!)
-        n: 1_000            -> 1000             digit separators
-        run: 2024-01-15     -> datetime.date    implicit timestamps
-
-    Rather than patch these one at a time, swap the implicit resolvers for the 1.2 core
-    schema, which has none of them. Anything we cannot confidently type stays a string —
-    the safe direction, since a string fails a numeric rule loudly while a silently
-    rewritten number does not.
+    PyYAML is YAML 1.1, whose implicit typing silently rewrites the `results:` block this
+    tool exists to protect: `[no, off]` becomes `[False, False]`, `12:30` becomes 750,
+    `042` becomes 34, `1_000` becomes 1000, `2024-01-15` becomes a date. So swap the
+    implicit resolvers for the 1.2 core schema, which has none of them. Anything we
+    cannot confidently type stays a string, which fails a numeric rule loudly.
     """
 
 
@@ -186,15 +224,14 @@ class Node:
 
     @property
     def title(self) -> str:
-        """The H1 — the claim itself, in one line. This is what makes an index row
-        judgeable: an id alone cannot be compared against a new idea."""
+        """The H1 — the claim in one line. An id alone cannot be judged against a new
+        idea, which is what makes an index row worth reading."""
         return _title(self.body)
 
     @property
     def tags(self) -> list:
-        """A bare `tags: decoding` is legal YAML that iterates as characters. `validate`
-        reports it as malformed-tags; here it reads as untagged rather than as five
-        one-letter tags."""
+        """A bare `tags: decoding` is legal YAML that iterates as characters: read as
+        untagged here, reported as malformed-tags by `validate`."""
         raw = self.frontmatter.get("tags")
         return [str(x) for x in raw] if isinstance(raw, list) else []
 
@@ -228,8 +265,8 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
 
 
 def parse_text(text: str, nid: str, label: str | None = None) -> Node:
-    """Build a Node from a string. Used by `knoten commit` to validate a candidate
-    node in memory, so an invalid node never reaches the filesystem at all."""
+    """Build a Node from a string, so `commit` can validate a candidate in memory and an
+    invalid node never reaches the filesystem."""
     label = label or f"{nid}.md"
     fm, body = split(text, label)
 
@@ -273,9 +310,7 @@ def backlink(nodes: dict[str, Node]) -> dict[str, Node]:
 
 
 # ---------------------------------------------------------------------------------
-# Shared. These lived twice — once in cli.py, once in a second surface since removed —
-# and drifted: one path printed relation labels and the other did not, and a
-# search fix landed in one copy and not the other.
+# Shared. These lived twice, on two surfaces, and drifted.
 
 def find_root(start: Path | None = None) -> Path:
     """The graph containing `start` (default: cwd). A graph is the folder with graph.yaml."""
@@ -286,10 +321,16 @@ def find_root(start: Path | None = None) -> Path:
     raise GraphError("no graph.yaml found (run `knoten init` or cd into a graph)")
 
 
-def section(body: str, title: str) -> str | None:
-    """The prose under a `## <title>` heading, whitespace-collapsed."""
+def section(body: str, title: str, collapse: bool = True) -> str | None:
+    """The prose under a `## <title>` heading.
+
+    Collapsed to one line by default, because the CLI prints it inline. `collapse=False`
+    keeps the newlines: the difference between a result table and a row of pipes.
+    """
     m = re.search(rf"^##+ {re.escape(title)}\s*\n+(.+?)(?=\n##|\Z)", body, re.S | re.M)
-    return " ".join(m.group(1).split()) if m else None
+    if not m:
+        return None
+    return " ".join(m.group(1).split()) if collapse else m.group(1).strip()
 
 
 def _tokens(s: str) -> list[str]:
@@ -297,8 +338,7 @@ def _tokens(s: str) -> list[str]:
 
 
 # Function words an agent's question carries and a node never means. Domain words are
-# NEVER listed here — a corpus-common word like "accuracy" is handled by idf below,
-# which is adaptive; a hardcoded one would be a permanent blind spot.
+# NEVER listed here: idf below handles a corpus-common word, adaptively.
 _STOP = {
     "a", "about", "again", "all", "an", "and", "any", "anybody", "anyone", "anything",
     "are", "as", "at", "be", "been", "before", "being", "but", "by", "did", "do", "does",
@@ -319,9 +359,8 @@ _STRONG, _MEDIUM, _WEAK = 3.0, 2.0, 1.0
 
 
 def _flatten(obj, out: list) -> list:
-    """Every scalar in the frontmatter, plus the keys a human chose (`tokens_per_question`,
-    `acc_greedy`). The haystack was id + body + tags, so `repro.model: Qwen3-8B` was
-    unsearchable and two nodes that ran on the same benchmark answered as one."""
+    """Every scalar in the frontmatter, plus the keys a human chose. With id + body +
+    tags alone, `repro.model: Qwen3-8B` was unsearchable."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             if str(k) not in _STRUCTURAL:
@@ -341,13 +380,9 @@ def _title(body: str) -> str:
 
 
 def fields(n: Node) -> tuple[set, set, set]:
-    """(id+title, tags, everything).
-
-    Cached on the node because `retrieve` walks the pool twice — once to count document
-    frequencies, once to score — and tokenising is the bulk of the work: 33ms vs 150ms
-    for one query over 500 nodes. The cache does NOT survive between calls; `load` builds
-    fresh Nodes, so every tool call pays the first pass.
-    """
+    """(id+title, tags, everything). Cached on the node because `retrieve` walks the pool
+    twice and tokenising is the bulk of the work: 33ms vs 150ms over 500 nodes. `load`
+    builds fresh Nodes, so the cache never survives a call."""
     if n.tokens is None:
         strong = set(_tokens(f"{n.id} {_title(n.body)}"))
         medium = set(_tokens(" ".join(str(t) for t in (n.frontmatter.get("tags") or []))))
@@ -357,15 +392,15 @@ def fields(n: Node) -> tuple[set, set, set]:
 
 
 def moved(n: Node) -> str:
-    """When this claim last moved — updated if it has, else created. Not when the FILE
-    changed: a typo fix and a status flip are the same event to git."""
+    """When this claim last moved. Not when the FILE changed: to git a typo fix and a
+    status flip are the same event."""
     fm = n.frontmatter
     return max(str(fm.get("updated") or ""), str(fm.get("created") or ""))
 
 
 def _passes(n: Node, tags, status, type, where, since) -> bool:
-    # An unstamped node predates stamping and cannot answer a question about time. Better
-    # absent from a `since` view than silently assumed recent.
+    # An unstamped node cannot answer a question about time: better absent from a
+    # `since` view than silently assumed recent.
     if since and moved(n) < str(since):
         return False
     if status and n.status not in status:
@@ -374,8 +409,7 @@ def _passes(n: Node, tags, status, type, where, since) -> bool:
         return False
     if tags and not set(n.tags) & set(tags):
         return False
-    # Generic, because the core knows no domain: "everything that died of a weak
-    # baseline" is one graph's question, and `cause` is one graph's field name.
+    # Generic, because the core knows no domain: `cause` is one graph's field name.
     for key, allowed in (where or {}).items():
         got = n.frontmatter.get(key)
         if got is None or str(got) not in {str(a) for a in allowed}:
@@ -383,27 +417,18 @@ def _passes(n: Node, tags, status, type, where, since) -> bool:
     return True
 
 
-# Keep a hit only if it scores within this fraction of the best hit. Adaptive, so there
-# is no absolute threshold to tune per graph: one strong match suppresses the long tail
-# of nodes that merely share a common word with the query.
+# Keep a hit only if it scores within this fraction of the best. Adaptive, so there is
+# no per-graph threshold: one strong match suppresses the long common-word tail.
 RELATIVE_FLOOR = 0.35
 
 
 def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
              status=None, type=None, where=None, since=None) -> list[Node]:
     """Rank nodes by relevance to `query`, narrowed by the filters. Ranked, not filtered:
-
-    ANDing every token meant one unmatched word silenced the whole query, so
-    `"has anyone tried self-consistency?"` — the README's own example — answered "no
-    prior work found" about a hypothesis the graph was holding, dead and documented.
-    A false "untested" is the only failure of this tool that costs real work.
-
-    Tokens are weighted by idf, so a word in every node counts for nothing without
-    anybody having to list it, and a rare one dominates.
-
-    This is the ONE retrieval seam: `query` and `index` both come through
-    here, so a semantic backend replaces this body and nothing above it changes.
-    """
+    ANDing every token let one unmatched word silence the query and answer "no prior work"
+    about a hypothesis the graph was holding, and a false "untested" is the only failure
+    of this tool that costs real work. idf weighting means a word in every node counts for
+    nothing. The ONE retrieval seam, so a semantic backend replaces this body alone."""
     pool = [n for n in nodes.values() if _passes(n, tags, status, type, where, since)]
     if query is None:
         return sorted(pool, key=lambda n: n.id)
@@ -433,9 +458,9 @@ def retrieve(nodes: dict[str, Node], query: str | None = None, tags=None,
 
 
 def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str]] | None:
-    """BFS over the graph read as undirected — "how did we get from A to B?" doesn't care
-    which way an edge points. Returns [(node_id, relation_taken_to_reach_it), ...], the
-    first with an empty relation. `←rel` means the edge was traversed backwards."""
+    """BFS over the graph read as undirected: "how did we get from A to B?" does not care
+    which way an edge points. [(node_id, relation_taken), ...], the first with an empty
+    relation; `←rel` means the edge was traversed backwards."""
     for nid in (a, b):
         if nid not in nodes:
             raise GraphError(f"no node '{nid}'")
@@ -460,33 +485,236 @@ def shortest_path(nodes: dict[str, Node], a: str, b: str) -> list[tuple[str, str
 
 def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
     """Every gate, with what it killed and what survived it: [(node, killed, survived)].
-
-    An agent used to meet a gate by being REJECTED by it, once the experiment had already
-    run. The gates are the reusable asset (SPEC §1), so they belong in front of the work
-    as a specification. The record is free — the back-links are already generated.
-    """
+    Gates are the reusable asset (SPEC §1), so they belong in front of the work as a
+    specification, not behind it as a rejection."""
     return [(n,
              [b["to"] for b in n.backlinks if b["rel"] == "kn:gateKilled"],
              [b["to"] for b in n.backlinks if b["rel"] == "kn:gateSurvivedBy"])
             for n in sorted(nodes.values(), key=lambda n: n.id) if n.type == GATE_TYPE]
 
 
-def frontier(nodes: dict[str, Node]) -> dict:
-    """What is worth doing next, in three buckets.
-
-    `## What would reopen this` is the standing offer SPEC §5 insists on, and until now
-    the only way to act on one was to re-read every post-mortem and notice the world had
-    changed. This does not try to decide whether a condition is *met* — that is a
-    judgement, and encoding it as a predicate would be either trivially wrong or an
-    ontology project. It presents the offers cheaply and lets the reader judge, the same
-    bargain `retrieve` makes with an index.
-    """
+def frontier(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> dict:
+    """What is worth doing next, in five buckets. This never decides whether a reopen
+    condition is *met* -- that is a judgement, and encoding it would be either trivially
+    wrong or an ontology project; it presents the offers cheaply and lets the reader
+    judge. `unchecked` is the advisory counterpart to `live-claims-must-cite-their-gates`:
+    with that rule commented out (the default) this is the only place such a claim shows
+    up."""
     ordered = sorted(nodes.values(), key=lambda n: n.id)
     return {
+        "compressible": compressible(nodes, types),
         "open": [n for n in ordered if n.status == OPEN],
+        "unchecked": [n for n in ordered if n.status == "alive" and n.type in CLAIM_TYPES
+                     and not any(l["rel"] == "kn:survivedGate" for l in n.links)],
         "reopenable": [(n, offer) for n in ordered
                        if n.status in ("dead", "retracted")
                        and (offer := section(n.body, REOPEN_SECTION))],
         "untested_gates": [n for n, killed, survived in gates(nodes)
                            if not killed and not survived],
     }
+
+
+def question_of(nodes: dict[str, Node], nid: str) -> str | None:
+    """The question `nid` stands under, or None when no rooting walk reaches one."""
+    seen, queue = {nid}, deque([nid])
+    while queue:
+        cur = nodes.get(queue.popleft())
+        if cur is None:
+            continue
+        if cur.type == QUESTION_TYPE:
+            return cur.id
+        for l in cur.links:
+            if l["rel"] in ROOTING_RELS and l["to"] not in seen:
+                seen.add(l["to"])
+                queue.append(l["to"])
+    return None
+
+
+def supersedes(n: Node) -> list[str]:
+    """Distinct ids this node supersedes, in id order."""
+    return sorted({l["to"] for l in n.links if l["rel"] == SUPERSEDES})
+
+
+def under(nodes: dict[str, Node]) -> dict[str, str]:
+    """Who covers whom: for every retired node, the id of the node that retired it (the
+    first by id, since several is a `validate` violation and the page must still draw).
+
+    A superseder counts while it is alive OR itself superseded: a rule over two rules over
+    four findings leaves the inner rules `superseded`, and reading only alive superseders
+    would call all four findings loose and draw them beside the rule that covers them. A
+    superseder that is dead or retracted covers nothing -- it has stopped standing for
+    what it retired. A self-target is not an edge here: without that guard a node covered
+    itself."""
+    claims: dict[str, list[str]] = {}
+    for n in nodes.values():
+        if n.status not in ("alive", "superseded"):
+            continue
+        for t in supersedes(n):
+            if t in nodes and t != n.id:
+                claims.setdefault(t, []).append(n.id)
+    return {t: min(cs) for t, cs in claims.items()}
+
+
+def is_general(n: Node) -> bool:
+    """A general node covers two or more; one target is a replacement, not a rule."""
+    return len(supersedes(n)) >= 2
+
+
+def standing(nodes: dict[str, Node], types: tuple[str, ...]) -> list[Node]:
+    """The alive nodes of `types` that nothing alive has generalised away. THE one
+    definition of "still counts", read by `shape` and by `compressible`."""
+    covered = under(nodes)
+    return [n for n in nodes.values()
+            if n.status == "alive" and n.type in types and n.id not in covered]
+
+
+def compressible(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> list[dict]:
+    """Clusters of alive nodes under one question that share a survived gate or a tag,
+    three or more, with nothing yet generalising them. Deliberately dumb: shared gate or
+    tag, not similarity. It presents cheaply and lets the reader judge what generalises,
+    the same bargain the reopen band makes."""
+    groups: dict[tuple, set] = {}
+    for n in standing(nodes, types):
+        q = question_of(nodes, n.id)
+        if q is None:                 # an unrooted node has no question to cluster under
+            continue
+        keys = [("gate", l["to"]) for l in n.links if l["rel"] == "kn:survivedGate"]
+        keys += [("tag", str(t)) for t in n.tags]
+        for k in keys:
+            groups.setdefault((q, k), set()).add(n.id)
+    out = [{"question": q, "shared": {kind: key}, "ids": sorted(ids),
+            # What these nodes ARE: a graph whose compressible type is `principle` must
+            # not be told "findings".
+            "type": "/".join(sorted({nodes[i].type for i in ids}))}
+           for (q, (kind, key)), ids in groups.items() if len(ids) >= 3]
+    out.sort(key=lambda c: (-len(c["ids"]), c["question"], next(iter(c["shared"].items()))))
+    return out
+
+
+def compressible_types(cfg: dict) -> tuple[str, ...]:
+    """What a general node may supersede. `graph.yaml: compressible:` or findings."""
+    v = cfg.get("compressible") or list(DEFAULT_COMPRESSIBLE)
+    v = [v] if isinstance(v, str) else v
+    return tuple(str(t) for t in v)
+
+
+# What "better" means for a declared metric. A graph tracking loss, tokens or latency
+# wants the smallest number and one tracking accuracy the largest; knoten cannot guess
+# which, and a metric whose direction is assumed is a leaderboard pointing backwards.
+GOALS = ("max", "min")
+
+# How far a data point's lineage is walked. Six hops covers source -> idea -> hypothesis
+# -> experiment -> finding and one more; past that "builds on" stops being a fact about
+# this run and becomes the history of the whole question.
+METRIC_DEPTH = 6
+
+
+def metrics_declared(cfg: dict) -> dict:
+    """`graph.yaml: metrics:` read as name -> goal, goal defaulting to max. `load_config`
+    has already refused every other shape, so this reads and does not re-check."""
+    return {str(name): str((spec or {}).get("goal", "max"))
+            for name, spec in (cfg.get("metrics") or {}).items()}
+
+
+def _better(a, b, goal: str) -> bool:
+    """Is `a` strictly better than `b`? THE one comparison, so the delta, the best marker
+    and the summary row cannot each decide what an improvement is."""
+    return a < b if goal == "min" else a > b
+
+
+def _value(n: Node, name: str):
+    """The number this node records for `name`, or None. `bool` is an int in Python, and
+    `converged: true` is a flag, not a measurement: without this guard it plotted as 1."""
+    v = n.results.get(name)
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _builds_on(nodes: dict[str, Node], nid: str, earlier: set) -> list[str]:
+    """Which earlier data points this one stands on: the metric-bearing nodes a rooting
+    walk from `nid` reaches within METRIC_DEPTH hops, in id order.
+
+    Derived, never authored. The edges are already there -- `kn:followsFrom` among them,
+    since ROOTING_RELS names it -- and asking an agent to ALSO declare its lineage is
+    asking it to declare it wrong on the day the two disagree.
+    """
+    seen, layer, out = {nid}, [nid], set()
+    for _ in range(METRIC_DEPTH):
+        nxt = []
+        for cur in (nodes.get(x) for x in layer):
+            for l in (cur.links if cur else []):
+                if l["rel"] in ROOTING_RELS and l["to"] not in seen:
+                    seen.add(l["to"])
+                    nxt.append(l["to"])
+                    if l["to"] in earlier:
+                        out.add(l["to"])
+        layer = nxt
+    return sorted(out)
+
+
+def metric(nodes: dict[str, Node], name: str, goal: str = "max") -> list[dict]:
+    """Every node that recorded `name`, oldest first, each read against what came before.
+
+    `delta` is measured against the BEST earlier point, not the previous one: a run that
+    lands between two better ones has moved nothing, and calling the gap to its immediate
+    predecessor an improvement is how a metric flatters itself.
+    """
+    points = sorted(((n, v) for n in nodes.values() if (v := _value(n, name)) is not None),
+                    key=lambda p: (str(p[0].frontmatter.get("created") or UNDATED), p[0].id))
+    out: list[dict] = []
+    # `earlier` grows as the walk goes: a point can only ever build on one already
+    # emitted, which is what keeps the lineage a fact about the past.
+    best, earlier = None, set()
+    for n, v in points:
+        out.append({"id": n.id, "type": n.type,
+                    "created": str(n.frontmatter.get("created") or ""), "value": v,
+                    "delta": None if best is None else v - best,
+                    # Best SO FAR, ties included: two runs holding the same record both
+                    # hold it, and marking only one of them is a judgement about which.
+                    "best": best is None or not _better(best, v, goal),
+                    "builds_on": _builds_on(nodes, n.id, earlier)})
+        if best is None or _better(v, best, goal):
+            best = v
+        earlier.add(n.id)
+    return out
+
+
+def metrics_summary(nodes: dict[str, Node], cfg: dict) -> list[dict]:
+    """One row per declared metric: where the number stands and who put it there. The
+    strip `knoten frontier` prints and the page's own header both read this, so the two
+    surfaces cannot disagree about the best result in the graph."""
+    out = []
+    for name, goal in metrics_declared(cfg).items():
+        points, top = metric(nodes, name, goal), None
+        for p in points:
+            # The FIRST point at the best value, not the last: the run that set the
+            # record is the one worth naming, and a later tie moved nothing.
+            if top is None or _better(p["value"], top["value"], goal):
+                top = p
+        out.append({"name": name, "goal": goal, "count": len(points),
+                    "best": top["value"] if top else None,
+                    "best_id": top["id"] if top else None})
+    return out
+
+
+def _csv(v) -> list[str]:
+    """A rule value that may be written as a YAML list or a comma-separated string, read
+    the same way everywhere. A hand-rolled split at one call site is how they drift:
+    `type: finding,principle` would be one type in one place and two in another."""
+    if not v:
+        return []
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    return [x.strip() for x in str(v).split(",") if x.strip()]
+
+
+def shape(nodes: dict[str, Node], cfg: dict) -> dict:
+    """The graph's compression state: rules over specifics. The same two numbers reward a
+    commit and head `frontier`."""
+    alive = [n for n in nodes.values() if n.status == "alive"]
+    still = standing(nodes, compressible_types(cfg))
+    # The metrics ride along because the frontier header and the page strip are drawn
+    # from `shape` and nothing else: a number shown in one and not the other is the
+    # second opinion this dict exists to prevent.
+    return {"rules": len([n for n in alive if is_general(n)]),
+            "specifics": len([n for n in still if not is_general(n)]),
+            "metrics": metrics_summary(nodes, cfg)}

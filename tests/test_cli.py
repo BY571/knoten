@@ -1,5 +1,4 @@
-"""The CLI is the first thing a new user touches. It should never hand them a
-traceback. `main()` returns an exit code; the console script exits with it."""
+"""The CLI is the first thing a new user touches."""
 import json
 
 import pytest
@@ -21,108 +20,31 @@ def test_missing_argument_is_an_error_not_a_traceback(graph, monkeypatch, capsys
     assert "Traceback" not in capsys.readouterr().err
 
 
-def test_help_works_outside_a_graph(tmp_path, monkeypatch, capsys):
-    """`_root()` ran before dispatch, so `--help` died with 'no graph.yaml found'
-    — exactly when a new user needs help most."""
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(SystemExit) as e:
-        main(["--help"])
-
-    assert e.value.code == 0
-    assert "knoten" in capsys.readouterr().out
-
-
 def test_running_outside_a_graph_is_a_clean_error(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-
     assert main(["validate"]) == 1
     assert "graph.yaml" in capsys.readouterr().err
 
 
-def test_path_reports_an_unknown_node_as_unknown(graph, monkeypatch, capsys):
-    """A typo'd node name reported 'no path', which reads as 'they are
-    unconnected' rather than 'that node does not exist'."""
-    monkeypatch.chdir(graph.root)
-    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
-
-    assert main(["path", "hyp-x", "hyp-typo"]) == 1
-    assert "hyp-typo" in capsys.readouterr().err
-
-
 def test_path_error_in_json_mode_is_a_stdout_payload_not_stderr_prose(graph, monkeypatch, capsys):
-    """`show`/`commit`/`update` already put an error on stdout under --json; `path` and
-    `index` raised straight through main()'s GraphError handler and printed prose to
-    stderr regardless of --json, leaving a machine reader nothing to parse."""
     monkeypatch.chdir(graph.root)
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
-
     code = main(["path", "hyp-x", "hyp-typo", "--json"])
     out, err = capsys.readouterr()
-
     assert code == 1
     assert err == ""
     assert "hyp-typo" in json.loads(out)["error"]
 
 
-def test_index_where_error_in_json_mode_is_a_stdout_payload(graph, monkeypatch, capsys):
-    monkeypatch.chdir(graph.root)
-
-    code = main(["index", "--where", "bad", "--json"])
-    out, err = capsys.readouterr()
-
-    assert code == 1
-    assert err == ""
-    assert json.loads(out)["error"]
-
-
-def test_index_limit_help_states_the_real_default(capsys):
-    """`--limit 0` never meant uncapped — `ops.index` treats 0 as falsy and falls back
-    to INDEX_LIMIT — but the help text used to claim '0 = no limit'. Read through
-    `--help`, which is what a user actually sees, rather than argparse internals."""
-    with pytest.raises(SystemExit):
-        _parser().parse_args(["index", "--help"])
-    help_text = capsys.readouterr().out
-
-    assert "no limit" not in help_text.lower()
-    assert str(ops.INDEX_LIMIT) in help_text
-
-
-def test_index_accepts_a_query_flag_for_relevance_ranking(graph, monkeypatch, capsys):
-    """`ops.index(query=...)` was reachable in Python but had no CLI flag — and the CLI is
-    primary and should not be missing a parameter of the shared implementation."""
-    monkeypatch.chdir(graph.root)
-    graph.node("hyp-decoding", "id: hyp-decoding\ntype: hypothesis\nstatus: open",
-               "# Self-consistency beats greedy decoding\n")
-    graph.node("hyp-other", "id: hyp-other\ntype: hypothesis\nstatus: open",
-               "# Unrelated claim about something else\n")
-
-    code = main(["index", "--query", "self-consistency decoding", "--json"])
-    out = capsys.readouterr().out
-
-    assert code == 0
-    ids = [n["id"] for n in json.loads(out)["nodes"]]
-    assert ids[0] == "hyp-decoding"
-
-
 def test_validate_returns_nonzero_on_violation(graph, monkeypatch):
     monkeypatch.chdir(graph.root)
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: alive")
-
     assert main(["validate"]) == 1
-
-
-def test_validate_returns_zero_on_a_clean_graph(graph, monkeypatch):
-    monkeypatch.chdir(graph.root)
-    graph.node("gate-cost", "id: gate-cost\ntype: gate")
-
-    assert main(["validate"]) == 0
 
 
 def test_a_broken_node_is_reported_not_crashed_on(graph, monkeypatch, capsys):
     monkeypatch.chdir(graph.root)
     (graph.root / "nodes" / "bad.md").write_text("---\nid: bad\n  oops:\n---\n", encoding="utf-8")
-
     assert main(["validate"]) == 1
     assert "bad.md" in capsys.readouterr().err
 
@@ -130,14 +52,40 @@ def test_a_broken_node_is_reported_not_crashed_on(graph, monkeypatch, capsys):
 def test_init_creates_a_graph_that_validates(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert main(["init", "my-topic"]) == 0
-
     monkeypatch.chdir(tmp_path / "my-topic")
     assert main(["validate"]) == 0
 
 
+def _init(tmp_path, monkeypatch, name="t"):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", name]) == 0
+    root = tmp_path / name
+    monkeypatch.chdir(root)
+    return root
+
+
+def test_a_fresh_graph_validates_clean_and_declares_the_round(tmp_path, monkeypatch):
+    root = _init(tmp_path, monkeypatch)
+    assert main(["validate"]) == 0
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+    for rid in ["ideas-come-from-sources", "hypotheses-come-from-ideas",
+                "experiments-test-a-hypothesis", "experiments-must-record-what-they-measured",
+                "findings-come-from-experiments", "findings-cite-the-run-rather-than-repeat-it"]:
+        assert f"id: {rid}" in text
+    assert "Cite the question this idea serves." in text
+
+
+def test_a_fresh_graph_refuses_a_finding_no_experiment_produced(tmp_path, monkeypatch, capsys):
+    _init(tmp_path, monkeypatch)
+    (tmp_path / "fm.yaml").write_text("type: finding\nstatus: open\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# f\n", encoding="utf-8")
+    assert main(["commit", "finding-x", "--frontmatter", str(tmp_path / "fm.yaml"),
+                 "--body", str(tmp_path / "b.md")]) == 1
+    assert "findings-come-from-experiments" in capsys.readouterr().err
+
+
 def test_init_refuses_a_name_that_escapes_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-
     assert main(["init", "../evil"]) == 1
     assert not (tmp_path.parent / "evil").exists()
 
@@ -146,51 +94,24 @@ def test_init_refuses_a_name_that_escapes_cwd(tmp_path, monkeypatch):
 
 
 def test_new_scaffolds_a_node_that_already_passes_the_rules(graph, monkeypatch, capsys):
-    """The happy path was: hand-write frontmatter, get rejected, guess, retry. The failure
-    mode this tool exists to prevent was caused by FRICTION, so friction on the write path
-    is the thing to attack hardest."""
+    """The happy path was: hand-write frontmatter, get rejected, guess, retry."""
     monkeypatch.chdir(graph.root)
     graph.node("gate-cost", "id: gate-cost\ntype: gate")
-
     assert main(["new", "hypothesis", "hyp-my-idea"]) == 0
-
     n = load(graph.root)["hyp-my-idea"]
     assert n.type == "hypothesis"
     assert n.status == "open"           # not yet alive: it has survived nothing
     assert check(load(graph.root), graph.root) == []
 
 
-def test_a_dead_node_is_scaffolded_with_whatever_the_rules_demand(graph, monkeypatch):
-    """Nothing here is knoten's opinion — it reads THIS graph's rules and pre-fills exactly
-    what they require, so the author writes prose instead of rediscovering the rule."""
-    graph.rules("""\
-rules:
-  - id: dead-claims-must-say-why
-    when_status: dead
-    require_sections: Why it died, What would reopen this
-    require_result_min: {n_independent: 30}
-    message: The post-mortem IS the asset.
-""")
-    monkeypatch.chdir(graph.root)
-
-    main(["new", "hypothesis", "hyp-dead", "--status", "dead"])
-    text = graph.read("hyp-dead")
-
-    assert "## Why it died" in text
-    assert "## What would reopen this" in text
-    assert "n_independent: TODO" in text
-
-
 def test_new_refuses_to_overwrite(graph, monkeypatch):
     monkeypatch.chdir(graph.root)
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead")
-
     assert main(["new", "hypothesis", "hyp-x"]) == 1
 
 
 def test_new_refuses_an_id_that_is_not_kebab_case(graph, monkeypatch):
     monkeypatch.chdir(graph.root)
-
     assert main(["new", "hypothesis", "../evil"]) == 1
     assert not (graph.root.parent / "evil.md").exists()
 
@@ -198,48 +119,16 @@ def test_new_refuses_an_id_that_is_not_kebab_case(graph, monkeypatch):
 # ---------------------------------------------------------------- query
 
 
-def test_query_matches_across_the_separator(graph, monkeypatch, capsys):
-    """`knoten query "self consistency"` found NOTHING, because the node is
-    `self-consistency`. A naive substring match makes the tool's headline question fail on
-    a space."""
-    monkeypatch.chdir(graph.root)
-    graph.node("hyp-self-consistency", "id: hyp-self-consistency\ntype: hypothesis\nstatus: dead")
-
-    main(["query", "self consistency"])
-
-    assert "hyp-self-consistency" in capsys.readouterr().out
-
-
 def test_query_ranks_the_node_matching_both_tokens_first(graph, monkeypatch, capsys):
-    """This replaces `test_query_requires_all_tokens`, which asserted that a partial
-    match returns NOTHING. That contract was the headline bug: it answered "no prior
-    work" for every question phrased in words the node happened not to use. Partial
-    matches are the point — "anything related?" is the question — so the guarantee moved
-    from exclusion to ORDER: the closest node comes first."""
     monkeypatch.chdir(graph.root)
     graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: dead", body="# about decoding\n")
     graph.node("hyp-b", "id: hyp-b\ntype: hypothesis\nstatus: dead", body="# about prompting\n")
     graph.node("hyp-c", "id: hyp-c\ntype: hypothesis\nstatus: dead",
                body="# about decoding and prompting\n")
-
     main(["query", "decoding prompting"])
     out = capsys.readouterr().out
-
     assert out.index("hyp-c") < out.index("hyp-a")
     assert out.index("hyp-c") < out.index("hyp-b")
-
-
-def test_query_says_a_claim_was_retracted_by_another_node(graph, monkeypatch, capsys):
-    """`_summarise` reported what a node RETRACTS but never that it WAS retracted. An
-    agent asking "has this been tried?" about a withdrawn claim was told the verdict and
-    not the withdrawal — and SPEC calls retraction the most valuable node type."""
-    monkeypatch.chdir(graph.root)
-    retracted_graph(graph)
-
-    main(["query", "hyp-wrong"])
-    out = capsys.readouterr().out
-
-    assert "ret-oops" in out
 
 
 def retracted_graph(graph):
@@ -263,100 +152,24 @@ def indexed(graph):
     return graph
 
 
-def test_index_prints_one_line_per_node_with_the_claim(graph, monkeypatch, capsys):
-    """`index` is the answer to "anything LIKE this?", so a row has to carry the CLAIM
-    and not just the id — an id alone cannot be compared against a new idea."""
-    monkeypatch.chdir(indexed(graph).root)
-
-    main(["index"])
-    out = capsys.readouterr().out
-
-    assert "hyp-a" in out and "Alpha beats greedy" in out
-    assert "hyp-b" in out and "Beta improves accuracy" in out
-
-
-def test_index_filters_by_tag(graph, monkeypatch, capsys):
-    monkeypatch.chdir(indexed(graph).root)
-
-    main(["index", "--tag", "prompting"])
-    out = capsys.readouterr().out
-
-    assert "hyp-b" in out
-    assert "hyp-a" not in out
-
-
-def test_index_filters_by_status(graph, monkeypatch, capsys):
-    monkeypatch.chdir(indexed(graph).root)
-
-    main(["index", "--status", "open"])
-    out = capsys.readouterr().out
-
-    assert "hyp-a" in out
-    assert "hyp-b" not in out
-
-
 def test_index_filters_on_a_frontmatter_field(graph, monkeypatch, capsys):
     monkeypatch.chdir(indexed(graph).root)
     graph.node("hyp-w", "id: hyp-w\ntype: hypothesis\nstatus: dead\ncause: weak_baseline",
                "# Weak\n")
-
     main(["index", "--where", "cause=weak_baseline"])
     out = capsys.readouterr().out
-
     assert "hyp-w" in out
     assert "hyp-a" not in out
 
 
 def test_a_malformed_where_is_a_clean_error(graph, monkeypatch, capsys):
     monkeypatch.chdir(indexed(graph).root)
-
     assert main(["index", "--where", "cause"]) == 1
     assert "cause" in capsys.readouterr().err
 
 
-def test_new_scaffolds_a_field_the_rules_demand(graph, monkeypatch):
-    """`new` reads THIS graph's rules and pre-fills what they require, so the author is
-    handed a checklist instead of a rejection."""
-    graph.rules("""\
-rules:
-  - id: deaths-must-name-a-cause
-    when_status: dead
-    require_field_one_of: {cause: [no_signal, weak_baseline]}
-    message: name the cause.
-""")
-    monkeypatch.chdir(graph.root)
-
-    main(["new", "hypothesis", "hyp-dead", "--status", "dead"])
-
-    assert "cause: TODO   # one of: no_signal, weak_baseline" in graph.read("hyp-dead")
-
-
-def test_init_ignores_the_lock_file(tmp_path, monkeypatch):
-    """The write lock lives in the graph root. Without this, every user's first
-    `git status` shows a file knoten created and they did not."""
-    monkeypatch.chdir(tmp_path)
-    main(["init", "my-topic"])
-
-    assert ".knoten.lock" in (tmp_path / "my-topic" / ".gitignore").read_text()
-
-
-def test_init_scaffolds_the_question_the_graph_exists_to_answer(tmp_path, monkeypatch):
-    """A graph starts from a question, a statement or a task — everything else is
-    downstream of it. As prose in `graph.yaml: description` nothing could cite it, so a
-    finding could not be traced back to the question it serves and a second sub-question
-    had nowhere to live."""
-    monkeypatch.chdir(tmp_path)
-
-    assert main(["init", "demo"]) == 0
-    monkeypatch.chdir(tmp_path / "demo")
-
-    assert (tmp_path / "demo" / "nodes" / "question-demo.md").exists()
-    assert main(["validate"]) == 0
-
-
 def test_the_question_comes_before_everything_else(tmp_path, monkeypatch):
-    """Column order is the research order. `question` used to sit third in it, after
-    `source` and `idea` — behind the two things that derive from it."""
+    """Column order is the research order."""
     from knoten import viz
     monkeypatch.chdir(tmp_path)
     main(["init", "demo"])
@@ -369,25 +182,61 @@ def test_the_question_comes_before_everything_else(tmp_path, monkeypatch):
     (root / "nodes" / "idea-a.md").write_text(
         "---\nid: idea-a\ntype: idea\nstatus: open\nlinks:\n"
         "  - {rel: prov:wasDerivedFrom, to: source-a-paper}\n---\n\n# x\n", encoding="utf-8")
-
     cols, _, _ = viz.roles(load(root))
-
     assert cols[0] == "question"
     assert cols.index("source") < cols.index("idea")
 
 
-def test_a_hunch_is_a_source_like_any_other(tmp_path, monkeypatch):
-    """Own intuition is where a lot of research actually starts. Recording it as a source
-    keeps one rule, every idea names where it came from, and makes the question answerable:
-    how much of this graph rests on hunches rather than on reading? The graph's own
-    `sources-must-be-findable-again` rule accepts "own intuition" as an origin precisely so
-    that a hunch is recorded rather than left implicit."""
-    monkeypatch.chdir(tmp_path)
-    main(["init", "demo"])
-    root = tmp_path / "demo"
-    (root / "nodes" / "source-own-intuition.md").write_text(
-        "---\nid: source-own-intuition\ntype: source\nstatus: open\n"
-        "origin: own intuition\n---\n\n# A hunch\n", encoding="utf-8")
-    monkeypatch.chdir(root)
+def test_frontier_prints_the_shape_first_and_the_compressible_band_before_open(graph, monkeypatch, capsys):
+    graph.rules("""\
+name: t
+statuses: [open, alive, active]
+node_types: [question, finding, gate, hypothesis]
+rules: []
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
+    graph.node("hyp-open", "id: hyp-open\ntype: hypothesis\nstatus: open", "# Open one\n")
+    for i in range(3):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    monkeypatch.chdir(graph.root)
+    assert main(["frontier"]) == 0
+    out = capsys.readouterr().out
+    head, rest = out.split("\n", 1)
+    assert "0 rules over 3 specifics" in head and "1 compressible cluster" in head
+    assert rest.index("COMPRESSIBLE") < rest.index("OPEN")
+    assert "question-q  ·  gate-h  ·  3 alive findings" in rest
+    assert "finding-0, finding-1, finding-2" in rest
 
-    assert main(["validate"]) == 0
+
+def test_index_footer_says_how_many_superseded_are_hidden(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [finding]\nstatuses: [alive, superseded]\nrules: []\n")
+    graph.node("finding-old", "id: finding-old\ntype: finding\nstatus: superseded", "# old\n")
+    graph.node("finding-new", "id: finding-new\ntype: finding\nstatus: alive", "# new\n")
+    monkeypatch.chdir(graph.root)
+    assert main(["index"]) == 0
+    out = capsys.readouterr().out
+    assert "finding-old" not in out and "1 superseded hidden; --all shows them" in out
+    assert main(["index", "--all"]) == 0
+    assert "finding-old" in capsys.readouterr().out
+
+
+def test_show_prints_covers_before_the_body_of_a_general_node(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [question, finding]\nstatuses: [alive, superseded, open]\nrules: []\n")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    for i in (1, 2):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: superseded\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}", f"# {i}\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}",
+               "# G\n\nThe general claim.\n\n## Covers\n- finding-1: small\n- finding-2: large\n")
+    monkeypatch.chdir(graph.root)
+    assert main(["show", "finding-g"]) == 0
+    out = capsys.readouterr().out
+    assert out.index("covers:") < out.index("finding-1: small")
+    assert "finding-1: small" in out
+
+

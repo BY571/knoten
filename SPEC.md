@@ -1,4 +1,4 @@
-# knoten — design spec
+# knoten: design spec
 
 **Falsification-first research graphs in git.**
 
@@ -22,7 +22,7 @@ foreclosing another.
 | DISK | **✗** (OWL) | **✗** revision-typed only | ✗ |
 
 **The load-bearing finding.** A 2019 survey (Wanyana & Moodley, CEUR Vol-2540)
-compared the three existing hypothesis ontologies — LABORS, DISK, HELO — and *all
+compared the three existing hypothesis ontologies (LABORS, DISK, HELO) and *all
 three* score **"No"** on *"hypothesis appraisal mechanism and unsuccessful
 hypotheses."* Grepping DISK's released ontology for
 `falsif|refut|retract|reject|invalid|supersed|negativ` returns **zero matches**.
@@ -30,7 +30,7 @@ hypotheses."* Grepping DISK's released ontology for
 > **The entire research-ontology field, across 20 years, does not model hypothesis
 > death.**
 
-This is not an oversight — it is an incentive. Publication rewards recording what
+This is not an oversight; it is an incentive. Publication rewards recording what
 worked. **A private research graph has no such incentive, which is exactly why it can
 hold what the literature cannot.** Negative results are the asset *because* nobody
 stores theirs.
@@ -42,8 +42,8 @@ The surviving value was almost entirely in the deaths:
 
 - Four of seven died on **economics, not statistics** (a fee schedule; an effect too small to cover costs). No model would have saved them.
 - Two "findings" were **unintentional cherry-picks** caught only by specific gates.
-- The reusable asset turned out to be the **seven method nodes** — the tests
-  themselves — not any strategy.
+- The reusable asset turned out to be the **seven method nodes**, the tests
+  themselves, not any strategy.
 
 A system that stores only conclusions would have preserved ~15% of that.
 
@@ -51,8 +51,9 @@ A system that stores only conclusions would have preserved ~15% of that.
 
 ## 2. Non-goals
 
-- **We do not build a Git host.** Git already provides versioning, branching, blame,
-  diffs, PRs (peer review!) and hosting. Reimplementing any of it is madness.
+- **We do not build a general git host.** We host knoten graphs, because who may write
+  and who verified what is part of the graph and no general host can enforce it. Git
+  still provides versioning, branching, blame, diffs and history.
 - **We do not build a UI first.** A static site generator over the graph is a
   phase-3 nicety, and it can emit its own JSON when it exists.
 - **We do not invent a vocabulary.** Micropublications and nanopublications already
@@ -79,7 +80,7 @@ rather than thinking.**
 
 `question` · `source` · `idea` · `hypothesis` · `experiment` · `finding` · `retraction` · `gate`
 
-A convention only — the core checks `node_types` for membership and nothing else. A graph
+A convention only: the core checks `node_types` for membership and nothing else. A graph
 begins with a `question` and everything descends from it; a `source` is where the work came
 from, including the author's own intuition; `gate` stands outside the loop the others form,
 the bar a claim must survive rather than a stage it passes through. `method` is
@@ -90,13 +91,19 @@ deliberately unclaimed, reserved for "the approach derived from findings that su
 ```
 open ──► alive ──────► superseded
    └───► dead          (a better claim replaced it)
-   └───► retracted     (WE WERE WRONG — the most valuable node type)
+   └───► retracted     (WE WERE WRONG: the most valuable node type)
 ```
 
-Every arrow is walkable via `knoten update`, which appends and moves the status but cannot
-rewrite a claim. Immutability protects **what was claimed**, never the status — the status
-*is* the lifecycle, and git holds the before and after (§7). Without it an agent could open
-a hypothesis and never close it, leaving a settled question `open` on every frontier.
+The engine applies the superseded arrow: a node that supersedes another flips it, and must
+first face every gate it survived. The superseder is itself of a compressible type (§6);
+every target is alive, or already superseded by that same node. And a `superseded` node
+always has something superseding it: delete the general claim and the graph says so.
+
+Every arrow but that one is walkable via `knoten update`, which appends and moves the
+status but cannot rewrite a claim. Immutability protects **what was claimed**, never the
+status: the status *is* the lifecycle, and git holds the before and after (§7). Without
+it an agent could open a hypothesis and never close it, leaving a settled question `open`
+on every frontier.
 
 `retracted` is first-class. Three claims in the source session were withdrawn. **A
 graph that records only conclusions and never corrections lies to you in six months.**
@@ -104,7 +111,7 @@ The retracted node *stays*, with its post-mortem attached.
 
 ---
 
-## 4. Edge vocabulary — reuse the standards
+## 4. Edge vocabulary: reuse the standards
 
 Adopt existing predicates. Coin only what the field genuinely lacks.
 
@@ -119,7 +126,7 @@ Adopt existing predicates. Coin only what the field genuinely lacks.
 | `prov:wasDerivedFrom` | PROV-O | this question arose from that one |
 | `prov:used` | PROV-O | used this dataset / method |
 
-### Novel — this is the actual contribution
+### Novel: this is the actual contribution
 
 #### How a claim was reached
 
@@ -133,7 +140,7 @@ Peirce named three ways a claim gets proposed; Popper named the one way it gets 
 knoten had rich vocabulary for the testing and one untyped `prov:wasDerivedFrom` for all
 three of the others.
 
-The distinction earns its place because a rule can act on it — `require_edge_target`
+The distinction earns its place because a rule can act on it: `require_edge_target`
 matches on the relation, so with one untyped derivation there is no way to say *"a
 generalisation must cite three findings"* without saying it of every derivation. A
 per-edge qualifier (`{rel: prov:wasDerivedFrom, mode: induction}`) parses today and no
@@ -151,16 +158,18 @@ methodological gate."* DISK's `LineOfInquiry` is the closest blueprint and it
 
 | predicate | domain → range | meaning |
 |---|---|---|
-| `kn:survivedGate` | claim → gate | **claim passed this gate.** A `status: alive` claim MUST have ≥1. |
+| `kn:survivedGate` | claim → gate | **claim passed this gate.** A `status: alive` claim carries ≥1 wherever the graph has opted into requiring it (§6); the scaffold ships that rule advisory, not enforced. |
 | `kn:killedByGate` | claim → gate | **the gate that killed it.** The predicate the entire field is missing. |
-| `kn:blockedBy` | claim → finding | a *structural* blocker (a fee schedule, a venue, a data licence) — not a result, a wall. |
+| `kn:blockedBy` | claim → finding | a *structural* blocker (a fee schedule, a venue, a data licence), not a result, a wall. |
 
-`kn:survivedGate` + the rule engine is the whole safety mechanism: **an unchallenged
-claim cannot be marked alive.**
+`kn:survivedGate` + the rule engine is the whole safety mechanism when a graph turns it
+on: **an unchallenged claim cannot be marked alive.** The scaffold ships that rule
+commented out; until a graph enables it, `knoten frontier` lists an uncited alive claim
+under `unchecked` instead of refusing it.
 
 ---
 
-## 5. Cause of death — a closed vocabulary
+## 5. Cause of death: a closed vocabulary
 
 Adapted from arXiv:2606.21024 (*Negative Knowledge as Failure-aware Shared Memory*,
 Jun 2026), grounded in the seven real deaths of the source session:
@@ -169,17 +178,17 @@ Jun 2026), grounded in the seven real deaths of the source session:
 |---|---|
 | `no_signal` | the effect is not there |
 | `cost_hurdle` | real effect, too small to pay its costs |
-| `structural_blocker` | a wall you cannot climb — a venue you cannot access |
+| `structural_blocker` | a wall you cannot climb, such as a venue you cannot access |
 | `selection_bias` | a cherry-pick, usually an unintentional one |
 | `weak_baseline` | it only beat a strawman |
-| `underpowered` | too few independent bets — any t-stat on n<30 |
+| `underpowered` | too few independent bets, such as any t-stat on n<30 |
 | `crowding_decay` | it was real; it got arbitraged away |
 
 Every dead or retracted node should carry a `cause`, a `## Why it died`, and a
 **`## What would reopen this`**. The last is non-negotiable: it converts a dead end into a
 **standing offer**, and it is what stops the next agent re-running it.
 
-**The core does not enforce this vocabulary and must not** — a cause of death is domain
+**The core does not enforce this vocabulary and must not**: a cause of death is domain
 knowledge, and §2 says the core knows no domain. The list is a convention; your graph
 enforces the parts it cares about, as data (§6's `require_field_one_of`). What that buys
 is a death you can *query* rather than merely record:
@@ -189,7 +198,7 @@ knoten index --where cause=weak_baseline    # we have a stronger baseline now. w
 ```
 
 That is a query when the cause is a field and a re-read of every post-mortem when it is
-prose — the moment a research graph pays for itself.
+prose, the moment a research graph pays for itself.
 
 ---
 
@@ -202,7 +211,7 @@ plus a bespoke predicate layer is strictly more machinery than the predicate lay
 which is ~50 lines in `validate.py`.
 
 ```yaml
-# graph.yaml — each rule is a SCAR. Write one only when you have a corpse.
+# graph.yaml: each rule is a SCAR. Write one only when you have a corpse.
 rules:
   - id: live-claims-must-cite-their-gates
     when_status: alive
@@ -219,19 +228,26 @@ rules:
     message: A cause of death you cannot filter on is a story, not an index.
 ```
 
+`knoten init` writes the first of these two commented out: gates are advisory by
+default, and uncommenting it turns `knoten frontier`'s listing into a refusal.
+
 | key | effect |
 |---|---|
 | `id` | **required.** Names the rule in the violation. |
 | `message` | what the human reads when it fires. |
 | `when_status` / `when_type` | only apply to these statuses / types (comma-separated). |
+| `unless_edge` | `<rel>`: skip the rule for a node that declares that relation. |
 | `require_edge` | node must declare this relation. |
 | `require_sections` | body must contain these `## ` headings. |
 | `require_field` | frontmatter must carry this key, with any non-empty value. |
+| `forbid_fields` | this type must NOT carry these frontmatter keys (comma-separated). |
 | `require_result` | `results:` must carry this key. |
-| `require_result_min` | `{key: floor}` — numeric floor on a result. |
-| `require_field_one_of` | `{field: [allowed]}` — a frontmatter field constrained to a closed set. |
+| `require_result_min` | `{key: floor}`, a numeric floor on a result. |
+| `require_field_one_of` | `{field: [allowed]}`, a frontmatter field constrained to a closed set. |
 | `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets. |
 | `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse). |
+
+`forbid_fields` is the only key that says what a type must *not* be, and it exists because every other key is positive: a graph could demand a hypothesis carry a claim and never stop it also carrying the run and the result.
 
 `require_field` is the open sibling of `require_field_one_of`: a url or a doi has no
 closed set of legal values, so the only thing worth demanding is that the answer got
@@ -250,7 +266,7 @@ engine cannot understand would enforce nothing while reporting `✓ all rules pa
 validator that silently accepts is worse than no validator.
 
 The graph declares its vocabulary too. `node_types` takes a list, or a mapping when you
-want to write down what the words mean — the only place they *can* be defined, since the
+want to write down what the words mean, the only place they *can* be defined, since the
 core refuses to:
 
 ```yaml
@@ -263,15 +279,24 @@ tags:       [decoding, reasoning, prompting, evaluation]
 
 The keys are the vocabulary either way; the values are for the reader and for
 `knoten viz`, which labels each column with them. `knoten init` writes the mapping form.
-Declare none and none is checked (§2) — but a graph that *does* declare has said those are
+Declare none and none is checked (§2), but a graph that *does* declare has said those are
 the only legal words, so `type: hypthesis` is a typo and `status: ded` is a claim that
 would silently vanish from every query.
 
 Always-on structural checks, which no graph declares: `dangling-edge`,
 `missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
 `unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`, `mismatched-id`,
-`malformed-results`, `malformed-repro`, and `not-a-gate` (a migration aid, deletable once
-graphs written before the gate rename have moved).
+`malformed-results`, `malformed-repro`, `supersession` (the bar of §3: a superseder of a
+compressible type over alive targets of a compressible type, one shared question, the
+union of the gates they survived, a `## Covers` section naming each, and no superseded
+node whose superseder has been deleted), and `not-a-gate` (a migration aid, deletable
+once graphs written before the gate rename have moved).
+
+**Two known properties, documented rather than guarded.** Retracting a general node stops
+it covering anything, and the targets it retired stay `superseded` until a person revives
+them: only a person can say whether an old specific is worth having back. And nothing caps
+how many alive findings a question may hold; `knoten frontier`'s `COMPRESSIBLE` band is
+the whole of the nudge to write the rule above them.
 
 A biology graph declares entirely different rules. The core never changes.
 
@@ -282,14 +307,14 @@ A biology graph declares entirely different rules. The core never changes.
 ```
 my-graph/
   graph.yaml               # identity + rules
-  nodes/*.md               # one node per file — the source of truth
+  nodes/*.md               # one node per file: the source of truth
   attachments/<id>/*       # the script that killed it, the plot that shows why
 ```
 
 `knoten new` and `knoten commit` stamp `created:`; `knoten update` stamps `updated:`.
 Both are plain ISO date strings, which the YAML 1.2 loader keeps as strings rather than
 coercing to `datetime.date`. Git knows when the *file* changed, which is not when the
-*claim* did — a typo fix and a status flip are the same event to git — and reading it
+*claim* did (a typo fix and a status flip are the same event to git), and reading it
 would cost one subprocess per node to order a frontier.
 
 Git provides: history, blame, diff-a-claim-as-it-changed, branches-as-research-
@@ -297,7 +322,7 @@ directions, **PRs-as-peer-review**, and hosting. We write none of it.
 
 ---
 
-## 8. The agent surface — CLI first
+## 8. The agent surface: CLI first
 
 This section once named a tool-protocol server as the thing that made knoten compound,
 and meant it. That claim was wrong, and this is the reversal, stated plainly rather than
@@ -306,24 +331,24 @@ slid past.
 The previous attempt failed because the graph was a **byproduct of automation**: when the
 orchestrator did not run, nothing was written, while a plain chat session produced 15
 experiments whose knowledge would have evaporated without hand-written memory files. The
-fix was right — make the graph primary, and make writing to it the path of least
+fix was right: make the graph primary, and make writing to it the path of least
 resistance. The delivery was not.
 
 **The measurement.** That surface loaded ~2,340 tokens into every session whether the
 agent touched the graph or not (1,928 of schema + 412 of instructions), against ~304 for
 `knoten --help` and only when asked. Format compounded it: the same 55 nodes cost ~2,551
-tokens as its JSON (46/node) against ~1,185 as columnar prose (21/node) — 2.2x. That is
+tokens as its JSON (46/node) against ~1,185 as columnar prose (21/node), 2.2x. That is
 why prose is the CLI's default and `--json` is opt-in.
 
 **So the CLI is the agent surface, and the server has been deleted.** `ops.py` holds one
-implementation of every read — index, query, frontier, gates, show, validate, path — as a
+implementation of every read (index, query, frontier, gates, show, validate, path) as a
 function returning a dict, which the CLI renders as prose or dumps with `--json`; `commit`
 and `update` are shared the same way. `SKILL.md` teaches the loop: `frontier` →
 `index`/`query` → `show` → `gates` → `commit`/`update` → `attach`.
 
 Keeping the server for shell-less clients was defensible and stayed defensible; it was
 just outweighed. Every cross-surface drift bug this project recorded came from having two
-— `update`'s refusal built twice with different keys, `--field` coercing `2` to `2.0` on
+: `update`'s refusal built twice with different keys, `--field` coercing `2` to `2.0` on
 one side only, `ops.index(query=...)` reachable in Python with no CLI flag. The shell is
 the interface.
 
@@ -338,48 +363,48 @@ What it taught, which outlived it:
   which is why deleting the transport removed no enforcement. The candidate node is parsed
   and checked **in memory**; nothing reaches the filesystem until it is clean.
 - **An id authored by a model is not a path.** It becomes a filename, so it is constrained
-  to kebab-case — a guard the CLI lacked until it was the only entry point left.
+  to kebab-case, a guard the CLI lacked until it was the only entry point left.
 
 ---
 
-### 8.1 Retrieval — two questions, two mechanisms
+### 8.1 Retrieval: two questions, two mechanisms
 
 *"Has this been tried?"* and *"have we done anything **like** this?"* are different
 questions, and one mechanism cannot answer both.
 
 `knoten query` is keyword retrieval: idf-weighted, ranked, capped. It was originally an
-**AND** over tokens, which made the headline question fail on the README's own example —
+**AND** over tokens, which made the headline question fail on the README's own example:
 `"has anyone tried self-consistency?"` matched nothing, because the node contains no
 "has", "anyone" or "tried", and the agent was told the work was untested. A false negative
 is the only failure of this system that causes real work to be redone. So: OR with
 ranking, the full frontmatter in the haystack (`repro.model` was unsearchable), and a miss
-that says so honestly — "no keyword match, this is NOT proof it is untested."
+that says so honestly: "no keyword match, this is NOT proof it is untested."
 
 `knoten index` answers the second question by **not being a search engine**. It emits the
-whole graph, one line per node — id, verdict, tags, claim — and lets the reader judge
+whole graph, one line per node (id, verdict, tags, claim) and lets the reader judge
 relatedness. The reader is an LLM: a better semantic matcher than anything we could ship,
 and free. On a 500-node graph a broad `query` returned ~83k tokens; the index is ~9k, and
-one tag narrows it to ~2.5k. That is what `tags:` is for — not search, but the filter axis
+one tag narrows it to ~2.5k. That is what `tags:` is for: not search, but the filter axis
 that keeps the index readable as the graph grows.
 
 **Embeddings are deliberately absent.** The paraphrase gap they close is real, but the
 agent already closes it; `sentence-transformers` would put torch behind a project whose
 pitch is one dependency, and an embedding API would end the offline story. Both readers go
 through one function, `core.retrieve()`, so a `knoten[semantic]` extra could replace that
-body the day a graph outgrows a tag-filtered index — which the 1k–5k node case does not.
+body the day a graph outgrows a tag-filtered index, which the 1k-5k node case does not.
 
 ## 9. Phasing
 
 | phase | deliverable | status |
 |---|---|---|
-| **0** | **Dogfood** — encode a real investigation by hand | ✅ done |
+| **0** | **Dogfood**: encode a real investigation by hand | ✅ done |
 | **1** | `knoten` CLI (`init/new/validate/query/index/frontier/gates/path/show/attach`) + rule engine | ✅ done |
-| **2** | **Tool-protocol server** | ✅ done — later demoted to a fallback, then removed (§8) |
+| **2** | **Tool-protocol server** | ✅ done, later demoted to a fallback, then removed (§8) |
 | **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind every read, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
-| 4 | Hosted multi-graph service | probably never needed |
+| 4 | **Remote graphs**: serve, invites, roles, the gate; signed identity | ✅ transport and signed identity done; verification follows |
 
-Phase 0 **validated the schema against real content** — including retractions, structural
+Phase 0 **validated the schema against real content**, including retractions, structural
 blockers, and prose that no JSON schema could hold.
 
 ---
@@ -402,7 +427,21 @@ Micropublications, nanopublications, PROV-O and LinkML are all open and safe to 
    The consumer is an LLM, so the whole graph as a one-line-per-node index beats vector
    similarity at the question that matters ("anything like this?") for zero dependencies.
    Revisit only when a tag-filtered index stops fitting in a context window.
-3. **Multi-graph federation** — one agent querying trading *and* biology graphs.
+3. **Multi-graph federation**: one agent querying trading *and* biology graphs.
    Defer until a second graph exists.
 4. ~~**A closed `cause` vocabulary (§5) as a rule primitive?**~~ **Answered: yes.**
    `require_field_one_of` shipped, and a second graph did want it.
+
+---
+
+## 12. Threat model for remote graphs
+
+Phase 1 is a token in front of `git http-backend` and a gate on the server. What follows
+is what that does NOT defend against, decided on purpose rather than overlooked. Each row
+says what phase 1 does and what phase 2 would have to answer.
+
+| concern | phase 1 | phase 2 |
+|---|---|---|
+| **One admin removes another, the creator included.** An admin can also re-invite a name that already exists, at a lower role, which demotes that person. | Allowed. Every admin is equal and the creator holds no protected status. This is deliberate: a graph whose creator cannot be removed is a graph nobody else can rescue when that person leaves, and the alternative (a permanent super-admin) puts one token beyond recovery. | Still allowed, but the record is now signed: a role is a signed entry in `contributors.yaml`, not a row in a file only the server sees, and revocation is a signed commit marking the entry, not a call the server can forget. Whether the creator should be protected, and whether demoting an admin should need more than one admin's signature, remains open. |
+| **Single line of history.** A hosted graph's history is one branch, and only its ref-level shape is defended. | Left to the hosted repo's own config: `receive.denyDeletes` and `receive.denyNonFastForwards`, which say nothing about branches or tags and are absent from a bare repo somebody gated by hand with `knoten hook --server`. | Enforced by the gate itself, wherever the gate runs: the first push creates the only branch, and after that a new branch, a tag, a deletion and a non-fast-forward are each refused with the reason. A second branch is a tree no `knoten pull` ever reads, which makes it a place to keep a second `contributors.yaml` and a second answer to who may write. One push creates at most one ref, counted across the ref lines rather than asked of git, which mid-push answers "no branches here" for every line. And the constitution itself is never deleted: a `contributors.yaml` that a graph once had cannot be removed, renamed away or emptied of a name by anyone, admins included. |
+| **A revoked token finishes what it started.** Tokens do not expire, and revocation is checked once per request. | A push already past authentication runs to completion; the next request from that token is refused. Revocation is therefore prompt, not instant, and it never interrupts work in flight. | Expiring tokens, and a revocation that also reaches a request already being served. Both need somewhere to keep session state, which phase 1 deliberately does not have. |

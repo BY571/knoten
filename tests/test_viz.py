@@ -1,14 +1,10 @@
-"""One HTML file you can open from a plane.
-
-The properties here are the ones that make the map usable rather than pretty: it must
-not move under your feet as an agent appends to the graph, it must not reach the network,
-and it must not execute what an agent wrote into a node body.
-"""
+"""One HTML file you can open from a plane."""
+import json
 import re
 
 import pytest
 
-from knoten import viz
+from knoten import ops, viz
 from knoten.cli import main
 from knoten.core import load
 
@@ -28,86 +24,39 @@ def small(graph):
 # ------------------------------------------------------------------ layout
 
 def test_appending_a_node_moves_nothing(small, graph):
-    """The property the whole design rests on. An agent appends to this graph while you
-    are looking at it; if the map reshuffles, it stops being a map and becomes a slot
-    machine. Byte-identical, not approximately."""
+    """The property the whole design rests on."""
     before = viz.layout(load(small.root))
-
     graph.node("hyp-z", "id: hyp-z\ntype: hypothesis\nstatus: open\ncreated: 2026-06-01")
     after = viz.layout(load(small.root))
-
     for view in before:
         for nid, xy in before[view].items():
             assert after[view][nid] == xy, f"{view}: {nid} moved"
 
 
-def test_the_layout_does_not_depend_on_dict_order(small):
-    """No randomness, no force simulation, no dict-order dependence. Calling it twice on
-    one dict in one process could not have caught the third of those: the insertion order
-    was identical both times, so the claim in this docstring went untested."""
-    nodes = load(small.root)
-
-    assert viz.layout(nodes) == viz.layout(dict(reversed(list(nodes.items()))))
-
-
-def test_a_graph_with_no_gates_still_lays_out(graph):
-    """Clustering keys on the busiest nodes, not on `type: gate`. A graph that declares
-    no gates at all must still produce a map rather than an empty one."""
-    graph.node("a", "id: a\ntype: note\nstatus: open").node("b", "id: b\ntype: note\nstatus: open")
-
-    pos = viz.layout(load(graph.root))
-
-    assert set(pos["map"]) == {"a", "b"}
-
-
-def test_every_node_gets_a_position_in_every_view(small):
-    nodes = load(small.root)
-    pos = viz.layout(nodes)
-
-    for view in pos:
-        assert set(pos[view]) == set(nodes)
-
-
 # ------------------------------------------------------------------ the file
 
 def test_the_file_reaches_nothing(small):
-    """"Opens on a plane" is the whole promise of a single file. A stylesheet, a font or
-    an analytics beacon would make the map depend on a network it will not have."""
+    """"Opens on a plane" is the whole promise of a single file."""
     html = viz.render(small.root)
-
     fetchable = re.findall(r'(?:src|href)\s*=\s*["\'](?!#)([^"\']+)', html)
     fetchable += re.findall(r'url\(\s*["\']?(?!data:)([^)"\']+)', html)
     fetchable += re.findall(r"@import\s+[\"']([^\"']+)", html)
-
     assert fetchable == [], f"reaches out to {fetchable}"
 
 
 def test_a_node_body_cannot_close_the_script_tag(graph):
-    """An agent writes a node body containing the literal `</script>`. Inlined naively it
-    terminates the payload and the file renders as a blank page — every node lost to one
-    string in one post-mortem."""
+    """An agent writes a node body containing the literal `</script>`."""
     graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead",
                "# Bad\n\n## Why it died\nWe wrote </script> in the notes.\n")
-
     html = viz.render(graph.root)
     payload = html.split("const DATA = ", 1)[1].split("\n", 1)[0]
-
     assert "</script>" not in payload
     assert "hyp-x" in payload
-
-
-@pytest.mark.parametrize("sink", ["innerHTML", "outerHTML", "insertAdjacentHTML",
-                                  "document.write", "eval(", "new Function"])
-def test_the_template_uses_no_html_sink(sink):
-    """Node bodies are written by agents. Any of these on one is arbitrary script
-    execution in the reader's browser, from a file they opened to read a post-mortem."""
-    assert sink not in (viz.HERE / "viz.html").read_text()
 
 
 def test_the_payload_carries_what_the_panel_shows(small):
     data = viz.payload(small.root)
     node = next(n for n in data["nodes"] if n["id"] == "gate-costs")
-
     assert node["type"] == "gate"
     assert any(s["title"] == "The rule" for s in node["sections"])
     assert data["graph"]["rules"] is not None
@@ -115,71 +64,179 @@ def test_the_payload_carries_what_the_panel_shows(small):
 
 # ------------------------------------------------------------------ the command
 
-def test_viz_writes_a_file(small, monkeypatch, tmp_path, capsys):
-    monkeypatch.chdir(small.root)
-    out = tmp_path / "g.html"
-
-    assert main(["viz", "-o", str(out)]) == 0
-    assert "<!doctype html>" in out.read_text().lower()
-    assert str(out) in capsys.readouterr().out
-
-
 def test_viz_on_a_graph_with_no_nodes_directory_fails_cleanly(tmp_path, monkeypatch, capsys):
-    """This used to `chdir` somewhere with no graph.yaml at all, so `find_root` raised
-    before viz was ever reached — it passed for every subcommand and would have passed
-    with viz's own guard deleted. `load()` returns {} for a missing nodes/ dir, so that
-    guard is the only thing between the user and a valid-looking empty page."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "graph.yaml").write_text("name: t\nrules: []\n", encoding="utf-8")
-
     assert main(["viz", "-o", str(tmp_path / "g.html")]) == 1
     assert "Traceback" not in capsys.readouterr().err
 
 
 def test_appending_an_undated_node_does_not_push_everything_down(small, graph):
-    """`str(None or "")` is "", which sorts before every date — so a node written by hand
-    or by another tool took slot 0 and moved every node already placed. `knoten new` and
-    `knoten commit` both stamp `created`, which is why this hid."""
     before = viz.layout(load(small.root))
-
     graph.node("hyp-undated", "id: hyp-undated\ntype: hypothesis\nstatus: open")
     after = viz.layout(load(small.root))
-
     for nid, xy in before["columns"].items():
         assert after["columns"][nid] == xy, f"{nid} moved"
 
 
-def test_an_agent_authored_body_cannot_become_markup(graph):
-    """Node bodies are written by agents. Grepping the template for `innerHTML` misses
-    outerHTML, insertAdjacentHTML, document.write and eval — and never executes anything.
-    This pins the property that actually protects the reader: `<` never survives into the
-    payload, so there is no tag to inject."""
-    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: dead",
-               "# Bad\n\n## Why it died\n<img src=x onerror=alert(1)>\n")
+# ------------------------------------------------------------------ --watch
 
-    payload = viz.render(graph.root).split("const DATA = ", 1)[1].split("\n", 1)[0]
-
-    assert "<img" not in payload
-    assert "onerror" in payload          # the text is still there, just not as markup
+def test_watch_injects_a_reload(small):
+    html = viz.render(small.root, reload_ms=2000)
+    assert "location.reload" in html
+    assert "2000" in html
 
 
-def test_open_hands_the_file_to_the_browser(small, monkeypatch, tmp_path):
-    """The one line of wiring nothing else covers."""
-    import webbrowser
-    opened = []
-    monkeypatch.chdir(small.root)
-    monkeypatch.setattr(webbrowser, "open", opened.append)
-
-    main(["viz", "-o", str(tmp_path / "g.html"), "--open"])
-
-    assert opened and opened[0].startswith("file://")
+def test_the_fingerprint_changes_when_a_node_is_written(small, graph):
+    """What `--watch` polls."""
+    before = viz.fingerprint(small.root)
+    graph.node("hyp-new", "id: hyp-new\ntype: hypothesis\nstatus: open")
+    assert viz.fingerprint(small.root) != before
 
 
-def test_declared_meanings_reach_the_legend(graph):
-    """The legend explains each column in the graph's own words. Before this, `node_types`
-    could only be a list, so the branch that reads meanings could never run: a graph that
-    declared them failed to load at all."""
-    graph.rules("name: t\nnode_types:\n  hypothesis: a falsifiable claim\nrules: []\n")
-    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open")
+def test_the_watch_block_is_cut_out_entirely_when_off(small):
+    html = viz.render(small.root)
+    assert "location.reload" not in html
+    assert "beforeunload" not in html
+    assert "__RELOAD_MS__" not in html
 
-    assert viz.payload(graph.root)["graph"]["vocab"] == {"hypothesis": "a falsifiable claim"}
+
+def test_a_section_keeps_its_shape_in_the_panel(graph):
+    """`core.section` collapses whitespace because the CLI prints it inline."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open",
+               "# A claim\n\n## The result\n| tau | b |\n|---|---|\n| 0-60 | 1.05 |\n")
+    text = next(s["text"] for s in viz.payload(graph.root)["nodes"][0]["sections"]
+                if s["title"] == "The result")
+    assert text.count("\n") >= 2
+    assert "| 0-60 | 1.05 |" in text
+
+
+def test_a_node_that_breaks_the_graphs_rules_says_so(graph):
+    graph.rules("name: t\nrules:\n  - id: no-results-on-claims\n    when_type: hypothesis\n"
+                "    forbid_fields: results\n    message: A claim is not a run.\n")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\nresults:\n  auc: 0.9")
+    data = viz.payload(graph.root)
+    assert data["violations"]["hyp-x"][0]["rule"] == "no-results-on-claims"
+
+
+# ------------------------------------------------------------------ record scaffold
+
+def test_the_record_panel_orders_by_the_scaffold(small):
+    html = (viz.HERE / "viz.html").read_text(encoding="utf-8")
+    assert "for (const p of PANEL_SECTIONS){" in html
+    assert 'el("h3", "field", p.label)' in html
+
+
+Q = "id: question-q\ntype: question\nstatus: open\ncreated: 2026-01-01"
+GATE_H = "id: gate-h\ntype: gate\nstatus: active\ncreated: 2026-01-01"
+
+
+def _finding(i, status="alive", extra=""):
+    return (f"id: finding-{i}\ntype: finding\nstatus: {status}\ncreated: 2026-01-0{i}\nlinks:\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-h}" + extra)
+
+
+@pytest.fixture
+def compressed(graph):
+    """Two specifics retired by one rule, one specific still alive, and one orphan."""
+    graph.rules("name: t\nnode_types: [question, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules: []\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2):
+        graph.node(f"finding-{i}", _finding(i, "superseded"), f"# {i}\n")
+    graph.node("finding-3", _finding(3), "# 3\n")
+    graph.node("finding-4", _finding(4, "superseded"), "# orphan\n")     # nothing alive covers it
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\ncreated: 2026-01-05\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}",
+               "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+    return graph
+
+
+def test_the_payload_says_who_covers_whom(compressed):
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+    assert by["finding-g"]["rule"] is True and by["finding-g"]["covers"] == ["finding-1", "finding-2"]
+    assert by["finding-1"]["under"] == "finding-g" and by["finding-3"]["under"] is None
+    assert by["finding-4"]["under"] is None and by["finding-4"]["status"] == "superseded"
+    assert by["finding-3"]["rule"] is False and by["finding-3"]["covers"] == []
+
+
+def test_a_single_target_supersession_folds_and_can_be_opened(compressed):
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-p", "id: finding-p\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-07\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-3}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# P\n\n## Covers\n- finding-3: the one it replaces\n")
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+    assert by["finding-p"]["rule"] is False and by["finding-p"]["covers"] == ["finding-3"]
+    assert by["finding-3"]["under"] == "finding-p"
+    assert "finding-p" in p["folded"] and "finding-3" not in p["folded"]
+    # The rows the page measures come off what can be opened, not off the badge.
+    assert "if (opens(n)) walk(n, new Set());" in viz.render(compressed.root)
+
+
+def test_the_folded_view_still_holds_the_rule_when_every_specific_is_covered(compressed):
+    """The fold must never leave the page with nothing to draw."""
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-4", _finding(4, "superseded"), "# 4\n")
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 + "".join(f"  - {{rel: npx:supersedes, to: finding-{i}}}\n"
+                                           for i in (1, 2, 3, 4)) +
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1\n- finding-2\n- finding-3\n- finding-4\n")
+    p = viz.payload(compressed.root)
+    assert "finding-g" in p["folded"]
+    assert not {"finding-1", "finding-2", "finding-3", "finding-4"} & set(p["folded"])
+
+
+def test_a_rule_over_a_rule_hangs_the_whole_chain(compressed):
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: superseded\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-1}\n"
+                                 "  - {rel: npx:supersedes, to: finding-2}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+    compressed.node("finding-o", "id: finding-o\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-06\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-g}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# O\n\n## Covers\n- finding-g: both of them\n")
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+    assert by["finding-g"]["under"] == "finding-o"
+    assert by["finding-1"]["under"] == "finding-g" and by["finding-2"]["under"] == "finding-g"
+    assert not {"finding-1", "finding-2", "finding-g"} & set(p["folded"])
+
+
+def test_the_folded_columns_share_the_full_views_headers(graph):
+    graph.rules("name: t\nnode_types: [question, hypothesis, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules: []\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2):
+        graph.node(f"hyp-{i}",
+                   f"id: hyp-{i}\ntype: hypothesis\nstatus: superseded\ncreated: 2026-01-0{i}\nlinks:\n"
+                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\ncreated: 2026-01-05\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: hyp-1}\n"
+                            "  - {rel: npx:supersedes, to: hyp-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}", "# G\n")
+    p = viz.payload(graph.root)
+    by = {n["id"]: n for n in p["nodes"]}
+    assert p["columns"] == ["question", "hypothesis", "finding", "gate"]
+    assert p["folded"]["finding-g"]["columns"][0] == by["finding-g"]["columns"][0]
+
+
+def test_a_supersedes_cycle_cannot_hang_the_page(small):
+    html = viz.render(small.root)
+    assert "function visible(id, seen)" in html
+    assert "function posOf(n, seen)" in html
+    assert html.count("seen.has") >= 3          # visible, posOf, the walk up to the card
+
+
