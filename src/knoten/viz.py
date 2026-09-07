@@ -12,13 +12,15 @@ not wherever its vocabulary says they should be.
 Layout is a pure function of the graph. Nothing is persisted: positions are derived state,
 and a `layout.json` in git would be a merge conflict generator with ten agents appending.
 """
+import dataclasses
 import hashlib
 import json
 import math
 import time
 from pathlib import Path
 
-from .core import GATE_TYPE, GraphError, load, section
+from .core import (GATE_TYPE, GraphError, compressible, compressible_types, is_general,
+                   load, section, shape, supersedes, under)
 from .validate import check, load_config
 
 HERE = Path(__file__).parent
@@ -111,10 +113,17 @@ def roles(nodes: dict) -> tuple:
     return ordered, set(gates), set(shelves)
 
 
-def _columns(nodes: dict) -> dict:
+def _columns(nodes: dict, basis: tuple | None = None) -> dict:
     """Stack each column top-down, accumulating heights rather than counting rows, so a
-    type whose card is taller does not overlap the one beneath it."""
-    cols, gates, _ = roles(nodes)
+    type whose card is taller does not overlap the one beneath it.
+
+    `basis`, when given, is `(cols, gates)` from a prior `roles()` call, used instead of
+    deriving them from `nodes`. The folded view passes the full view's: `roles()` reads
+    what the edges DO, and a covered type with every member hidden would otherwise vanish
+    from a smaller node set's own `roles()`, shifting every column after it. Same headers,
+    a shorter stack under some of them — not a page that renumbers itself when a rule
+    covers the last node of a type."""
+    cols, gates = basis if basis is not None else roles(nodes)[:2]
     at = {c: 0.0 for c in cols}
     pos = {}
     for n in _order(nodes):
@@ -196,6 +205,35 @@ def layout(nodes: dict) -> dict:
     return {"columns": _columns(nodes), "map": pos}
 
 
+def _visible(nodes: dict, under: dict) -> dict:
+    """The graph with the covered layer folded away. Its own layout, so a compression
+    shrinks the picture; hung positions are derived on the page, never stored."""
+    return {nid: n for nid, n in nodes.items() if nid not in under}
+
+
+def _inherited(nodes: dict, visible: dict, under: dict) -> dict:
+    """`visible`, with a coverer also carrying what it covers' links. A rule inherits the
+    pull of everything it retired, so on the folded map it is drawn as a landmark: its
+    degree jumps from its own edges to its own plus every covered node's — a gate or
+    question the covered layer shared gains one edge per covered node, undeduped, on
+    purpose, since each covered node really did survive that gate or serve that question
+    and a repeated edge is a real vote, not noise to collapse.
+
+    This buys degree SEPARATION between anchors and leaves; it is not immunity from
+    `_map`'s documented `round(sqrt(n))` hub-count step, which still applies — and applies
+    more often here, since folding is what makes a graph small enough to cross it in the
+    first place. On an uncompressed graph `under` is empty and this is the identity: no
+    coverer, nothing inherited, `folded` equals the full map."""
+    covers = {}
+    for covered, coverer in under.items():
+        covers.setdefault(coverer, []).append(covered)
+    out = {}
+    for nid, n in visible.items():
+        extra = [l for cid in covers.get(nid, []) for l in nodes[cid].links]
+        out[nid] = dataclasses.replace(n, links=n.links + extra) if extra else n
+    return out
+
+
 SECTION_LIMIT = 4000
 
 
@@ -248,6 +286,19 @@ def payload(root: Path) -> dict:
     pos, walls = _map(nodes)
     columns = _columns(nodes)
 
+    # Who covers whom, and the graph with the covered layer folded away: its own layout,
+    # so a compression shrinks the picture on the page that shows it.
+    covered = under(nodes)
+    visible = _visible(nodes, covered)
+    fpos, fwalls = _map(_inherited(nodes, visible, covered))
+    # Columns stay the plain visible set, not the inherited one: `_inherited`'s extra
+    # links are only for `_map`'s degree count, and feeding them to `_columns` would risk
+    # entering `roles()`'s citing/cited sets and flipping a shelf classification.
+    fcols = _columns(visible, basis=(cols, gates))
+    # The same clusters `knoten frontier` shows: recursive compression is allowed, so an
+    # alive rule that shares a gate or tag with loose specifics is a candidate too.
+    clusters = compressible(nodes, compressible_types(cfg))
+
     # A graph may declare `node_types` as a plain list, or as a mapping of type -> what
     # that word means here. Only the second can fill the legend.
     # What the graph's own rules say is wrong with it. Without this the page renders a
@@ -265,6 +316,10 @@ def payload(root: Path) -> dict:
         "shelf_types": sorted(shelves),
         "walls": walls,
         "violations": broken,
+        "folded": {nid: {"columns": fcols[nid], "map": fpos[nid]} for nid in visible},
+        "folded_walls": fwalls,
+        "shape": {**shape(nodes, cfg), "clusters": len(clusters)},
+        "clusters": clusters,
         "graph": {
             "name": cfg.get("name"),
             # `node_types` is a list when a graph only declares its vocabulary, and a
@@ -272,7 +327,7 @@ def payload(root: Path) -> dict:
             "vocab": types if isinstance(types, dict) else {},
             "rules": [{k: r.get(k) for k in
                        ("id", "when_type", "when_status", "require_edge",
-                        "require_sections", "message")}
+                        "require_sections", "max_alive", "message")}
                       for r in (cfg.get("rules") or [])],
         },
         "nodes": [{
@@ -285,6 +340,11 @@ def payload(root: Path) -> dict:
                          for t in n.sections],
             "results": n.results, "repro": n.repro, "attachments": n.attachments,
             "columns": columns[n.id], "map": pos[n.id],
+            # `rule` is a badge, not a shape. A general node that has stopped being
+            # alive has stopped standing for what it retired -- `validate` names its
+            # orphans -- so the page must not go on calling it the rule over them.
+            "rule": is_general(n) and n.status == "alive",
+            "covers": supersedes(n), "under": covered.get(n.id),
         } for n in _order(nodes)],
     }
 

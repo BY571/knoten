@@ -346,6 +346,11 @@ in its history stay yours.
 
 Reading needs nothing installed. Nodes are markdown, and `knoten viz` writes the graph as
 one self-contained HTML file you can hand to someone who has never heard of knoten.
+Superseded nodes fold under the rule that covers them: click `covers N` on a rule's card
+to open it, or press `o` with the rule selected, or switch to `all` to see everything at
+once. The strip at the top gives you the same `N rules over M specifics`, and the same
+budget, that `knoten frontier` opens with. `compressible` outlines the clusters that
+could become one rule.
 
 To run the server:
 

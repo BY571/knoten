@@ -816,6 +816,33 @@ def test_a_node_that_supersedes_itself_is_refused_by_name(graph):
     assert [e.message for e in _bar(graph)] == ["finding-g cannot supersede itself"]
 
 
+def _mutual(a, b):
+    """`a`, alive, superseding `b` and surviving both gates, so the pair clears every
+    other bar and only the mutual edge is left to refuse."""
+    return (f"id: {a}\ntype: finding\nstatus: alive\nlinks:\n"
+            f"  - {{rel: npx:supersedes, to: {b}}}\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-a}\n"
+            "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def test_two_nodes_that_supersede_each_other_are_refused_once(graph):
+    """Mutual supersession passed every check: each node was alive, each retired a live
+    claim of the right type under the right question. And the pair stands for nothing --
+    each is folded inside the other, so the page draws neither and no budget counts
+    either. Reported from the smaller id, once, not once from each end."""
+    _bar_graph(graph)
+    graph.node("finding-1", _mutual("finding-1", "finding-2"),
+               "# 1\n\n## Covers\n- finding-2: the other one\n")
+    graph.node("finding-2", _mutual("finding-2", "finding-1"),
+               "# 2\n\n## Covers\n- finding-1: the other one\n")
+
+    errs = _bar(graph)
+
+    assert [(e.node, e.message) for e in errs] == [
+        ("finding-1", "finding-1 and finding-2 supersede each other")]
+
+
 def test_a_target_the_general_node_already_superseded_stays_clear_of_the_bar(graph):
     """Task 4 flips a target's status to `superseded` once the compression that
     retired it lands (`knoten update --status superseded`). The bar must not then
@@ -905,6 +932,105 @@ def test_deleting_the_general_node_orphans_the_targets_it_retired(graph):
 
     assert [e.node for e in _bar(graph)] == ["finding-1", "finding-2"]
     assert all("is superseded by nothing alive" in e.message for e in _bar(graph))
+
+
+OUTER = ("id: finding-outer\ntype: finding\nstatus: alive\nlinks:\n"
+         "  - {rel: npx:supersedes, to: finding-g}\n"
+         "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+         "  - {rel: kn:survivedGate, to: gate-a}\n"
+         "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def _recursive(graph):
+    """A rule over a rule: the inner retired two findings, the outer retired the inner,
+    and the engine has left every layer but the top `superseded`."""
+    _compressed(graph)
+    graph.node("finding-g", GOOD_GENERAL.replace("status: alive", "status: superseded"),
+               GOOD_COVERS)
+    graph.node("finding-outer", OUTER, "# outer\n\n## Covers\n- finding-g: the two cases\n")
+    return graph
+
+
+def test_a_rule_over_a_rule_validates(graph):
+    """Recursive compression is the point of a general node, and the orphan check read
+    only alive superseders: the inner rule and both findings under it were called claims
+    nothing stands in for, in a graph where the outer rule stands for all three."""
+    assert _bar(_recursive(graph)) == []
+
+
+def test_deleting_the_outer_rule_reports_the_node_it_covered_and_nothing_below(graph):
+    """One deletion, one violation, on the node the deleted rule directly covered.
+    finding-1 and finding-2 still reach finding-g, and restoring the outer rule fixes
+    all three -- so naming them too would bury the one edit that repairs it."""
+    _recursive(graph)
+
+    (graph.root / "nodes" / "finding-outer.md").unlink()
+
+    errs = _bar(graph)
+    assert [e.node for e in errs] == ["finding-g"]
+    assert "finding-g is superseded by nothing alive" in errs[0].message
+
+
+def _ring_node(a, b):
+    """`finding-a`, alive, retiring `finding-b` and surviving both gates, so the ring is
+    the only thing left to refuse."""
+    return (f"id: finding-{a}\ntype: finding\nstatus: alive\nlinks:\n"
+            f"  - {{rel: npx:supersedes, to: finding-{b}}}\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-a}\n"
+            "  - {rel: kn:survivedGate, to: gate-b}")
+
+
+def test_a_ring_of_alive_supersessions_is_refused_once(graph):
+    """A pair retiring each other was refused by name; three in a ring passed every check
+    and stood for nothing. Each member is covered by another member, so the ring folds
+    into itself: the page draws none of it and no budget counts any of it."""
+    _bar_graph(graph)
+    for a, b in (("1", "2"), ("2", "3"), ("3", "1")):
+        graph.node(f"finding-{a}", _ring_node(a, b),
+                   f"# {a}\n\n## Covers\n- finding-{b}: the next one round\n")
+
+    assert [(e.node, e.message) for e in _bar(graph)] == [
+        ("finding-1", "finding-1, finding-2, finding-3 supersede each other in a ring")]
+
+
+def test_an_alive_node_a_retired_rule_claims_still_counts(graph):
+    """A rule an outer rule retired keeps holding what it had already retired, which is
+    what makes recursive compression work. It must not go on retiring a node that is
+    still ALIVE: `index` lists that node and its question still has it, so the budget has
+    to count it, or a retired rule shrinks a budget from inside another rule's fold."""
+    compressible_graph(graph, 1, cap=1, gates=0, start=0, through="exp-e")
+    graph.node("finding-r", "id: finding-r\ntype: finding\nstatus: superseded\n"
+                            "created: 2026-02-01\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-0}\n"
+                            "  - {rel: prov:wasDerivedFrom, to: exp-e}",
+               "# r\n\n## Covers\n- finding-0: the one it retired\n")
+    graph.node("finding-o", "id: finding-o\ntype: finding\nstatus: alive\n"
+                            "created: 2026-02-02\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-r}\n"
+                            "  - {rel: prov:wasDerivedFrom, to: exp-e}",
+               "# o\n\n## Covers\n- finding-r: the rule it retired\n")
+
+    errs = [e for e in check(load(graph.root), graph.root)
+            if e.rule == "compress-before-you-accumulate"]
+
+    assert "2 alive finding under question-q, budget 1" in errs[0].message
+
+
+def test_a_ring_of_superseded_nodes_is_reported_once(graph):
+    """Three nodes retiring each other in a ring reach no alive node, so all three are
+    orphans and none of them is above the others. Reporting the top of the chain must
+    not mean reporting nobody: a graph could lose the whole ring in silence."""
+    _bar_graph(graph)
+    for a, b in (("1", "2"), ("2", "3"), ("3", "1")):
+        graph.node(f"finding-{a}",
+                   f"id: finding-{a}\ntype: finding\nstatus: superseded\nlinks:\n"
+                   f"  - {{rel: npx:supersedes, to: finding-{b}}}\n"
+                   "  - {rel: prov:wasDerivedFrom, to: question-q}",
+                   f"# {a}\n\n## Covers\n- finding-{b}: the next one round\n")
+
+    assert [e.node for e in _bar(graph)
+            if "superseded by nothing alive" in e.message] == ["finding-1"]
 
 
 def test_covers_matching_is_whole_token_not_substring(graph):

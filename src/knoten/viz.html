@@ -6,6 +6,9 @@
   --ink:#141A33; --ink-2:#5A6285; --ink-3:#9AA0BC;
   --dead:#A63A2E; --alive:#2F6F5E; --active:#3D5AA8; --open:#9A6B1F; --held:#6E5A9E;
   --rel:#C3C7DE; --r:7px;
+  /* Six muted outlines for the compressible clusters. Muted on purpose: they sit on top
+     of a page that already uses colour for a verdict, and a cluster is a suggestion. */
+  --c1:#5B7DB1; --c2:#8A6BA8; --c3:#4E8C74; --c4:#A8823E; --c5:#A4596B; --c6:#5E7C88;
   --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
@@ -44,6 +47,12 @@ header .sub{display:block;margin-top:4px;font:600 9px/1 var(--mono);letter-spaci
 .key{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:7px;font-size:11.5px;color:var(--ink-2)}
 .key b{font-variant-numeric:tabular-nums;font-weight:640;color:var(--ink)}
 .key i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:5px;vertical-align:1px}
+#strip{flex:none;align-self:center;max-width:min(30vw,340px);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;font:11.5px var(--mono);color:var(--ink-2)}
+#clusters{flex:none;border:1px solid var(--line);background:var(--surface);border-radius:9px;
+  font:600 11.5px var(--sans);color:var(--ink-2);padding:6px 12px;cursor:pointer}
+#clusters[aria-pressed=true]{border-color:var(--ink);color:var(--ink)}
+#clusters:focus-visible{outline:2px solid var(--active);outline-offset:1px}
 
 main{flex:1;display:flex;min-height:0}
 #viewport{flex:1;position:relative;overflow:hidden;cursor:grab}
@@ -56,6 +65,10 @@ main{flex:1;display:flex;min-height:0}
 #edges path.off{opacity:.12}
 #edges path.back{stroke:var(--ink-3)}
 #walls circle{fill:var(--ink);fill-opacity:.028;stroke:var(--ink);stroke-opacity:.09}
+#walls circle.cluster{fill:none;stroke-dasharray:4 4;stroke-opacity:.8;stroke-width:1.5}
+#walls text{font:600 9.5px var(--mono);text-anchor:middle;letter-spacing:.04em}
+/* Folded away, not faded: a covered node is inside its rule until you open it. */
+.card.hidden,#dots g.hidden,#edges path.hidden{display:none}
 #walls,#dots{display:none}
 body.map #walls{display:block}
 body.map #dots{display:block;pointer-events:auto}
@@ -64,6 +77,7 @@ body.map .card,body.map .colhead{display:none}
   paint-order:stroke;stroke:var(--paper);stroke-width:3px}
 #dots text.big{font:600 11px var(--sans);fill:var(--ink)}
 #dots .halo{fill:var(--ink);opacity:.13}
+#dots .ring{fill:none;stroke:var(--ink);stroke-opacity:.35}
 #dots g.faded{opacity:.22}
 #elabels text{font:600 9px var(--mono);text-anchor:middle;pointer-events:none;
   fill:var(--ink-2);paint-order:stroke;stroke:var(--paper);stroke-width:3px}
@@ -73,15 +87,20 @@ body.map .card,body.map .colhead{display:none}
 .colhead .role{display:block;margin-top:2px;font:600 9px var(--mono);letter-spacing:.11em;
   text-transform:uppercase;color:var(--ink-3)}
 
+/* Two shadows, composed: `--shadow` is the card's state (selected, broken, hovered) and
+   `--ring2` is the second cluster a card belongs to. Written as one `box-shadow` each,
+   the cluster ring overwrote the selection and the broken outline -- a card in two
+   clusters could not be shown as selected. */
 .card{position:absolute;width:250px;text-align:left;background:var(--surface);
   border:1px solid var(--line);border-left:3px solid var(--edge,var(--line-2));
   border-radius:var(--r);padding:9px 11px 9px 10px;font:inherit;color:inherit;cursor:pointer;
-  box-shadow:0 1px 1px #15161a08;transition:box-shadow .13s,border-color .13s,transform .13s}
-.card:hover{box-shadow:0 3px 10px #15161a12;transform:translateY(-1px)}
+  --shadow:0 1px 1px #15161a08;box-shadow:var(--ring2,0 0 #0000),var(--shadow);
+  transition:box-shadow .13s,border-color .13s,transform .13s}
+.card:hover{--shadow:0 3px 10px #15161a12;transform:translateY(-1px)}
 .card:focus-visible{outline:2px solid var(--active);outline-offset:2px}
-.card.on{border-color:var(--ink);box-shadow:0 4px 14px #15161a1f}
+.card.on{border-color:var(--ink);--shadow:0 4px 14px #15161a1f}
 .card.faded{opacity:.34}
-.card.broken{border-color:var(--dead);box-shadow:0 0 0 1px var(--dead) inset}
+.card.broken{border-color:var(--dead);--shadow:0 0 0 1px var(--dead) inset}
 .card .broke{display:block;margin-top:7px;padding-top:6px;border-top:1px solid var(--line);
   font:600 10px var(--mono);letter-spacing:.03em;color:var(--dead)}
 #dots circle.cell.broken{stroke:var(--dead);stroke-width:2.5}
@@ -92,9 +111,17 @@ body.map .card,body.map .colhead{display:none}
 .card .ttl{display:-webkit-box;font-size:12.5px;line-height:1.35;font-weight:520;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card.closed .ttl{text-decoration:line-through;text-decoration-color:var(--dead);color:var(--ink-2)}
-.card .id{display:block;margin-top:5px;font:10.5px/1 var(--mono);color:var(--ink-3)}
+/* A row, not a line: the id sits left and the `covers N` chip right, so a rule card is
+   exactly as tall as every other card and the column layout's rows still line up. */
+.card .id{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  margin-top:5px;font:10.5px/1 var(--mono);color:var(--ink-3)}
 .card .verdict{float:right;margin-left:8px;font:600 9.5px/1 var(--sans);letter-spacing:.07em;
   text-transform:uppercase;color:var(--edge)}
+/* A span, not a button: a button inside the card's button is invalid HTML, and the
+   browser that flattens it drops the card's own click. */
+.card .covers{flex:none;padding:2px 7px;border-radius:99px;
+  background:#F0F0EC;font:600 10px/1.3 var(--mono);letter-spacing:.04em;color:var(--ink-2)}
+.card .covers:hover{background:#E6E5DE;color:var(--ink)}
 .rail{display:flex;gap:2px;align-items:center;margin-top:8px;padding-top:7px;
   border-top:1px solid var(--line)}
 .rail i{width:3px;height:11px;border-radius:1px;background:var(--alive)}
@@ -150,19 +177,35 @@ dd{margin:0;font-variant-numeric:tabular-nums}
 .link:hover{background:#F2F2EE}
 .link:focus-visible{outline:2px solid var(--active);outline-offset:-2px}
 .link small{display:block;color:var(--ink-3);font-size:11px}
+.link small.mark{color:var(--dead);font:600 10px var(--mono);letter-spacing:.03em}
 .blank{margin-top:64px;text-align:center;color:var(--ink-3);font-size:13px}
 #panel h3.field{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;
   color:var(--ink-3);margin:.7em 0 .25em}
 
-#clegend,#klegend{position:absolute;right:16px;bottom:16px;max-width:390px;
+#clegend,#klegend,#cllegend{position:absolute;right:16px;bottom:16px;max-width:390px;
+  max-height:60%;overflow:auto;
   background:#F8F6F1F2;border:1px solid var(--line);border-radius:9px;padding:11px 13px}
 #klegend{display:none} body.map #klegend{display:block} body.map #clegend{display:none}
-#clegend summary,#klegend summary{cursor:pointer;list-style:none;font:600 9.5px var(--mono);
-  letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
-#clegend summary::-webkit-details-marker,#klegend summary::-webkit-details-marker{display:none}
-#clegend summary::after,#klegend summary::after{content:" ▾";color:var(--line-2)}
-#clegend:not([open]) summary::after,#klegend:not([open]) summary::after{content:" ▸"}
-#clegend[open] summary,#klegend[open] summary{margin-bottom:7px}
+/* One legend at a time, in the same corner. Turning the clusters on says the corner is
+   about clusters now; turning them off gives the column/key legend back. */
+#cllegend{display:none}
+body.clusters #cllegend{display:block}
+body.clusters #clegend,body.clusters #klegend{display:none}
+#clegend summary,#klegend summary,#cllegend summary{cursor:pointer;list-style:none;
+  font:600 9.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+#clegend summary::-webkit-details-marker,#klegend summary::-webkit-details-marker,
+#cllegend summary::-webkit-details-marker{display:none}
+#clegend summary::after,#klegend summary::after,#cllegend summary::after{content:" ▾";
+  color:var(--line-2)}
+#clegend:not([open]) summary::after,#klegend:not([open]) summary::after,
+#cllegend:not([open]) summary::after{content:" ▸"}
+#clegend[open] summary,#klegend[open] summary,#cllegend[open] summary{margin-bottom:7px}
+.crow{margin-top:7px;border-left:3px solid var(--cc,var(--line-2));padding-left:8px}
+.crow .ch{font-size:11.5px;color:var(--ink-2)}
+.crow .ch b{color:var(--ink);font-weight:640}
+.crow button{border:0;background:none;padding:2px 5px;margin:2px 3px 0 0;border-radius:5px;
+  font:11px var(--mono);color:var(--ink-2);cursor:pointer}
+.crow button:hover{background:#EFEBE2;color:var(--ink)}
 .lrow{display:flex;gap:8px;font-size:11.5px;line-height:1.45;color:var(--ink-2);margin-top:3px}
 .lrow b{flex:none;min-width:88px;color:var(--ink);font-weight:640}
 #trail{position:absolute;top:12px;left:16px;display:none;align-items:center;gap:6px;
@@ -198,9 +241,15 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
       <button id=v-columns aria-pressed=true>columns</button>
       <button id=v-map aria-pressed=false>map</button>
     </div>
+    <div class=viewsw role=group aria-label="Fold" id=foldsw>
+      <button id=f-folded aria-pressed=true>folded</button>
+      <button id=f-all aria-pressed=false>all</button>
+    </div>
+    <button id=clusters aria-pressed=false>compressible</button>
     <div class=stats>
       <div class=tot><b id=ntot></b><span>nodes</span></div>
       <div class=meterwrap><div class=meter id=meter></div><div class=key id=key></div></div>
+      <div id=strip></div>
     </div>
   </header>
   <main>
@@ -209,6 +258,7 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
         <g id=dots></g></svg></div>
       <div id=trail></div>
       <details id=clegend></details>
+      <details id=cllegend></details>
       <details id=klegend>
         <summary>legend</summary>
         <div class=lrow><svg width=30 height=8><line x1=1 y1=4 x2=29 y2=4
@@ -218,7 +268,8 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
           stroke="#9AA0BC" stroke-width=1.5 stroke-dasharray="2 4"></line></svg>
           <span><b style="width:auto">related</b> — everything else</span></div>
       </details>
-      <footer>drag to pan · wheel to zoom · <b>f</b> fit · <b>v</b> switch · <b>esc</b> clear</footer>
+      <footer>drag to pan · wheel to zoom · <b>f</b> fit · <b>v</b> switch · <b>a</b> fold ·
+        <b>c</b> clusters · <b>o</b> open a rule · <b>esc</b> clear</footer>
     </div>
     <div id=grip title="drag to resize · double-click to reset"></div>
     <aside id=panel><div class=blank>Select a node to read its record.</div></aside>
@@ -244,7 +295,9 @@ const RC = {"kn:survivedGate":"var(--alive)","kn:killedByGate":"var(--dead)",
 // A claim nothing can reopen. Everything else still has somewhere to go.
 const CLOSED = ["dead", "retracted", "superseded"];
 const GATE_RELS = ["kn:survivedGate", "kn:killedByGate"];
-const CARDH = 74, CARDW = 250, COLW = 300;
+// The column step, from the layout that wrote the positions: a hung card takes exactly
+// one row, so the two sides have to agree on how tall a row is.
+const CARDH = 74, CARDW = 250, COLW = 300, GAP = 12;
 
 document.title = "knoten · " + DATA.root;
 document.getElementById("graphname").textContent = DATA.root;
@@ -297,15 +350,28 @@ DATA.columns.forEach((c, i) => {
   stage.append(h);
 });
 
-const cardOf = {}, dotOf = {};
+// What actually hangs under a node. `covers` is what it CLAIMS to supersede; `under` is
+// who the payload settled on when two rules claimed the same node, and only the second
+// decides where a card is drawn.
+const hung = r => (r.covers || []).filter(id => byId[id] && byId[id].under === r.id);
+// What can be opened: anything with cards hanging under it. Not `rule`, which is the
+// badge -- a general node still alive and still standing for what it retired. The two
+// part company on a rule that was itself retired by an outer rule: it keeps its own
+// findings inside it, and a card with no chip is a fold with no handle.
+const opens = n => hung(n).length > 0 || n.rule;
+
+const cardOf = {}, dotOf = {}, chipOf = {};
 for (const n of DATA.nodes){
   const bad = (DATA.violations || {})[n.id] || [];
   const b = el("button", "card" + (CLOSED.includes(n.status) ? " closed" : "")
                               + (bad.length ? " broken" : ""));
   b.style.left = n.columns[0] + "px"; b.style.top = n.columns[1] + "px";
   b.style.setProperty("--edge", vc(n));
-  b.append(el("span","verdict", n.status || "?"), el("span","ttl", n.title || n.id),
-           el("span","id", n.id));
+  // A rule's verdict slot says `rule`, not `alive`. Every rule is alive — that is what
+  // makes it a rule — so the status is the one word on the card that says nothing.
+  const idline = el("span","id", n.id);
+  b.append(el("span","verdict", n.rule ? "rule" : (n.status || "?")),
+           el("span","ttl", n.title || n.id), idline);
   if (DATA.gate_types.includes(n.type)){
     const killed = n.backlinks.filter(x => x.rel === "kn:gateKilled").length;
     const kept = n.backlinks.filter(x => x.rel === "kn:gateSurvivedBy").length;
@@ -321,22 +387,36 @@ for (const n of DATA.nodes){
   }
   if (bad.length) b.append(el("span", "broke",
     `✗ ${bad.length} rule${bad.length > 1 ? "s" : ""} this graph declared`));
+  if (opens(n)){
+    // The chip opens the fold; the rest of the card still selects. `data-toggle` is what
+    // the `o` key reads, so the fold is reachable without a pointer. It goes on the id's
+    // row, not under it: a line of its own made a rule card taller than the 86 px slot
+    // the column layout leaves, and every card below it overlapped.
+    const chip = el("span", "covers");
+    chip.onclick = e => { e.stopPropagation(); toggle(n.id); };
+    b.dataset.toggle = n.id;
+    idline.append(chip); chipOf[n.id] = chip;
+  }
   b.onclick = () => select(n.id);
   b.onmouseenter = () => focus(n.id); b.onmouseleave = () => focus(sel);
   stage.append(b); cardOf[n.id] = b;
 
   const g = mk("g", {}); g.style.cursor = "pointer";
-  g.append(mk("circle", {class:"halo", r:0}),
-           mk("circle", {class:"cell" + ((DATA.violations||{})[n.id] ? " broken" : ""), r:6}));
-  const t = mk("text", {y:19}); g.append(t);
+  const halo = mk("circle", {class:"halo", r:0});
+  const cell = mk("circle", {class:"cell" + ((DATA.violations||{})[n.id] ? " broken" : ""), r:6});
+  // A dot that holds a fold wears a second ring and says what it covers, so the map has
+  // landmarks you can read without hovering every one of them.
+  const ring = opens(n) ? mk("circle", {class:"ring", r:0}) : null;
+  const t = mk("text", {y:19}), sub = opens(n) ? mk("text", {}) : null;
+  g.append(halo, cell); if (ring) g.append(ring);
+  g.append(t); if (sub) g.append(sub);
   g.onclick = () => select(n.id);
   g.onmouseenter = () => focus(n.id); g.onmouseleave = () => focus(sel);
-  dots.append(g); dotOf[n.id] = {g, t, halo:g.children[0], cell:g.children[1]};
+  dots.append(g); dotOf[n.id] = {g, t, sub, halo, cell, ring};
 }
-for (const c in DATA.walls){
-  const [x, y, r] = DATA.walls[c];
-  document.getElementById("walls").append(mk("circle", {cx:x, cy:y, r}));
-}
+// The walls are rebuilt by place(): folding gives the map a different set of clusters,
+// and the cluster outlines are drawn into the same group.
+const walls = document.getElementById("walls");
 
 // ---------------- edges ----------------
 const paths = [];
@@ -355,25 +435,136 @@ const near = id => { const s = new Set(id ? [id] : []);
 
 // ---------------- drawing ----------------
 let VIEW = "columns", sel = null;
+// Folded is the default reading: a general node stands for what it retired, and the
+// specifics are inside it until you ask. `open` is the set of rules a reader has opened.
+let FOLD = true, CLUSTERS = false;
+const open = new Set();
+
+// Every rule's hung rows, once per frame. For each rule: which row each hung card takes
+// (leaving room for the subtree of an opened rule in front of it), which slot it has on
+// the map's spiral, and how many rows the whole open subtree costs. Rebuilt per card this
+// walked `covers` again for every card it had already walked.
+//
+// `seen` is the cycle guard, and it is not hypothetical: two alive nodes superseding each
+// other pass `validate` today, and each is then `under` the other. A walk that follows
+// `under` without one recurses until the stack gives out — a blank page, from a graph the
+// tools called legal.
+let ROWS = {}, SIZE = {};
+function rowmap(){
+  const rows = {}, size = {};
+  const walk = (r, seen) => {
+    if (size[r.id] !== undefined) return size[r.id];
+    if (seen.has(r.id)) return 0;                    // a supersedes cycle: costs no rows
+    seen.add(r.id);
+    const at = {};
+    let row = 1, i = 0;
+    for (const c of hung(r)){
+      at[c] = {row, i: ++i};
+      row += 1 + (open.has(c) && byId[c] ? walk(byId[c], seen) : 0);
+    }
+    rows[r.id] = at;
+    return size[r.id] = row - 1;
+  };
+  // `opens`, not `rule`: what the walk has to measure is what the reader can open.
+  // Seeded from the badge, a node holding a fold without wearing one (a single
+  // `npx:supersedes`, or an inner rule an outer rule retired) got no rows at all --
+  // its hung cards stacked on one coordinate and the column below it never reflowed.
+  for (const n of DATA.nodes) if (opens(n)) walk(n, new Set());
+  return {rows, size};
+}
+
+// What the page draws. Folded, a covered node is inside its rule until you open it — and
+// inside a rule that is itself covered and shut, it stays shut. Two nodes covering each
+// other are inside each other: neither is ever a card you can start from, so neither is
+// drawn folded, and `all` is how you read a graph in that state.
+function visible(id, seen){
+  const n = byId[id];
+  if (!FOLD || n.under == null) return true;
+  seen = seen || new Set();
+  if (seen.has(id)) return false;
+  seen.add(id);
+  return open.has(n.under) && visible(n.under, seen);
+}
+
+// Where a node sits, in the current view. Covered nodes have no position of their own in
+// the payload — a hung card is derived from its rule's, so opening one is a local reflow
+// and appending a node still moves nothing. A node already on the walk falls back to its
+// own position rather than hanging off itself.
+function posOf(n, seen){
+  if (!FOLD) return VIEW === "map" ? n.map : n.columns;
+  if (n.under == null) return DATA.folded[n.id][VIEW];
+  seen = seen || new Set();
+  if (seen.has(n.id)) return VIEW === "map" ? n.map : n.columns;
+  seen.add(n.id);
+  const r = byId[n.under], at = posOf(r, seen), slot = (ROWS[r.id] || {})[n.id];
+  if (VIEW === "map"){
+    // The same golden-angle spiral the layout itself uses, at a tighter spacing: index k
+    // always lands in the same place, so opening a rule cannot shuffle its siblings.
+    const k = slot ? slot.i : 1, rad = HUNG * Math.sqrt(k);
+    return [at[0] + rad * Math.cos(k * GOLDEN), at[1] + rad * Math.sin(k * GOLDEN)];
+  }
+  return [at[0] + HUNGX, at[1] + (CARDH + GAP) * (slot ? slot.row : 1)];
+}
+const GOLDEN = Math.PI * (3 - Math.sqrt(5)), HUNG = 18, HUNGX = 18;
+
+// Every visible node's position this frame, computed once so the cards, the edges, the
+// cluster circles and the viewBox cannot disagree. Copies: `posOf` may hand back an array
+// that lives in the payload, and the column reflow below writes into these.
+function positions(){
+  const rm = rowmap(); ROWS = rm.rows; SIZE = rm.size;
+  const P = {};
+  for (const n of DATA.nodes) if (visible(n.id)) P[n.id] = posOf(n).slice();
+  if (VIEW === "map" || !FOLD) return P;
+  // Columns: a hung card takes a row that was not there a click ago, so everything below
+  // it in that column moves down, and its own hung cards move with it.
+  const family = {}, cols = {};
+  for (const n of DATA.nodes){
+    if (!visible(n.id)) continue;
+    if (n.under == null){ (cols[P[n.id][0]] ||= []).push(n); continue; }
+    // Up to the card this one is hanging off, stopping at a node already walked: the
+    // same cycle guard, and without it a mutual pair loops here for ever.
+    let r = n, seen = new Set();
+    while (r.under != null && !seen.has(r.id)){ seen.add(r.id); r = byId[r.under]; }
+    (family[r.id] ||= []).push(n.id);
+  }
+  for (const x in cols){
+    let extra = 0;
+    for (const n of cols[x].sort((a, b) => P[a.id][1] - P[b.id][1])){
+      for (const id of [n.id, ...(family[n.id] || [])]) P[id][1] += extra;
+      if (open.has(n.id)) extra += (CARDH + GAP) * (SIZE[n.id] || 0);
+    }
+  }
+  return P;
+}
 
 function place(){
   if (!DATA.nodes.length) return;      // Math.min() of nothing is Infinity
-  const map = VIEW === "map";
+  const map = VIEW === "map", P = positions(), ids = Object.keys(P);
   for (const n of DATA.nodes){
-    const [x, y] = map ? n.map : n.columns;
-    dotOf[n.id].g.setAttribute("transform", `translate(${x},${y})`);
+    const on = visible(n.id);
+    dotOf[n.id].g.classList.toggle("hidden", !on);
+    cardOf[n.id].classList.toggle("hidden", !on);
+    if (chipOf[n.id]){
+      chipOf[n.id].textContent = `covers ${hung(n).length} ${open.has(n.id) ? "▾" : "▸"}`;
+      // The card is the control that expands; a reader on a screen reader is told so.
+      cardOf[n.id].setAttribute("aria-expanded", open.has(n.id));
+    }
+    if (on) dotOf[n.id].g.setAttribute("transform", `translate(${P[n.id][0]},${P[n.id][1]})`);
   }
   for (const p of paths){
-    const A = byId[p.dataset.a], B = byId[p.dataset.b];
+    // An edge to a node that is folded away has one end nowhere. Drawn from the rule it
+    // would be a line the graph does not contain.
+    const both = !!P[p.dataset.a] && !!P[p.dataset.b];
+    p.classList.toggle("hidden", !both);
+    if (!both) continue;
+    const a = P[p.dataset.a], b = P[p.dataset.b];
     if (map){
-      const a = A.map, b = B.map;
       const mx = (a[0]+b[0])/2, my = (a[1]+b[1])/2;
       const dx = b[0]-a[0], dy = b[1]-a[1], L = Math.hypot(dx,dy) || 1;
       const bow = Math.min(38, L*.13);
       p.setAttribute("d", `M${a[0]},${a[1]}Q${mx - dy/L*bow},${my + dx/L*bow} ${b[0]},${b[1]}`);
       p.classList.remove("back");
     } else {
-      const a = A.columns, b = B.columns;
       // `<=` not `<`: two nodes in the SAME column (npx:supersedes between two
       // hypotheses) took the forward branch and swept out and back across it.
       const back = b[0] <= a[0];                     // points left: it feeds work back
@@ -385,23 +576,32 @@ function place(){
       p.classList.toggle("back", back);
     }
   }
-  const xs = DATA.nodes.map(n => (map ? n.map : n.columns)[0]);
-  const ys = DATA.nodes.map(n => (map ? n.map : n.columns)[1]);
-  const pad = map ? 120 : 60;
-  const x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - (map ? pad : TOPPAD);
-  const w = Math.max(...xs) - Math.min(...xs) + (map ? 2*pad : CARDW + 2*pad);
-  const h = Math.max(...ys) - Math.min(...ys) + (map ? 2*pad : CARDH + 2*pad);
-  svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
-  svg.setAttribute("width", w); svg.setAttribute("height", h);
-  stage.style.width = w + "px"; stage.style.height = h + "px";
-  for (const n of DATA.nodes){
-    const c = cardOf[n.id];
-    c.style.left = (n.columns[0] - x0) + "px"; c.style.top = (n.columns[1] - y0) + "px";
+  // Nothing visible at all takes a ring of alive supersessions, every node covered by
+  // another -- which `validate` refuses, but the page draws graphs that break their own
+  // rules and Math.min() of nothing is Infinity. Keep the last frame's box, and go on to
+  // clear what the last frame drew: circles hanging over an empty stage read as a crash.
+  if (ids.length){
+    const xs = ids.map(id => P[id][0]), ys = ids.map(id => P[id][1]);
+    const pad = map ? 120 : 60;
+    const x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - (map ? pad : TOPPAD);
+    const w = Math.max(...xs) - Math.min(...xs) + (map ? 2*pad : CARDW + 2*pad);
+    const h = Math.max(...ys) - Math.min(...ys) + (map ? 2*pad : CARDH + 2*pad);
+    svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+    svg.setAttribute("width", w); svg.setAttribute("height", h);
+    stage.style.width = w + "px"; stage.style.height = h + "px";
+    for (const id of ids){
+      const c = cardOf[id];
+      c.style.left = (P[id][0] - x0) + "px"; c.style.top = (P[id][1] - y0) + "px";
+    }
+    document.querySelectorAll(".colhead").forEach((h, i) => {
+      h.style.left = (i * COLW - x0) + "px";
+      h.style.top = (8 - y0) + "px";
+    });
   }
-  document.querySelectorAll(".colhead").forEach((h, i) => {
-    h.style.left = (i * COLW - x0) + "px";
-    h.style.top = (8 - y0) + "px";
-  });
+  walls.textContent = "";
+  const wl = FOLD ? DATA.folded_walls : DATA.walls;
+  for (const c in wl){ const [x, y, r] = wl[c]; walls.append(mk("circle", {cx:x, cy:y, r})); }
+  drawClusters(P);
   paint();
 }
 const TOPPAD = 70;
@@ -422,11 +622,19 @@ function paint(){
     d.t.setAttribute("y", r + 13);
     d.t.textContent = show ? short(n.id) : "";
     d.t.setAttribute("class", hub ? "big" : "");
+    if (d.ring) d.ring.setAttribute("r", r + 5);
+    // What the rule stands for, under its id. Not while it is the hub: the record is
+    // open beside it and says the same thing at length.
+    if (d.sub){
+      d.sub.setAttribute("y", r + 13 + (show ? 12 : 0));
+      d.sub.textContent = hub ? "" : `covers ${hung(n).length}`;
+    }
     cardOf[n.id].classList.toggle("faded", !!lit && !hot.has(n.id));
     cardOf[n.id].classList.toggle("on", n.id === lit);
   }
   for (const p of paths){
-    const on = lit && (p.dataset.a === lit || p.dataset.b === lit);
+    const on = lit && !p.classList.contains("hidden")
+                   && (p.dataset.a === lit || p.dataset.b === lit);
     p.classList.toggle("on", !!on); p.classList.toggle("off", !!lit && !on);
     if (on && VIEW === "map"){
       const d = p.getAttribute("d").split("Q")[1];
@@ -437,8 +645,73 @@ function paint(){
   }
 }
 
+// ---------------- what a rule covers, and what is still loose ----------------
+function toggle(id){
+  // With everything shown a fold does nothing, and a chip that visibly does nothing
+  // reads as broken. Take the click as "fold, but keep this one open".
+  if (!FOLD) setFold(true);
+  open.has(id) ? open.delete(id) : open.add(id);
+  place();
+}
+function setFold(f){
+  FOLD = f;
+  document.getElementById("f-folded").setAttribute("aria-pressed", f);
+  document.getElementById("f-all").setAttribute("aria-pressed", !f);
+  place(); fit();
+}
+const CPAL = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
+const shared = c => Object.values(c.shared)[0];
+
+// The clusters `knoten frontier` would print, drawn where they sit. Cheap and dumb on
+// purpose: a shared gate or tag, not similarity, and the reader judges what generalises.
+function drawClusters(P){
+  for (const n of DATA.nodes){
+    cardOf[n.id].style.outline = "";
+    cardOf[n.id].style.removeProperty("--ring2");
+    delete cardOf[n.id].dataset.cluster;
+  }
+  if (!CLUSTERS) return;
+  const centres = [];
+  (DATA.clusters || []).forEach((c, i) => {
+    const ids = c.ids.filter(id => P[id]);
+    if (!ids.length) return;           // every member is folded away: nothing to circle
+    const col = CPAL[i % CPAL.length];
+    for (const id of ids){
+      // A card is usually in more than one cluster — the same findings share a gate AND
+      // a tag. Overwriting the outline said it was in one, and which one depended on the
+      // order the payload happened to list them in. It keeps every index it is in; the
+      // first two get a ring each, the rest are readable in the legend.
+      const card = cardOf[id], had = card.dataset.cluster;
+      card.dataset.cluster = had ? had + " " + i : String(i);
+      if (!had) card.style.outline = "2px solid " + col;
+      else if (!card.style.getPropertyValue("--ring2"))
+        card.style.setProperty("--ring2", "0 0 0 5px " + col);
+    }
+    if (VIEW !== "map") return;
+    const cx = ids.reduce((t, id) => t + P[id][0], 0) / ids.length;
+    const cy = ids.reduce((t, id) => t + P[id][1], 0) / ids.length;
+    const r = Math.max(...ids.map(id => Math.hypot(P[id][0]-cx, P[id][1]-cy))) + 20;
+    const circle = mk("circle", {class:"cluster", cx, cy, r});
+    circle.style.stroke = col;
+    // The same nodes often cluster twice — once by their gate, once by a tag they share
+    // — and the two circles land on top of each other. The labels stack instead.
+    const stack = centres.filter(p => Math.hypot(p[0]-cx, p[1]-cy) < 1).length;
+    centres.push([cx, cy]);
+    const label = mk("text", {x:cx, y:cy - r - 7 - 13 * stack});
+    label.style.fill = col;
+    label.textContent = `${c.question} · ${shared(c)}`;
+    walls.append(circle, label);
+  });
+}
+function setClusters(on){
+  CLUSTERS = on;
+  document.getElementById("clusters").setAttribute("aria-pressed", on);
+  document.body.classList.toggle("clusters", on);
+  place();
+}
+
 // ---------------- the record ----------------
-function relations(title, list){
+function relations(title, list, mark){
   if (!list.length) return;
   panel.append(el("h3", null, title));
   const groups = {};
@@ -451,6 +724,8 @@ function relations(title, list){
     for (const to of groups[rel]){
       const b = el("button", "link", to);
       if (byId[to]) b.append(el("small", null, byId[to].title.slice(0, 60)));
+      const m = mark && mark(to);
+      if (m) b.append(el("small", "mark", m));
       b.onclick = () => select(to); g.append(b);
     }
     panel.append(g);
@@ -485,13 +760,37 @@ function lifecycle(n){
                     : "has not judged anything yet");
   } else if (!said.length) said.push("no gate has ruled on this yet");
   st.append(el("p", null, said.join(" · ")));
+  // The record says who covers it; this puts the reader back on the page beside it,
+  // which is otherwise a hunt for a rule they have never seen.
+  if (n.under && byId[n.under]){
+    const b = el("button", "link", "show under " + n.under);
+    b.onclick = () => { open.add(n.under); place(); select(n.id); };
+    st.append(b);
+  }
   return st;
 }
+// Why an entry a node claims is not one the page hangs under it. `under` is what the
+// payload settled: a target another rule claimed first hangs there, and a target that has
+// left the graph hangs nowhere. Unmarked, the record listed three ids under `covers 2`
+// and left the reader to work out which one was not in the fold.
+const notHung = n => to => {
+  const t = byId[to];
+  if (!t) return "not hung: missing";
+  if (t.under === n.id) return "";
+  if (t.under) return "not hung: claimed by " + t.under;
+  if (to === n.id) return "not hung: itself";
+  return "not hung: " + (t.status === "alive" ? "not retired" : "not alive");
+};
 const CALLOUT = ["Why it died", "What would reopen this"];
 function select(id){
   sel = id; const n = byId[id];
   panel.textContent = ""; panel.scrollTop = 0;
-  panel.append(el("div", "eyebrow", n.type), el("h2", null, n.title || n.id), lifecycle(n));
+  // `hung`, not `covers`: the same count the chip and the dot show, so the record cannot
+  // say 3 where the page folds 2. `rule` is the badge and is not the same question as
+  // whether anything hangs here, so the eyebrow says each part only when it is true.
+  const eyebrow = [n.type, n.rule ? "rule" : null,
+                   opens(n) ? `covers ${hung(n).length}` : null].filter(Boolean).join(" · ");
+  panel.append(el("div", "eyebrow", eyebrow), el("h2", null, n.title || n.id), lifecycle(n));
   const broke = (DATA.violations || {})[n.id] || [];
   if (broke.length){
     const box = el("div", "broke");
@@ -537,7 +836,15 @@ function select(id){
   }
   facts("results", n.results); facts("repro", n.repro);
   if (n.attachments.length) facts("attachments", Object.fromEntries(n.attachments.map(a => [a, ""])));
-  relations("cites", n.links); relations("cited by", n.backlinks);
+  // Before `cites`: what a rule retired is the first thing to know about it, and it is
+  // otherwise buried among its own citations. The heading counts what the page actually
+  // hangs; every claimed id is listed, and the ones outside the fold say why.
+  const covers = opens(n);
+  if (covers) relations(`covers ${hung(n).length}`,
+                        n.covers.map(to => ({rel:"npx:supersedes", to})), notHung(n));
+  // Those same edges under `cites` too would read as a second, longer set of targets.
+  relations("cites", covers ? n.links.filter(l => l.rel !== "npx:supersedes") : n.links);
+  relations("cited by", n.backlinks);
   if (VIEW === "map"){
     const i = trail.indexOf(id);
     trail = i >= 0 ? trail.slice(0, i + 1) : [...trail, id];
@@ -588,9 +895,60 @@ function drawTrail(){
   }
 }
 
+// ---------------- the strip: the same sentence `knoten frontier` opens with ----------
+// Word for word, from the same numbers. A page that says "2 rules" where the CLI says
+// "2 rules over 9 specifics" is a second opinion, and two opinions is one too many.
+{
+  const s = DATA.shape || {rules:0, specifics:0, budget:[]};
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const budget = b => b.free < 0
+    ? `${-b.free} over the ${b.count} budget under ${b.question}`
+    : `${b.free} of ${b.count} slots free under ${b.question}`;
+  const head = [`${plural(s.rules, "rule")} over ${plural(s.specifics, "specific")}`];
+  if (s.clusters) head.push(plural(s.clusters, "compressible cluster"));
+  const rows = (s.budget || []).map(budget);
+  // The three tightest rows, which is what `render_frontier` prints — `budget` is sorted
+  // by how little room is left. The rest are in the tooltip, because a header that wraps
+  // is a header nobody reads.
+  head.push(...rows.slice(0, 3));
+  const strip = document.getElementById("strip");
+  strip.textContent = head.join(" · ");
+  strip.title = rows.join("\n");
+}
+
+// ---------------- the clusters legend: what the outlines mean ----------------
+{
+  const leg = document.getElementById("cllegend");
+  leg.append(el("summary", null, "compressible"));
+  const cl = DATA.clusters || [];
+  if (!cl.length) leg.append(el("div", "crow", "nothing clusters yet — three alive under one "
+                                             + "question sharing a gate or a tag makes one"));
+  cl.forEach((c, i) => {
+    const row = el("div", "crow");
+    row.style.setProperty("--cc", CPAL[i % CPAL.length]);
+    const h = el("div", "ch");
+    h.append(el("b", null, `#${i} ${c.question}`),
+             document.createTextNode(` · ${shared(c)} · ${c.ids.length}`));
+    row.append(h);
+    // Which clusters this one is the same nodes as. Two clusters over one set of cards
+    // is the common case, not an edge case, and the outline can only show two.
+    const also = cl.map((o, j) => [j, o.ids.filter(id => c.ids.includes(id)).length])
+                   .filter(([j, n]) => j !== i && n);
+    if (also.length)
+      row.append(el("div", "ch", also.map(([j, n]) =>
+        `(shares ${n} card${n === 1 ? "" : "s"} with cluster ${j})`).join(" · ")));
+    for (const id of c.ids){
+      const b = el("button", null, id);
+      b.onclick = () => select(id);
+      row.append(b);
+    }
+    leg.append(row);
+  });
+}
+
 // Both legends are reference, not chrome: shut by default, and the choice is remembered
 // so `--watch` does not reopen them under you every couple of seconds.
-for (const id of ["clegend", "klegend"]){
+for (const id of ["clegend", "klegend", "cllegend"]){
   const d = document.getElementById(id), KEY = "knoten:" + id;
   d.open = sessionStorage.getItem(KEY) === "open";
   d.addEventListener("toggle", () => sessionStorage.setItem(KEY, d.open ? "open" : "shut"));
@@ -667,9 +1025,20 @@ function setView(v){
 }
 document.getElementById("v-columns").onclick = () => setView("columns");
 document.getElementById("v-map").onclick = () => setView("map");
+document.getElementById("f-folded").onclick = () => setFold(true);
+document.getElementById("f-all").onclick = () => setFold(false);
+document.getElementById("clusters").onclick = () => setClusters(!CLUSTERS);
 addEventListener("keydown", e => {
+  // ctrl+F is the browser's find, cmd+A selects the page, alt+v opens a menu. A page that
+  // reads the letter and ignores the modifier answers a shortcut nobody aimed at it.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "f") fit();
   if (e.key === "v") setView(VIEW === "columns" ? "map" : "columns");
+  if (e.key === "a") setFold(!FOLD);
+  if (e.key === "c") setClusters(!CLUSTERS);
+  // The chip is a pointer target; this is the same fold from the keyboard, on whatever
+  // rule the record is currently showing.
+  if (e.key === "o" && sel && cardOf[sel] && cardOf[sel].dataset.toggle) toggle(sel);
   if (e.key === "Escape"){ sel = null; paint();
     panel.textContent = ""; panel.append(el("div", "blank", "Select a node to read its record.")); }
 });
@@ -685,6 +1054,11 @@ if (RELOAD_MS){
   try {
     const seat = JSON.parse(sessionStorage.getItem(KEY) || "null");
     if (seat){
+      // The fold first: a rule you had opened is where the node you were reading lives,
+      // and restoring the selection before the fold would select a hidden card.
+      (seat.open || []).forEach(id => { if (byId[id]) open.add(id); });
+      if (seat.fold === false) setFold(false); else place();
+      if (seat.clusters) setClusters(true);
       if (seat.mode === "map") setView("map");
       if (seat.sel && byId[seat.sel]) select(seat.sel);
       // After select/setView, which both reset things. A map that jumps back to the
@@ -695,7 +1069,8 @@ if (RELOAD_MS){
     }
   } catch (e) { sessionStorage.removeItem(KEY); }
   addEventListener("beforeunload", () => sessionStorage.setItem(KEY,
-    JSON.stringify({mode: VIEW, sel, pan: view, read: panel.scrollTop})));
+    JSON.stringify({mode: VIEW, sel, pan: view, read: panel.scrollTop,
+                    fold: FOLD, open: [...open], clusters: CLUSTERS})));
 
   // Do not reload out from under someone who is reading. The pointer resting on the
   // record is the clearest signal there is; the redraw waits its turn.
@@ -711,7 +1086,9 @@ if (RELOAD_MS){
   const live = el("span", "live" + (stale ? " stale" : ""),
     stale ? `stale — last built ${new Date(BUILT_AT).toLocaleTimeString()}` : "live");
   live.title = stale ? "the --watch process is not running; this page is not updating" : "";
-  document.querySelector("header .viewsw").after(live);
+  // After the last of the header's switches. `header .viewsw` is now the view switch
+  // alone, which put the badge in the middle of the controls.
+  document.getElementById("clusters").after(live);
 }
 /*__WATCH__*/
 </script>

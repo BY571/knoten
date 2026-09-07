@@ -584,19 +584,61 @@ NO_QUESTION = "(no question)"
 WHOLE_GRAPH = "(graph)"
 
 
+def under(nodes: dict[str, Node]) -> dict[str, str]:
+    """Who covers whom: for every node some standing superseder retired, the id of that
+    superseder. THE one definition, read by `counted` and drawn by `viz`.
+
+    A superseder stands when it is alive, or when it is itself superseded by one that
+    stands. Recursive compression is the point: a rule over two rules over four findings
+    leaves the inner rules `superseded`, and reading only alive superseders would call
+    all four findings orphans and draw them loose beside the rule that covers them.
+
+    A cycle stands for nothing -- it never reaches an alive node -- so nothing in it
+    covers anything. A self-loop is not an edge at all here: without that guard a node
+    exempted itself from every budget by naming its own id.
+
+    Several standing superseders on one node is a `validate` violation; the first by id is
+    taken so the page still draws and the budget still counts.
+    """
+    claims: dict[str, list[str]] = {}      # target -> the ids claiming to have retired it
+    retires: dict[str, list[str]] = {}     # superseder -> what it claims
+    for n in nodes.values():
+        for t in supersedes(n):
+            if t in nodes and t != n.id:
+                claims.setdefault(t, []).append(n.id)
+                retires.setdefault(n.id, []).append(t)
+    standing = {n.id for n in nodes.values() if n.status == "alive"}
+    queue = deque(sorted(standing))
+    while queue:                           # outward from the alive, never up from a cycle
+        for t in retires.get(queue.popleft(), ()):
+            if t not in standing and nodes[t].status == "superseded":
+                standing.add(t)
+                queue.append(t)
+    def stands_for(t: str, c: str) -> bool:
+        """A superseded-but-covered claimer keeps holding what it had already retired --
+        that is recursive compression -- but it may not retire a node that is still
+        alive. `index` lists that node and its question still has it, so the budget has
+        to count it: a rule the graph has itself retired must not go on shrinking a
+        budget from inside another rule's fold."""
+        return c in standing and (nodes[t].status != "alive" or nodes[c].status == "alive")
+
+    return {t: min(held) for t, cs in claims.items()
+            if (held := [c for c in cs if stands_for(t, c)])}
+
+
 def counted(nodes: dict[str, Node], types: tuple[str, ...],
             per: str = "question") -> dict[str, list[Node]]:
-    """The alive nodes of `types` that nothing alive has generalised away, grouped by the
-    question they stand under (`per: graph` puts them all in one group).
+    """The alive nodes of `types` that nothing standing has generalised away, grouped by
+    the question they stand under (`per: graph` puts them all in one group).
 
     THE one definition of "still counts". `shape`, `compressible`, `validate._budget` and
     the delta `update.refused` measures a write by all read these groups, so the number a
     commit is refused on is the number `validate` prints. Written three times before, it
     drifted once already: a self-loop let a node exempt itself from the budget by naming
-    its own id, and only two of the three copies had the guard.
+    its own id, and only two of the three copies had the guard -- which is why coverage is
+    now `under`'s one definition and not a comprehension repeated here.
     """
-    covered = {l["to"] for n in nodes.values() if n.status == "alive"
-               for l in n.links if l["rel"] == SUPERSEDES and l["to"] != n.id}
+    covered = set(under(nodes))
     groups: dict[str, list[Node]] = {}
     for n in nodes.values():
         if n.status != "alive" or n.type not in types or n.id in covered:

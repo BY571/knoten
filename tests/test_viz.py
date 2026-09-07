@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from knoten import viz
+from knoten import ops, viz
 from knoten.cli import main
 from knoten.core import load
 
@@ -371,3 +371,296 @@ def test_the_record_panel_orders_by_the_scaffold(small):
 
     assert "for (const p of PANEL_SECTIONS){" in html
     assert 'el("h3", "field", p.label)' in html
+
+
+Q = "id: question-q\ntype: question\nstatus: open\ncreated: 2026-01-01"
+GATE_H = "id: gate-h\ntype: gate\nstatus: active\ncreated: 2026-01-01"
+
+
+def _finding(i, status="alive", extra=""):
+    return (f"id: finding-{i}\ntype: finding\nstatus: {status}\ncreated: 2026-01-0{i}\nlinks:\n"
+            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+            "  - {rel: kn:survivedGate, to: gate-h}" + extra)
+
+
+@pytest.fixture
+def compressed(graph):
+    """Two specifics retired by one rule, one specific still alive, and one orphan."""
+    graph.rules("name: t\nnode_types: [question, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules: []\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2):
+        graph.node(f"finding-{i}", _finding(i, "superseded"), f"# {i}\n")
+    graph.node("finding-3", _finding(3), "# 3\n")
+    graph.node("finding-4", _finding(4, "superseded"), "# orphan\n")     # nothing alive covers it
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\ncreated: 2026-01-05\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}",
+               "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+    return graph
+
+
+def test_the_payload_says_who_covers_whom(compressed):
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert by["finding-g"]["rule"] is True and by["finding-g"]["covers"] == ["finding-1", "finding-2"]
+    assert by["finding-1"]["under"] == "finding-g" and by["finding-3"]["under"] is None
+    assert by["finding-4"]["under"] is None and by["finding-4"]["status"] == "superseded"
+    assert by["finding-3"]["rule"] is False and by["finding-3"]["covers"] == []
+
+
+def test_a_single_target_supersession_folds_and_can_be_opened(compressed):
+    """The CLI's `replaces` path writes one `npx:supersedes` edge, which is not a rule --
+    one target is a replacement, not a generalisation -- and the page folds the target
+    under it all the same. So the layout has to give it rows: measured off the badge, its
+    hung cards stacked on one coordinate and the column below it never reflowed."""
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-p", "id: finding-p\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-07\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-3}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# P\n\n## Covers\n- finding-3: the one it replaces\n")
+
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert by["finding-p"]["rule"] is False and by["finding-p"]["covers"] == ["finding-3"]
+    assert by["finding-3"]["under"] == "finding-p"
+    assert "finding-p" in p["folded"] and "finding-3" not in p["folded"]
+    # The rows the page measures come off what can be opened, not off the badge.
+    assert "if (opens(n)) walk(n, new Set());" in viz.render(compressed.root)
+
+
+def test_a_rule_that_is_no_longer_alive_is_no_longer_badged(compressed):
+    """`rule` is the badge on the card and the eyebrow on the record. A retracted general
+    node stands for nothing -- validate reports the orphans it left behind -- and a page
+    that still badges it says the compression holds when it does not."""
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: retracted\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-1}\n"
+                                 "  - {rel: npx:supersedes, to: finding-2}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+
+    by = {n["id"]: n for n in viz.payload(compressed.root)["nodes"]}
+
+    assert by["finding-g"]["rule"] is False
+    # It still says what it claimed, and hangs none of it: the record marks the entries.
+    assert by["finding-g"]["covers"] == ["finding-1", "finding-2"]
+    assert by["finding-1"]["under"] is None and by["finding-2"]["under"] is None
+
+
+def test_the_folded_view_still_holds_the_rule_when_every_specific_is_covered(compressed):
+    """The fold must never leave the page with nothing to draw. A rule covers what it
+    retired and nothing covers the rule, so it is there to be opened."""
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-4", _finding(4, "superseded"), "# 4\n")
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 + "".join(f"  - {{rel: npx:supersedes, to: finding-{i}}}\n"
+                                           for i in (1, 2, 3, 4)) +
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1\n- finding-2\n- finding-3\n- finding-4\n")
+
+    p = viz.payload(compressed.root)
+
+    assert "finding-g" in p["folded"]
+    assert not {"finding-1", "finding-2", "finding-3", "finding-4"} & set(p["folded"])
+
+
+def test_a_rule_over_a_rule_hangs_the_whole_chain(compressed):
+    """Recursive compression: the outer rule retires the inner, the inner keeps its own
+    findings. Reading only alive superseders drew the inner rule's two findings loose on
+    the folded map, beside the rule that covers them."""
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: superseded\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-1}\n"
+                                 "  - {rel: npx:supersedes, to: finding-2}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+    compressed.node("finding-o", "id: finding-o\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-06\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-g}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# O\n\n## Covers\n- finding-g: both of them\n")
+
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert by["finding-g"]["under"] == "finding-o"
+    assert by["finding-1"]["under"] == "finding-g" and by["finding-2"]["under"] == "finding-g"
+    assert not {"finding-1", "finding-2", "finding-g"} & set(p["folded"])
+
+
+def test_the_folded_layout_holds_only_visible_nodes(compressed):
+    p = viz.payload(compressed.root)
+
+    assert set(p["folded"]) == {"question-q", "gate-h", "finding-3", "finding-4", "finding-g"}
+    assert all({"columns", "map"} <= set(v) for v in p["folded"].values())
+    assert set(p["folded_walls"]) <= set(p["folded"]) | {"unattached"}
+
+
+def test_a_compression_moves_nothing_in_the_full_layout(compressed):
+    before = {n["id"]: (n["columns"], n["map"]) for n in viz.payload(compressed.root)["nodes"]}
+    # Compress finding-3 too, under a second rule, as the engine would leave the files.
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-r", "id: finding-r\ntype: finding\nstatus: alive\ncreated: 2026-01-06\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-3}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# R\n\n## Covers\n- finding-3: c\n")
+
+    after = {n["id"]: (n["columns"], n["map"]) for n in viz.payload(compressed.root)["nodes"]}
+
+    assert all(after[i] == before[i] for i in before)
+
+
+def test_appending_moves_nothing_in_the_folded_layout(compressed):
+    before = viz.payload(compressed.root)["folded"]
+    compressed.node("finding-9", _finding(9), "# 9\n")
+
+    after = viz.payload(compressed.root)["folded"]
+
+    assert all(after[i] == before[i] for i in before)
+
+
+def test_the_payload_carries_the_shape_and_the_clusters(compressed):
+    compressed.node("finding-5", _finding(5), "# 5\n").node("finding-6", _finding(6), "# 6\n")
+
+    p = viz.payload(compressed.root)
+
+    assert p["shape"]["rules"] == 1 and p["shape"]["specifics"] == 3
+    assert p["shape"]["clusters"] == 1
+    assert p["clusters"][0]["shared"] == {"gate": "gate-h"}
+    assert p["clusters"][0]["ids"] == ["finding-3", "finding-5", "finding-6", "finding-g"]
+
+
+def test_the_folded_layout_equals_the_full_layout_when_nothing_is_compressed(small):
+    """`_inherited` and the folded columns' basis are both no-ops on an uncompressed
+    graph: nothing is `under` anything, so `visible` is every node, and the folded
+    positions must be exactly the full ones."""
+    p = viz.payload(small.root)
+
+    full = {n["id"]: (n["columns"], n["map"]) for n in p["nodes"]}
+    folded = {nid: (v["columns"], v["map"]) for nid, v in p["folded"].items()}
+
+    assert folded == full
+
+
+def test_the_folded_columns_share_the_full_views_headers(graph):
+    """A type entirely covered still gets its column, and everything after it keeps its
+    x, so a rule that just finished retiring the last hypothesis does not also shove
+    every finding one column to the left."""
+    graph.rules("name: t\nnode_types: [question, hypothesis, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules: []\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2):
+        graph.node(f"hyp-{i}",
+                   f"id: hyp-{i}\ntype: hypothesis\nstatus: superseded\ncreated: 2026-01-0{i}\nlinks:\n"
+                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\ncreated: 2026-01-05\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: hyp-1}\n"
+                            "  - {rel: npx:supersedes, to: hyp-2}\n"
+                            "  - {rel: kn:survivedGate, to: gate-h}", "# G\n")
+
+    p = viz.payload(graph.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert p["columns"] == ["question", "hypothesis", "finding", "gate"]
+    assert p["folded"]["finding-g"]["columns"][0] == by["finding-g"]["columns"][0]
+
+
+def test_a_max_alive_rule_reaches_the_page(compressed):
+    (compressed.root / "graph.yaml").write_text(
+        "name: t\nnode_types: [question, finding, gate]\nstatuses: [open, alive, superseded, active]\n"
+        "rules:\n  - id: cap\n    max_alive: {type: finding, per: question, count: 4}\n    message: m\n",
+        encoding="utf-8")
+
+    p = viz.payload(compressed.root)
+
+    assert p["graph"]["rules"][0]["max_alive"] == {"type": "finding", "per": "question", "count": 4}
+    assert p["shape"]["budget"] == [{"question": "question-q", "type": "finding", "free": 2, "count": 4}]
+
+
+def test_the_template_folds_covers_and_shows_the_shape(small):
+    html = viz.render(small.root)
+
+    for needle in ["DATA.folded", "DATA.shape", "DATA.clusters", 'id=f-folded', 'id=f-all',
+                   'id=strip', 'id=clusters', 'id=cllegend', "function visible", "function posOf"]:
+        assert needle in html, needle
+
+
+def test_the_folded_switch_and_cluster_button_are_pressable_buttons(small):
+    html = viz.render(small.root)
+
+    assert re.search(r'<button id=f-folded aria-pressed=true>', html)
+    assert re.search(r'<button id=f-all aria-pressed=false>', html)
+    assert re.search(r'<button id=clusters aria-pressed=false>', html)
+
+
+def test_the_page_leaves_the_browsers_own_shortcuts_alone(small):
+    """ctrl+F is find, cmd+A selects the page, alt+v opens a menu. Reading the letter and
+    ignoring the modifier answered shortcuts nobody aimed at the page."""
+    html = viz.render(small.root)
+
+    assert "if (e.ctrlKey || e.metaKey || e.altKey) return;" in html
+
+
+def test_the_cluster_ring_does_not_overwrite_the_selection(small):
+    """The second cluster's ring was written as an inline `box-shadow`, the same property
+    the selection and the broken outline use: whichever was set last won, so a card in two
+    clusters could not be shown as selected. They compose through `--ring2` instead."""
+    html = viz.render(small.root)
+
+    assert "box-shadow:var(--ring2,0 0 #0000),var(--shadow)" in html
+    assert 'setProperty("--ring2"' in html
+    assert "style.boxShadow" not in html
+
+
+def test_the_record_says_what_a_rule_claims_but_does_not_hang(small):
+    """A rule whose target another rule claimed first hangs nothing, and the card says
+    `covers 0` over a list of two. The record marks which entries are outside the fold."""
+    html = viz.render(small.root)
+
+    assert "not hung: claimed by " in html and "not hung: missing" in html
+
+
+def test_the_watch_seat_remembers_the_fold(small):
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "fold: FOLD" in html and "open: [...open]" in html
+
+
+def test_a_supersedes_cycle_cannot_hang_the_page(small):
+    """Two alive nodes superseding each other pass `validate` today, and each is then
+    `under` the other. Every walk that follows `under` carries a seen set, or opening
+    both recurses until the stack gives out — a blank page from a legal graph."""
+    html = viz.render(small.root)
+
+    assert "function visible(id, seen)" in html
+    assert "function posOf(n, seen)" in html
+    assert html.count("seen.has") >= 3          # visible, posOf, the walk up to the card
+
+
+def test_the_strip_prints_the_budget_rows_the_frontier_prints(graph):
+    """The strip and `knoten frontier`'s header are built from the same `shape`, and the
+    CLI prints up to three budget rows. A page that prints one says a graph with three
+    caps is tighter than it is."""
+    graph.rules("name: t\nnode_types: [question, finding, gate]\n"
+                "statuses: [open, alive, superseded, active]\nrules:\n"
+                "  - id: cap-q\n    max_alive: {type: finding, per: question, count: 4}\n"
+                "    message: m\n"
+                "  - id: cap-g\n    max_alive: {type: finding, per: graph, count: 9}\n"
+                "    message: m\n")
+    graph.node("question-q", Q, "# Q\n").node("gate-h", GATE_H, "# H\n")
+    for i in (1, 2, 3):
+        graph.node(f"finding-{i}", _finding(i), f"# {i}\n")
+
+    p = viz.payload(graph.root)
+    html = viz.render(graph.root)
+
+    assert p["shape"] == ops.frontier(graph.root)["shape"]      # the CLI's own numbers
+    assert len(p["shape"]["budget"]) == 2
+    assert "rows.slice(0, 3)" in html                          # and its own three rows
