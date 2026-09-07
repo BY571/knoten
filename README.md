@@ -6,19 +6,44 @@
   <b>A research graph that remembers what didn't work.</b>
 </p>
 
-Every idea you test is a markdown file in git, marked **alive**, **dead** or
-**retracted**. A dead one carries why it died, what would bring it back, and the script
-that killed it. Nothing is deleted or overwritten: a correction is a new node that
-supersedes the old one, so six months later the graph tells you not just what you believe
-but what you already ruled out and why.
+- **One shared graph for a team.** Host it with `knoten serve`, invite people with read or
+  write rights, and every push is checked against the graph's own rules and a signed
+  identity that lives in the graph, not on the server.
+- **Dead ends are the asset.** A dead hypothesis carries why it died, what would bring it
+  back, and the script that killed it. Nothing is deleted; a correction is a new node.
+- **Rules are data.** Your `graph.yaml` says what a claim must carry and what it must
+  survive; the tool enforces it and knows nothing else about your field.
+- **It gets wiser, not just bigger.** Several findings that say the same thing become one
+  general finding that supersedes them, held to every check they passed.
+- **Track the number you are trying to move**, from the results your experiments already
+  record, with what each run built on.
+- **Agents run it before the work.** `knoten frontier` says what to do next, `knoten index`
+  whether it was tried in other words, `knoten gates` what a result must survive.
+- **Zero dependencies.** Markdown files in git, PyYAML, and one self-contained HTML page
+  for the visualization. No database, no build step, no server until you share.
 
-Research loops forget, whether a human or an agent runs them: they re-propose what was
-settled last month under another name, and they file the wins while the failures
-evaporate. knoten runs **before** the work: `knoten frontier` says what is worth doing
-next, `knoten index` whether it has been tried in other words, `knoten gates` what a
-result has to survive. Your graph declares its own rules in `graph.yaml`; the tool
-enforces them and knows nothing else about your field. One graph can be shared by a team,
-humans and agents alike, with the rules enforced on the server for everyone.
+<p align="center">
+  <img src="assets/viz-cards.png" alt="cards view with a rule unfolded and its record open" width="900">
+</p>
+
+The graph as cards, one column per stage of the loop. A general finding carries `covers 2`;
+open it and the two findings it retired hang beneath it, and its record on the right says
+what each contributed, which gate it survived, and where its file is.
+
+<p align="center">
+  <img src="assets/viz-graph.png" alt="graph view around the gate" width="900">
+</p>
+
+The same graph as a map, clustered around the busiest nodes. Here the gate is selected:
+its rule, why it exists, and the nine claims it judged, two of them killed.
+
+<p align="center">
+  <img src="assets/viz-metrics.png" alt="the metric over time" width="900">
+</p>
+
+The research metric over time. Each point is a run that recorded `return`, placed at its
+date; the dashed arc is a run building on an earlier one, the ring the best so far, the red
+point a run whose claim died.
 
 ## A node
 
@@ -64,7 +89,8 @@ survives a compute-matched baseline. Plausible for code execution or theorem pro
 GSM8K is not that task.
 ````
 
-## The loop
+<details>
+<summary><b>The loop</b></summary>
 
 ```bash
 pip install git+https://github.com/BY571/knoten
@@ -84,7 +110,10 @@ A round goes source, idea, hypothesis, experiment, finding; a scaffolded graph r
 step that skips the one before it. Every read command takes `--json`. Exit `0` succeeded,
 `1` refused, and a refusal is the feature: read it, fix the node, run it again.
 
-## Rules are data
+</details>
+
+<details>
+<summary><b>Rules are data</b></summary>
 
 ```yaml
 rules:
@@ -101,24 +130,32 @@ and tags the same way, and a typo is a violation, not a new type. A `gate` is a 
 result should survive; by default an alive claim that cites none is listed by
 `knoten frontier` as unchecked, not refused, and one commented rule makes it mandatory.
 
-## Track a number
+</details>
+
+<details>
+<summary><b>Track your research metric</b></summary>
 
 ```yaml
 metrics:
-  tokens_per_question: {goal: min}
+  return: {goal: max}
 ```
 
-`knoten metric tokens_per_question` reads the `results:` your nodes already carry, along
-the time axis, each against the best before it, with what it built on:
+`knoten metric return` reads the `results:` your experiments already carry, along the
+time axis, each against the best before it, with what it built on:
 
 ```
-  tokens_per_question (min)   best 290  hyp-few-shot-format  2026-03-14
-    2026-03-02  hyp-self-consistency            1420   baseline  ★
-    2026-03-14  hyp-few-shot-format              290      -1130  ★
-    2026-08-21  finding-sc-large-models         1260       +970     builds on hyp-self-consistency
+  return (max)   best 15.4  exp-batch-4096  2026-06-28
+    2026-06-03  exp-baseline                     2.1   baseline  ★
+    2026-06-06  exp-adv-norm                     5.1         +3  ★
+    2026-06-14  exp-reward-scale                10.3       +5.2  ★
+    2026-06-21  exp-entropy-bonus                9.8       -0.5
+    2026-06-28  exp-batch-4096                  15.4       +5.1  ★  builds on exp-reward-scale
 ```
 
-## Compress
+</details>
+
+<details>
+<summary><b>Compress</b></summary>
 
 When several findings under one question say the same thing, write the statement that
 makes them unnecessary and point it at each of them:
@@ -162,7 +199,10 @@ bought:
     this graph now stands on 1 rule and 0 specifics
 ```
 
-## A shared graph
+</details>
+
+<details>
+<summary><b>A shared graph</b></summary>
 
 A remote is a `knoten serve` process on any machine you reach over HTTPS. Who may write
 is written in the graph itself (`contributors.yaml`, signed commits), not on the server.
@@ -183,12 +223,15 @@ which runs the graph's rules and checks the signature for everyone. `knoten pull
 replays your commits on top of what arrived; a hosted graph is one line of history. A
 revoked person keeps their clone; only their token and future signatures stop working.
 
+</details>
+
 ## For agents
 
 [`SKILL.md`](SKILL.md) teaches the loop; [`src/knoten/prompts/`](src/knoten/prompts)
 says how to write each kind of node, and where to look when there are no ideas left.
-[`examples/llm-research/`](examples/llm-research) and [`examples/rl-reward/`](examples/rl-reward) (a return climbing 2 to 15 over five experiments) are worked graphs;
-[SPEC.md](SPEC.md) the design.
+[`examples/rl-reward/`](examples/rl-reward) is the graph in the screenshots (a return
+climbing 2 to 15 over five experiments); [`examples/llm-research/`](examples/llm-research)
+a second one; [SPEC.md](SPEC.md) the design.
 
 MIT. One dependency: PyYAML. No framework, no database, no build step, and no server until
 you share a graph.
