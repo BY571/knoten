@@ -19,31 +19,30 @@
   record, with what each run built on.
 - **Agents run it before the work.** `knoten frontier` says what to do next, `knoten index`
   whether it was tried in other words, `knoten gates` what a result must survive.
-- **Zero dependencies.** Markdown files in git, PyYAML, and one self-contained HTML page
-  for the visualization. No database, no build step, no server until you share.
+- **A visualizer you can hand to anyone.** `knoten viz` writes one HTML file: the graph as
+  cards, as a map, and as your metric over time, with every record one click away.
+- **Zero dependencies.** Markdown files in git and PyYAML. No database, no build step, no
+  server until you share.
 
-<p align="center">
-  <img src="assets/viz-cards.png" alt="cards view with a rule unfolded and its record open" width="900">
-</p>
+<details>
+<summary><b>Visualizer</b>: the same graph as cards, as a map, and as a metric over time (click a picture to enlarge)</summary>
+<br>
+<table>
+<tr>
+<td align="center" width="33%"><a href="assets/viz-cards.png"><img src="assets/viz-cards.png" alt="cards view with a rule unfolded and its record open" width="300"></a></td>
+<td align="center" width="33%"><a href="assets/viz-graph.png"><img src="assets/viz-graph.png" alt="graph view around the gate" width="300"></a></td>
+<td align="center" width="33%"><a href="assets/viz-metrics.png"><img src="assets/viz-metrics.png" alt="the metric over time" width="300"></a></td>
+</tr>
+<tr>
+<td valign="top"><b>Cards</b>, one column per stage of the loop. A general finding carries <code>covers 2</code>; open it and the two findings it retired hang beneath it, and its record says what each contributed, which gate it survived, and where its file is.</td>
+<td valign="top"><b>Graph</b>, clustered around the busiest nodes. Here the gate is selected: its rule, why it exists, and the nine claims it judged, two of them killed.</td>
+<td valign="top"><b>Metric over time.</b> Each point is a run that recorded <code>return</code>, placed at its date; the dashed arc is a run building on an earlier one, the ring the best so far, the red point a run whose claim died.</td>
+</tr>
+</table>
 
-The graph as cards, one column per stage of the loop. A general finding carries `covers 2`;
-open it and the two findings it retired hang beneath it, and its record on the right says
-what each contributed, which gate it survived, and where its file is.
+One self-contained HTML file, written by <code>knoten viz</code>, that anyone can open without installing anything.
 
-<p align="center">
-  <img src="assets/viz-graph.png" alt="graph view around the gate" width="900">
-</p>
-
-The same graph as a map, clustered around the busiest nodes. Here the gate is selected:
-its rule, why it exists, and the nine claims it judged, two of them killed.
-
-<p align="center">
-  <img src="assets/viz-metrics.png" alt="the metric over time" width="900">
-</p>
-
-The research metric over time. Each point is a run that recorded `return`, placed at its
-date; the dashed arc is a run building on an earlier one, the ring the best so far, the red
-point a run whose claim died.
+</details>
 
 ## A node
 
