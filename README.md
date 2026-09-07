@@ -147,6 +147,31 @@ statuses:   [open, alive, dead, retracted, superseded, active]
 tags:       [decoding, reasoning, prompting, evaluation]
 ```
 
+## Track a number
+
+A graph usually has one number it is trying to move. Name it, and every result that
+already records it becomes a data point:
+
+```yaml
+metrics:
+  tokens_per_question: {goal: min}
+```
+
+Nothing new gets written: the numbers are the `results:` your nodes already carry.
+`knoten metric tokens_per_question` reads them back along the time axis, each result
+against the best one before it, with the lineage the edges already describe:
+
+```
+  tokens_per_question (min)   best 290  hyp-few-shot-format  2026-03-14
+    2026-03-02  hyp-self-consistency            1420   baseline  ★
+    2026-03-14  hyp-few-shot-format              290      -1130  ★
+    2026-08-21  finding-sc-large-models         1260       +970     builds on hyp-self-consistency
+    2026-08-21  finding-sc-small-models         1180       +890     builds on hyp-self-consistency
+```
+
+`knoten frontier` and `knoten viz` carry the best point in their header, and the page
+gains a `metrics` view that plots each declared number as a chart you can click into.
+
 ## Compress
 
 Sooner or later several findings under one question say the same thing in different

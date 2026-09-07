@@ -1,10 +1,11 @@
-"""One HTML file: the graph as columns, and the graph as a map.
+"""One HTML file: the graph as columns, as a map, and as the numbers it is moving.
 
 Read-only, self-contained, no server and no build step; the payload is inlined, so the
-file opens from `file://`. Two views because there are two questions: **columns** is the
-inventory along the loop a graph declares, **map** is the traversal around the busiest
-nodes, since a graph's landmarks are where its edges converge. Layout is a pure function
-of the graph, and a persisted `layout.json` would be a merge conflict generator.
+file opens from `file://`. Three views because there are three questions: **columns** is
+the inventory along the loop a graph declares, **map** is the traversal around the busiest
+nodes, since a graph's landmarks are where its edges converge, and **metrics** is the
+record, one chart per number the graph declared it is trying to move. Layout is a pure
+function of the graph, and a persisted `layout.json` would be a merge conflict generator.
 """
 import hashlib
 import json
@@ -12,8 +13,8 @@ import math
 import time
 from pathlib import Path
 
-from .core import (GATE_TYPE, GraphError, is_general, load, section, shape, supersedes,
-                   under)
+from .core import (GATE_TYPE, UNDATED, GraphError, is_general, load, metric,
+                   metrics_declared, section, shape, supersedes, under)
 from .validate import check, load_config
 
 HERE = Path(__file__).parent
@@ -41,10 +42,6 @@ GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
 FLOW = ["question", "source", "idea", "hypothesis", "experiment", "finding",
         "blocker", "retraction"]
 
-
-# Undated work sorts LAST, with the newest: empty-string-first put it in slot 0 and
-# pushed every existing node along, the one thing this layout promises not to do.
-UNDATED = "9999"
 
 
 def _order(nodes: dict) -> list:
@@ -252,6 +249,10 @@ def payload(root: Path) -> dict:
         "folded": {nid: {"columns": fcols[nid], "map": fpos[nid]} for nid in visible},
         "folded_walls": fwalls,
         "shape": shape(nodes, cfg),
+        # One series per declared metric. The chart is the only view that reads the graph
+        # along its time axis; every other one reads it along its edges.
+        "metrics": [{"name": name, "goal": goal, "points": metric(nodes, name, goal)}
+                    for name, goal in metrics_declared(cfg).items()],
         "graph": {
             "name": cfg.get("name"),
             # `node_types` is a list when a graph only declares its vocabulary, and a
