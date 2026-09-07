@@ -170,3 +170,12 @@ def test_supersedes_lists_distinct_targets_and_two_make_a_general_node(graph):
 def test_compressible_types_default_to_finding():
     assert compressible_types({}) == ("finding",)
     assert compressible_types({"compressible": ["finding", "principle"]}) == ("finding", "principle")
+
+def test_section_collapses_by_default_and_can_keep_its_newlines(graph):
+    """Two callers, two needs: the CLI prints a section inline on one row, the viz panel
+    renders it as the table the author wrote."""
+    from knoten.core import section
+    body = "# t\n\n## Result\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+
+    assert "\n" not in section(body, "Result")
+    assert section(body, "Result", collapse=False).count("\n") == 2

@@ -26,6 +26,14 @@ header .sub{display:block;margin-top:4px;font:600 9px/1 var(--mono);letter-spaci
 .viewsw button[aria-pressed=true]{background:var(--surface);color:var(--ink);
   box-shadow:0 1px 2px #141a331f}
 .viewsw button:focus-visible{outline:2px solid var(--active);outline-offset:1px}
+.live{flex:none;font:600 9.5px var(--mono);letter-spacing:.13em;text-transform:uppercase;
+  color:var(--alive);display:flex;align-items:center;gap:6px}
+.live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--alive);
+  animation:pulse 2s ease-in-out infinite}
+.live.stale{color:var(--dead);text-transform:none;letter-spacing:.02em}
+.live.stale::before{background:var(--dead);animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.live::before{animation:none}}
 .stats{margin-left:auto;display:flex;align-items:baseline;gap:18px;min-width:0}
 .tot{flex:none;display:flex;align-items:baseline;gap:6px}
 .tot b{font-size:23px;font-weight:640;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
@@ -61,8 +69,7 @@ body.map .card,body.map .colhead{display:none}
   fill:var(--ink-2);paint-order:stroke;stroke:var(--paper);stroke-width:3px}
 
 .colhead{position:absolute;width:250px;padding-bottom:6px;border-bottom:1px solid var(--line-2)}
-.colhead .n{font:600 11px/1 var(--mono);color:var(--ink-3);letter-spacing:.04em}
-.colhead .t{display:block;margin-top:5px;font-size:13px;font-weight:620;letter-spacing:-.01em}
+.colhead .t{font-size:13px;font-weight:620;letter-spacing:-.01em}
 .colhead .role{display:block;margin-top:2px;font:600 9px var(--mono);letter-spacing:.11em;
   text-transform:uppercase;color:var(--ink-3)}
 
@@ -74,6 +81,14 @@ body.map .card,body.map .colhead{display:none}
 .card:focus-visible{outline:2px solid var(--active);outline-offset:2px}
 .card.on{border-color:var(--ink);box-shadow:0 4px 14px #15161a1f}
 .card.faded{opacity:.34}
+.card.broken{border-color:var(--dead);box-shadow:0 0 0 1px var(--dead) inset}
+.card .broke{display:block;margin-top:7px;padding-top:6px;border-top:1px solid var(--line);
+  font:600 10px var(--mono);letter-spacing:.03em;color:var(--dead)}
+#dots circle.cell.broken{stroke:var(--dead);stroke-width:2.5}
+#panel .broke{margin-top:13px;border-left:4px solid var(--dead);background:#FDF6F4;
+  border-radius:0 8px 8px 0;padding:10px 13px}
+#panel .broke h3{margin:0 0 4px;color:var(--dead)}
+#panel .broke p{margin:0 0 6px;font-size:12.5px;color:var(--ink-2)}
 .card .ttl{display:-webkit-box;font-size:12.5px;line-height:1.35;font-weight:520;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card.closed .ttl{text-decoration:line-through;text-decoration-color:var(--dead);color:var(--ink-2)}
@@ -88,8 +103,13 @@ body.map .card,body.map .colhead{display:none}
 .rail .cnt{margin-left:auto;font:600 10px/1 var(--mono);color:var(--ink-3);
   font-variant-numeric:tabular-nums}
 
-#panel{width:390px;border-left:1px solid var(--line);background:var(--surface);
-  overflow:auto;padding:20px 22px 60px}
+#panel{width:var(--panelw,390px);flex:none;border-left:1px solid var(--line);
+  background:var(--surface);overflow:auto;padding:20px 22px 60px}
+#grip{flex:none;width:7px;cursor:col-resize;background:var(--paper);position:relative}
+#grip::after{content:"";position:absolute;inset:0 3px;background:var(--line-2);opacity:0;
+  transition:opacity .12s}
+#grip:hover::after,#grip.dragging::after{opacity:1}
+body.resizing{cursor:col-resize;user-select:none}
 #panel .eyebrow{font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
   color:var(--ink-3)}
 #panel h2{margin:9px 0 0;font-size:19px;line-height:1.28;font-weight:620;letter-spacing:-.02em}
@@ -131,6 +151,8 @@ dd{margin:0;font-variant-numeric:tabular-nums}
 .link:focus-visible{outline:2px solid var(--active);outline-offset:-2px}
 .link small{display:block;color:var(--ink-3);font-size:11px}
 .blank{margin-top:64px;text-align:center;color:var(--ink-3);font-size:13px}
+#panel h3.field{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);margin:.7em 0 .25em}
 
 #clegend,#klegend{position:absolute;right:16px;bottom:16px;max-width:390px;
   background:#F8F6F1F2;border:1px solid var(--line);border-radius:9px;padding:11px 13px}
@@ -141,10 +163,8 @@ dd{margin:0;font-variant-numeric:tabular-nums}
 #clegend summary::after,#klegend summary::after{content:" ▾";color:var(--line-2)}
 #clegend:not([open]) summary::after,#klegend:not([open]) summary::after{content:" ▸"}
 #clegend[open] summary,#klegend[open] summary{margin-bottom:7px}
-.flow{font:600 11.5px var(--mono);color:var(--ink);letter-spacing:-.01em}
-.flownote{font-size:10.5px;color:var(--ink-3);margin-bottom:7px}
 .lrow{display:flex;gap:8px;font-size:11.5px;line-height:1.45;color:var(--ink-2);margin-top:3px}
-.lrow b{flex:none;width:100px;color:var(--ink);font-weight:640}
+.lrow b{flex:none;min-width:88px;color:var(--ink);font-weight:640}
 #trail{position:absolute;top:12px;left:16px;display:none;align-items:center;gap:6px;
   background:#F8F6F1E8;border:1px solid var(--line);border-radius:8px;padding:5px 9px;
   font:11.5px var(--mono);max-width:calc(100% - 32px);overflow:hidden}
@@ -188,8 +208,8 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
       <div id=stage><svg id=edges><g id=walls></g><g id=links></g><g id=elabels></g>
         <g id=dots></g></svg></div>
       <div id=trail></div>
-      <details id=clegend open></details>
-      <details id=klegend open>
+      <details id=clegend></details>
+      <details id=klegend>
         <summary>legend</summary>
         <div class=lrow><svg width=30 height=8><line x1=1 y1=4 x2=29 y2=4
           stroke="#5A6285" stroke-width=1.5></line></svg>
@@ -200,12 +220,19 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
       </details>
       <footer>drag to pan · wheel to zoom · <b>f</b> fit · <b>v</b> switch · <b>esc</b> clear</footer>
     </div>
+    <div id=grip title="drag to resize · double-click to reset"></div>
     <aside id=panel><div class=blank>Select a node to read its record.</div></aside>
   </main>
 </div>
 
 <script>
 const DATA = __KNOTEN_DATA__;
+
+// The scaffold the record panel rewrites a node into. Matched against the agent's own
+// section titles (its aliases), rendered under this label in this fixed order. Kept here
+// rather than duplicated from Python so there is one list, in the wire, that the panel
+// reads.
+const PANEL_SECTIONS = __PANEL_SECTIONS__;
 
 const VC = {alive:"var(--alive)", dead:"var(--dead)", active:"var(--active)",
             open:"var(--open)", retracted:"var(--held)", superseded:"var(--held)",
@@ -217,7 +244,6 @@ const RC = {"kn:survivedGate":"var(--alive)","kn:killedByGate":"var(--dead)",
 // A claim nothing can reopen. Everything else still has somewhere to go.
 const CLOSED = ["dead", "retracted", "superseded"];
 const GATE_RELS = ["kn:survivedGate", "kn:killedByGate"];
-const LOOP = ["question","source","idea","hypothesis","experiment","finding"];
 const CARDH = 74, CARDW = 250, COLW = 300;
 
 document.title = "knoten · " + DATA.root;
@@ -258,16 +284,24 @@ const counts = {}; DATA.nodes.forEach(n => counts[n.type] = (counts[n.type]||0) 
 DATA.columns.forEach((c, i) => {
   const h = el("div", "colhead");
   h.style.left = i * COLW + "px"; h.style.top = "8px";
-  h.append(el("span", "n", String(counts[c]||0).padStart(2, "0")), el("span", "t", c));
-  const role = DATA.gate_types.includes(c) ? "judged against"
-             : DATA.shelf_types.includes(c) ? "cited" : "";
-  if (role) h.append(el("span", "role", role));
+  // No count here. It is the number of nodes in the column, and it was misread as an
+  // ordinal twice — "hypothesis 3" in a ROW of columns parses as "the third one" before
+  // it parses as "three of them", and no amount of padding or placement fixes that. The
+  // legend carries the counts, where nothing sequential surrounds them.
+  h.append(el("span", "t", c));
+  // Only gates get a role label. "cited" was also shown for shelf types, which put
+  // CITED under `question` — true, since sources cite it and it cites nothing, and
+  // useless, because of course the root question is cited. A gate standing outside the
+  // loop is the one thing here you cannot infer from the column's position.
+  if (DATA.gate_types.includes(c)) h.append(el("span", "role", "every claim must pass"));
   stage.append(h);
 });
 
 const cardOf = {}, dotOf = {};
 for (const n of DATA.nodes){
-  const b = el("button", "card" + (CLOSED.includes(n.status) ? " closed" : ""));
+  const bad = (DATA.violations || {})[n.id] || [];
+  const b = el("button", "card" + (CLOSED.includes(n.status) ? " closed" : "")
+                              + (bad.length ? " broken" : ""));
   b.style.left = n.columns[0] + "px"; b.style.top = n.columns[1] + "px";
   b.style.setProperty("--edge", vc(n));
   b.append(el("span","verdict", n.status || "?"), el("span","ttl", n.title || n.id),
@@ -276,18 +310,24 @@ for (const n of DATA.nodes){
     const killed = n.backlinks.filter(x => x.rel === "kn:gateKilled").length;
     const kept = n.backlinks.filter(x => x.rel === "kn:gateSurvivedBy").length;
     const rail = el("div", "rail");
-    if (!killed && !kept) rail.append(el("span", "none", "no judgements yet"));
+    if (!killed && !kept) rail.append(el("span", "none", "nothing has been through it"));
     for (let i = 0; i < Math.min(kept, 14); i++) rail.append(el("i"));
     for (let i = 0; i < Math.min(killed, 14); i++) rail.append(el("i", "x"));
-    rail.append(el("span", "cnt", `${kept}✓ ${killed}✗`));
+    const cnt = el("span", "cnt", `${kept}✓ ${killed}✗`);
+    cnt.title = `${kept} claim(s) passed this gate, ${killed} died on it`;
+    rail.title = cnt.title;
+    rail.append(cnt);
     b.append(rail);
   }
+  if (bad.length) b.append(el("span", "broke",
+    `✗ ${bad.length} rule${bad.length > 1 ? "s" : ""} this graph declared`));
   b.onclick = () => select(n.id);
   b.onmouseenter = () => focus(n.id); b.onmouseleave = () => focus(sel);
   stage.append(b); cardOf[n.id] = b;
 
   const g = mk("g", {}); g.style.cursor = "pointer";
-  g.append(mk("circle", {class:"halo", r:0}), mk("circle", {class:"cell", r:6}));
+  g.append(mk("circle", {class:"halo", r:0}),
+           mk("circle", {class:"cell" + ((DATA.violations||{})[n.id] ? " broken" : ""), r:6}));
   const t = mk("text", {y:19}); g.append(t);
   g.onclick = () => select(n.id);
   g.onmouseenter = () => focus(n.id); g.onmouseleave = () => focus(sel);
@@ -426,8 +466,10 @@ function facts(title, obj){
 function lifecycle(n){
   const st = el("div", "state"); st.style.setProperty("--sc", vc(n));
   const head = el("div", "s");
-  head.append(el("b", null, n.status || "unknown"),
-              el("em", null, CLOSED.includes(n.status) ? "closed" : "open"));
+  head.append(el("b", null, n.status || "unknown"));
+  // Only when it adds something. `alive` beside `open` read as two statuses in conflict,
+  // and a node whose status IS `open` rendered "open open".
+  if (CLOSED.includes(n.status)) head.append(el("em", null, "settled"));
   st.append(head);
   // Every clause below is read off the graph's own edges. Nothing here is a judgement.
   const said = [], by = r => n.links.filter(l => l.rel === r).map(l => l.to);
@@ -450,24 +492,48 @@ function select(id){
   sel = id; const n = byId[id];
   panel.textContent = ""; panel.scrollTop = 0;
   panel.append(el("div", "eyebrow", n.type), el("h2", null, n.title || n.id), lifecycle(n));
+  const broke = (DATA.violations || {})[n.id] || [];
+  if (broke.length){
+    const box = el("div", "broke");
+    box.append(el("h3", null, `breaks ${broke.length} rule${broke.length > 1 ? "s" : ""}`));
+    for (const v of broke) box.append(el("p", null, `[${v.rule}] ${v.message}`));
+    panel.append(box);
+  }
   const meta = el("div", "meta");
   (n.tags || []).forEach(t => meta.append(el("span", "tag", t)));
   if (n.created) meta.append(el("span", "tag", n.created));
   meta.append(el("span", "tag", n.id));
   panel.append(meta);
-  for (const title of CALLOUT){
-    const s = n.sections.find(x => x.title === title && x.text);
+  const seen = new Set();
+  // 1. The scientific scaffold, in a fixed order and relabeled, so two findings never
+  //    disagree on shape. A label is matched against the aliases the author might have
+  //    written ("kill criterion", "kill condition", "when this is wrong"), then rendered
+  //    under the canonical label.
+  for (const p of PANEL_SECTIONS){
+    const s = n.sections.find(x => !seen.has(x.title) && p.aliases.includes(x.title)
+                                    && x.text);
     if (!s) continue;
+    seen.add(s.title);
+    panel.append(el("h3", "field", p.label));
+    panel.append(el("p", null, s.text));
+  }
+  // 2. The two payoffs, matched by prefix so the finding's merged "Why it died / why it
+  //    held" heading still lands here and renders under the canonical label.
+  for (const title of CALLOUT){
+    const s = n.sections.find(x => !seen.has(x.title) && x.title.startsWith(title)
+                                    && x.text);
+    if (!s) continue;
+    seen.add(s.title);
     const c = el("div", "callout" + (title === CALLOUT[1] ? " offer" : ""));
     c.append(el("h3", null, title), el("p", null, s.text));
     panel.append(c);
   }
+  // 3. Any prose the author wrote that matched no scaffold field. Kept, in document
+  //    order, so nothing is ever lost - only reorganised.
   for (const s of n.sections){
-    if (!s.text || CALLOUT.includes(s.title)) continue;
+    if (!s.text || seen.has(s.title) || CALLOUT.includes(s.title)) continue;
     panel.append(el("h3", null, s.title));
-    if (s.text.length < 320){ panel.append(el("p", null, s.text)); continue; }
-    panel.append(el("p", null, s.text.slice(0, 300).trimEnd() + "…"));
-    const d = el("details"); d.append(el("summary"), el("p", null, s.text)); panel.append(d);
+    panel.append(el("p", null, s.text));
   }
   facts("results", n.results); facts("repro", n.repro);
   if (n.attachments.length) facts("attachments", Object.fromEntries(n.attachments.map(a => [a, ""])));
@@ -495,17 +561,12 @@ function drawTrail(){
                                            : "click a knoten to start walking"));
 }
 
-// ---------------- legend, from the graph's own words ----------------
+// ---------------- legend: what each column holds, in the graph's own words -------
 {
   const leg = document.getElementById("clegend");
-  leg.append(el("summary", null, "the loop"));
-  // Ordered by the columns on screen, not by LOOP — otherwise the legend draws a
-  // chain the layout above it contradicts.
-  const present = DATA.columns.filter(t => LOOP.includes(t));
-  if (present.length > 1){
-    leg.append(el("div", "flow", present.join("  →  ") + "  ⟲"));
-    leg.append(el("div", "flownote", "findings feed the next idea"));
-  }
+  const sum = el("summary", null, "columns");
+  leg.append(sum);
+
   const vocab = DATA.graph.vocab || {};
   const rules = DATA.graph.rules || [];
   const csv = v => String(v || "").split(",").map(x => x.trim()).filter(Boolean);
@@ -516,6 +577,7 @@ function drawTrail(){
       const demands = rules.filter(r => csv(r.when_type).includes(c)).map(r =>
         (r.when_status ? `when ${csv(r.when_status).join("/")}, ` : "") +
         (r.require_edge ? `cites ${r.require_edge}` :
+         r.require_field ? `records ${r.require_field}` :
          r.require_sections ? `states ${csv(r.require_sections).join(" + ")}` : ""))
         .filter(x => x && !x.endsWith(", "));
       says = demands[0] || "no meaning declared in node_types";
@@ -525,6 +587,15 @@ function drawTrail(){
     leg.append(row);
   }
 }
+
+// Both legends are reference, not chrome: shut by default, and the choice is remembered
+// so `--watch` does not reopen them under you every couple of seconds.
+for (const id of ["clegend", "klegend"]){
+  const d = document.getElementById(id), KEY = "knoten:" + id;
+  d.open = sessionStorage.getItem(KEY) === "open";
+  d.addEventListener("toggle", () => sessionStorage.setItem(KEY, d.open ? "open" : "shut"));
+}
+
 {
   const count = s => DATA.nodes.filter(n => n.status === s).length;
   const stats = [...new Set(DATA.nodes.map(n => n.status))].sort((a,b) => count(b)-count(a));
@@ -537,6 +608,33 @@ function drawTrail(){
     k.append(dot, el("b", null, String(count(s))), document.createTextNode(" " + s));
     key.append(k);
   }
+}
+
+// ---------------- a record you can widen ----------------
+// Some post-mortems are a page of prose and a results table. Remembered across reloads
+// for the same reason the legend is: `--watch` must not undo what you just set.
+{
+  const grip = document.getElementById("grip"), KEY = "knoten:panelw", DEFAULT = 390;
+  const clamp = w => Math.max(300, Math.min(w, innerWidth - 320));
+  const setW = w => document.documentElement.style.setProperty("--panelw", clamp(w) + "px");
+  const saved = parseFloat(sessionStorage.getItem(KEY) || "");
+  if (saved) setW(saved);
+
+  let from = null;
+  grip.addEventListener("mousedown", e => {
+    from = {x: e.clientX, w: panel.getBoundingClientRect().width};
+    grip.classList.add("dragging"); document.body.classList.add("resizing");
+    e.preventDefault();
+  });
+  addEventListener("mousemove", e => { if (from) setW(from.w + (from.x - e.clientX)); });
+  addEventListener("mouseup", () => {
+    if (!from) return;
+    from = null; grip.classList.remove("dragging"); document.body.classList.remove("resizing");
+    sessionStorage.setItem(KEY, panel.getBoundingClientRect().width);
+  });
+  grip.addEventListener("dblclick", () => {
+    setW(DEFAULT); sessionStorage.setItem(KEY, DEFAULT);
+  });
 }
 
 // ---------------- pan, zoom, view ----------------
@@ -578,4 +676,42 @@ addEventListener("keydown", e => {
 addEventListener("resize", fit);
 
 drawTrail(); place(); fit();
+
+/*__WATCH__*/
+// ---------------- --watch: reload, but do not throw the reader out of their seat
+const RELOAD_MS = __RELOAD_MS__;
+if (RELOAD_MS){
+  const KEY = "knoten:seat";
+  try {
+    const seat = JSON.parse(sessionStorage.getItem(KEY) || "null");
+    if (seat){
+      if (seat.mode === "map") setView("map");
+      if (seat.sel && byId[seat.sel]) select(seat.sel);
+      // After select/setView, which both reset things. A map that jumps back to the
+      // origin — or a record that jumps back to its first line — every two seconds is
+      // worse than no refresh at all.
+      view = seat.pan; apply();
+      panel.scrollTop = seat.read || 0;
+    }
+  } catch (e) { sessionStorage.removeItem(KEY); }
+  addEventListener("beforeunload", () => sessionStorage.setItem(KEY,
+    JSON.stringify({mode: VIEW, sel, pan: view, read: panel.scrollTop})));
+
+  // Do not reload out from under someone who is reading. The pointer resting on the
+  // record is the clearest signal there is; the redraw waits its turn.
+  let reading = false;
+  panel.addEventListener("mouseenter", () => reading = true);
+  panel.addEventListener("mouseleave", () => reading = false);
+  (function tick(){ setTimeout(() => reading ? tick() : location.reload(), RELOAD_MS); })();
+
+  // The badge has to be able to say NO. A watcher that died leaves the page reloading a
+  // frozen file for ever, and a green "live" on stale data is worse than no badge.
+  const BUILT_AT = __BUILT_AT__ * 1000;
+  const stale = Date.now() - BUILT_AT > Math.max(4 * RELOAD_MS, 30000);
+  const live = el("span", "live" + (stale ? " stale" : ""),
+    stale ? `stale — last built ${new Date(BUILT_AT).toLocaleTimeString()}` : "live");
+  live.title = stale ? "the --watch process is not running; this page is not updating" : "";
+  document.querySelector("header .viewsw").after(live);
+}
+/*__WATCH__*/
 </script>

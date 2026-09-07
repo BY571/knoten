@@ -4,6 +4,7 @@ The properties here are the ones that make the map usable rather than pretty: it
 not move under your feet as an agent appends to the graph, it must not reach the network,
 and it must not execute what an agent wrote into a node body.
 """
+import json
 import re
 
 import pytest
@@ -183,3 +184,190 @@ def test_declared_meanings_reach_the_legend(graph):
     graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open")
 
     assert viz.payload(graph.root)["graph"]["vocab"] == {"hypothesis": "a falsifiable claim"}
+
+
+# ------------------------------------------------------------------ --watch
+
+def test_the_static_file_never_reloads_itself(small):
+    """A file you emailed someone, or opened on a plane, must not sit there re-fetching
+    itself. The reload only exists while `--watch` is holding the file open."""
+    assert "location.reload" not in viz.render(small.root)
+
+
+def test_watch_injects_a_reload(small):
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "location.reload" in html
+    assert "2000" in html
+
+
+def test_the_fingerprint_changes_when_a_node_is_written(small, graph):
+    """What `--watch` polls. It has to notice a node being added AND a node being
+    edited in place, which is what an agent loop does all day."""
+    before = viz.fingerprint(small.root)
+
+    graph.node("hyp-new", "id: hyp-new\ntype: hypothesis\nstatus: open")
+
+    assert viz.fingerprint(small.root) != before
+
+
+def test_the_fingerprint_is_stable_when_nothing_changes(small):
+    assert viz.fingerprint(small.root) == viz.fingerprint(small.root)
+
+
+def test_the_fingerprint_notices_a_rules_change(small):
+    """The rules decide what renders — a legend line, a violation ring — so a graph.yaml
+    edit has to redraw even though no node moved."""
+    before = viz.fingerprint(small.root)
+
+    (small.root / "graph.yaml").write_text("name: t\nrules: []\n", encoding="utf-8")
+
+    assert viz.fingerprint(small.root) != before
+
+
+def test_the_watch_block_is_cut_out_entirely_when_off(small):
+    """Not merely guarded by a falsy constant: a file you emailed someone should contain
+    no code that reloads it. It may still remember which legend you had open — that is
+    the page being polite, not the page phoning home."""
+    html = viz.render(small.root)
+
+    assert "location.reload" not in html
+    assert "beforeunload" not in html
+    assert "__RELOAD_MS__" not in html
+
+
+def test_watch_keeps_your_place_in_the_record(small):
+    """The reload used to drop you back at the top of whatever you were reading, because
+    `select()` resets the panel's scroll. Two seconds is not long enough to read a
+    post-mortem."""
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "panel.scrollTop = seat.read" in html
+    assert "read: panel.scrollTop" in html
+
+
+def test_watch_does_not_reload_while_you_are_reading(small):
+    """The pointer resting on the record is the clearest signal there is that a redraw
+    should wait its turn."""
+    html = viz.render(small.root, reload_ms=2000)
+
+    assert "reading ? tick() : location.reload()" in html
+
+
+def test_a_gate_column_leaves_room_for_the_tally_rail(graph):
+    """Gate cards carry a rail showing what they killed and what they passed, so they are
+    taller than every other card. Stepping every column by one fixed row height overlapped
+    them by about the height of that rail."""
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: active\ncreated: 2026-01-01")
+    graph.node("gate-b", "id: gate-b\ntype: gate\nstatus: active\ncreated: 2026-01-02")
+    graph.node("hyp-a", "id: hyp-a\ntype: hypothesis\nstatus: open\ncreated: 2026-01-01")
+    graph.node("hyp-b", "id: hyp-b\ntype: hypothesis\nstatus: open\ncreated: 2026-01-02")
+
+    pos = viz.layout(load(graph.root))["columns"]
+    gate_step = pos["gate-b"][1] - pos["gate-a"][1]
+    claim_step = pos["hyp-b"][1] - pos["hyp-a"][1]
+
+    assert gate_step > claim_step
+    assert gate_step >= viz.CARDH + viz.RAIL
+
+
+def test_a_section_keeps_its_shape_in_the_panel(graph):
+    """`core.section` collapses whitespace because the CLI prints it inline. The panel
+    is a reading surface: collapsing turned every result table in a node body into one
+    long row of pipes."""
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open",
+               "# A claim\n\n## The result\n| tau | b |\n|---|---|\n| 0-60 | 1.05 |\n")
+
+    text = next(s["text"] for s in viz.payload(graph.root)["nodes"][0]["sections"]
+                if s["title"] == "The result")
+
+    assert text.count("\n") >= 2
+    assert "| 0-60 | 1.05 |" in text
+
+
+def test_a_node_that_breaks_the_graphs_rules_says_so(graph):
+    """The page used to render a graph breaking its own rules exactly as it rendered a
+    clean one, so adding a rule changed nothing you could see."""
+    graph.rules("name: t\nrules:\n  - id: no-results-on-claims\n    when_type: hypothesis\n"
+                "    forbid_fields: results\n    message: A claim is not a run.\n")
+    graph.node("hyp-x", "id: hyp-x\ntype: hypothesis\nstatus: open\nresults:\n  auc: 0.9")
+
+    data = viz.payload(graph.root)
+
+    assert data["violations"]["hyp-x"][0]["rule"] == "no-results-on-claims"
+
+
+def test_the_static_export_carries_no_timestamp(small):
+    """Stamping every render would make a committed page differ from itself for the same
+    graph, which is `git diff` noise on a file whose layout is deterministic on purpose."""
+    a = viz.render(small.root)
+    b = viz.render(small.root)
+
+    assert a == b
+    assert "__BUILT_AT__" not in a
+
+
+def test_watch_stamps_when_it_was_built(small):
+    """So the page can notice the watcher died instead of showing a green LIVE badge over
+    a file that stopped updating hours ago."""
+    import time as _t
+    html = viz.render(small.root, reload_ms=2000)
+
+    stamp = int(html.split("const BUILT_AT = ", 1)[1].split(" *", 1)[0])
+
+    assert abs(stamp - _t.time()) < 5
+
+
+def test_the_record_panel_can_be_widened_and_remembers_it(small):
+    """Some post-mortems are a page of prose and a results table. The width is kept
+    across reloads for the same reason the legend's state is: `--watch` must not undo
+    what you just set."""
+    html = viz.render(small.root)
+
+    assert 'id=grip' in html
+    assert "col-resize" in html
+    assert 'sessionStorage.setItem(KEY, panel.getBoundingClientRect().width)' in html
+
+
+# ------------------------------------------------------------------ record scaffold
+
+def test_the_panel_scaffold_is_a_stable_well_formed_list():
+    """The record panel rewrites a node's free-form body into this fixed scaffold. It is
+    the one list both sides of the wire read, so it has to be stable: unique labels so the
+    panel never renders two of the same field, and aliases so an agent's "kill criterion",
+    "kill condition" and "when this is wrong" all land on one field."""
+    scaffold = viz.PANEL_SECTIONS
+
+    assert scaffold, "the scaffold is empty; the panel would fall back to body order"
+    labels = [s["label"] for s in scaffold]
+    assert len(labels) == len(set(labels)), f"panel labels must be unique: {labels}"
+    for section in scaffold:
+        assert section["label"], "each panel section needs a label"
+        assert section["aliases"], "each panel section needs aliases to match agent titles"
+
+
+def test_the_scaffold_reads_the_same_order_every_render(small):
+    """Claim before the kill criterion, every time, for every graph. The order is the
+    feature: two findings must read identically, so it is a fixed list, not body order."""
+    labels = [s["label"] for s in viz.PANEL_SECTIONS]
+
+    assert labels.index("Claim") < labels.index("Kill criterion")
+
+
+def test_the_scaffold_is_injected_not_hardcoded(small):
+    """One list, in the wire. Injected under `__PANEL_SECTIONS__` rather than duplicated,
+    so the panel and the Python side cannot drift apart and disagree on the scaffold."""
+    html = viz.render(small.root)
+
+    assert '"Kill criterion"' in html
+
+
+def test_the_record_panel_orders_by_the_scaffold(small):
+    """The record renders in scaffold order, relabeled, not in whatever body order a
+    non-compliant agent happened to use. This guards the block that would otherwise silently
+    revert to body order, which is what made the panels read as unstructured. Verified at the
+    source the way the render is client-side, not by matching runtime-built HTML."""
+    html = (viz.HERE / "viz.html").read_text(encoding="utf-8")
+
+    assert "for (const p of PANEL_SECTIONS){" in html
+    assert 'el("h3", "field", p.label)' in html

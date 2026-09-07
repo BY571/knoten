@@ -353,3 +353,65 @@ def test_a_compression_that_leaves_the_question_over_budget_says_so(graph, monke
 
     assert "1 still over the 3 budget under this question" in out
     assert "slots free" not in out
+
+
+# ---------------------------------------------------------------- knoten idea
+
+def _fresh(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    main(["init", "demo"])
+    monkeypatch.chdir(tmp_path / "demo")
+    return tmp_path / "demo"
+
+
+def test_idea_files_a_node_the_agent_will_be_offered(tmp_path, monkeypatch, capsys):
+    """The point of the command: one line from a human, and the next agent that runs
+    `knoten frontier` is offered it. `status: open` is what does that."""
+    _fresh(tmp_path, monkeypatch)
+
+    assert main(["idea", "the order book knows something the price does not"]) == 0
+
+    node = next((tmp_path / "demo" / "nodes").glob("idea-*.md")).read_text()
+    assert "status: open" in node
+    assert "# the order book knows something the price does not" in node
+    main(["frontier"])
+    assert "idea-the-order-book" in capsys.readouterr().out
+
+
+def test_idea_wires_the_question_and_own_intuition_so_the_rules_pass(tmp_path, monkeypatch):
+    """An idea must cite the question it serves and a source. Making the human write
+    those edges by hand is how you get a refusal instead of an idea, so both are wired:
+    the sole question, and `source-own-intuition`, made once."""
+    root = _fresh(tmp_path, monkeypatch)
+
+    main(["idea", "try a longer holding period"])
+    main(["idea", "try a shorter one"])
+
+    node = next(root.joinpath("nodes").glob("idea-try-longer*.md")).read_text()   # stop words drop out of the slug
+    assert "prov:wasDerivedFrom, to: question-demo" in node
+    assert "prov:wasDerivedFrom, to: source-own-intuition" in node
+    assert (root / "nodes" / "source-own-intuition.md").exists()
+    assert len(list(root.joinpath("nodes").glob("source-*.md"))) == 1
+    assert main(["validate"]) == 0
+
+
+def test_idea_from_a_named_node_cites_that_instead(tmp_path, monkeypatch):
+    root = _fresh(tmp_path, monkeypatch)
+    (tmp_path / "fm.yaml").write_text("type: source\nstatus: alive\norigin: https://x\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# a paper\n", encoding="utf-8")
+    assert main(["commit", "source-paper", "--frontmatter", str(tmp_path / "fm.yaml"),
+                 "--body", str(tmp_path / "b.md")]) == 0
+
+    assert main(["idea", "what the paper suggests", "--from", "source-paper"]) == 0
+
+    node = next(root.joinpath("nodes").glob("idea-what*.md")).read_text()
+    assert "to: source-paper" in node and "own-intuition" not in node
+    assert not (root / "nodes" / "source-own-intuition.md").exists()
+    assert main(["validate"]) == 0
+
+
+def test_idea_refuses_an_origin_that_does_not_exist(tmp_path, monkeypatch, capsys):
+    _fresh(tmp_path, monkeypatch)
+
+    assert main(["idea", "x", "--from", "nope"]) == 1
+    assert "nope" in capsys.readouterr().err

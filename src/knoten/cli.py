@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import time
 import webbrowser
 from pathlib import Path
 
 from . import attachments, ops, viz
 from . import contributors as C
 from .commit import commit
-from .core import GraphError, ID_RE, LOCK, find_root, node_path, today
+from .core import GraphError, ID_RE, LOCK, _STOP, find_root, load, node_path, today
 from .hook import install as install_hook, install_server
 from .keys import ensure_key, public_line
 from .registry import ROLES, Registry
@@ -234,12 +236,42 @@ def path(root, a, b, as_json=False) -> int:
     return 0
 
 
-def viz_cmd(root, out, show) -> int:
-    """One HTML file. Read-only, self-contained, no server."""
-    dest = viz.write(root, Path(out))
+def viz_cmd(root, out, show, watch) -> int:
+    """One HTML file. Read-only, self-contained, no server.
+
+    `--watch` rewrites it whenever the graph changes and tells the open page to reload,
+    so you can leave it up beside an agent loop. Still no server: the page reloads
+    itself from disk, and it remembers which view you were in, what you had selected and
+    where you had panned to.
+    """
+    reload_ms = int(watch * 1000) if watch else 0
+    dest = viz.write(root, Path(out), reload_ms)
     print(f"wrote {dest}  ({dest.stat().st_size // 1024} KB)")
     if show:
         webbrowser.open(dest.resolve().as_uri())
+    if not watch:
+        return 0
+
+    # Flushed: a watch loop whose output only appears when it exits is a watch loop
+    # you cannot tell is running.
+    print(f"watching {root}/ — the page reloads itself every {watch:g}s. ctrl-c to stop.",
+          flush=True)
+    seen = viz.fingerprint(root)
+    try:
+        while True:
+            time.sleep(watch)
+            if (now := viz.fingerprint(root)) == seen:
+                continue
+            seen = now
+            try:
+                viz.write(root, Path(out), reload_ms)
+                print(f"  {today()}  redrew {len(load(root))} nodes", flush=True)
+            except GraphError as e:
+                # A half-written node is normal while an agent is mid-commit: say so and
+                # keep the last good page up rather than tearing the window down.
+                print(f"  skipped: {e}", flush=True)
+    except KeyboardInterrupt:
+        print("\nstopped.")
     return 0
 
 
@@ -567,6 +599,22 @@ rules:
       what this does NOT test, it is testing more than one thing. Open a second
       hypothesis instead of widening this one.
 
+  - id: hypotheses-are-claims-not-runs
+    when_type: hypothesis
+    forbid_fields: results, repro
+    message: >
+      A hypothesis is a claim. The run that tested it is an experiment and the number it
+      produced is a finding — put `results` and `repro` on those. One node holding all
+      three is how a loop stops having stages.
+
+  - id: alive-hypotheses-must-have-been-tested
+    when_type: hypothesis
+    when_status: alive
+    require_backlink: {{rel: kn:testedBy, type: experiment, min: 1}}
+    message: >
+      A hypothesis is alive because something tested it. Record the run as an experiment
+      that `kn:tests` this node.
+
   - id: experiments-must-be-rerunnable
     when_type: experiment
     require_sections: Setup, How to reproduce, Result
@@ -577,26 +625,51 @@ rules:
   # read. The last rule is the ceiling: past it, the graph asks for a rule, not a result.
   - id: ideas-come-from-sources
     when_type: idea
-    require_edge_target: {{rel: prov:wasDerivedFrom, type: source, min: 1}}
+    require_edge_target: {{rel: prov:wasDerivedFrom, type: source, finding, min: 1}}
     message: >
-      An idea that cites no source came from nowhere. Cite what you read, or a
-      source node that says "own intuition".
+      An idea comes from somewhere: a source you read, or a finding that changed the
+      picture. If it came out of your own head, cite `source-own-intuition` (`knoten idea`
+      does that for you). An idea citing nothing cannot be traced back to what prompted it.
 
   - id: hypotheses-come-from-ideas
     when_type: hypothesis
     require_edge_target: {{rel: prov:wasDerivedFrom, type: idea, min: 1}}
-    message: A hypothesis that came from no idea came from a mood. Cite the idea.
+    message: >
+      Every hypothesis descends from an idea. One idea can produce several hypotheses,
+      that is the point of splitting them, but a claim with no idea behind it cannot be
+      traced back to what prompted it. If it came out of a finding, write the idea that
+      finding gave you and derive the hypothesis from that.
 
   - id: experiments-test-a-hypothesis
     when_type: experiment
     require_edge_target: {{rel: kn:tests, type: hypothesis, min: 1}}
-    message: An experiment that tests nothing cannot fail. Say which hypothesis.
+    message: >
+      An experiment tests a claim. One that names none is a measurement nobody can
+      interpret six months later: was it exploratory, or did it settle something? If the
+      run explored rather than tested, write the hypothesis it was exploring, however
+      obvious it looks now.
+
+  - id: experiments-must-record-what-they-measured
+    when_type: experiment
+    require_field: results
+    message: >
+      The run that produced the number is the node that should carry it. A `## Result`
+      section is prose nothing can filter on; put the figures in `results:` as well.
 
   - id: findings-come-from-experiments
     when_type: finding
     unless_edge: npx:supersedes
     require_edge_target: {{rel: prov:wasDerivedFrom, type: experiment, min: 1}}
-    message: A finding that no experiment produced is an opinion. Cite the experiment.
+    message: >
+      A finding that no experiment produced is an opinion. Cite the experiment; a general
+      finding that supersedes others cites those instead.
+
+  - id: findings-cite-the-run-rather-than-repeat-it
+    when_type: finding
+    forbid_fields: repro
+    message: >
+      How to rerun it belongs on the experiment. A finding that carries its own `repro`
+      is a second copy that will drift from the first.
 
   - id: compress-before-you-accumulate
     max_alive: {{type: finding, per: question, count: 12}}
@@ -636,6 +709,70 @@ status: active
 
 Replace this with a real gate. Delete it if you have none yet — but you will.
 """
+
+
+OWN_INTUITION = "source-own-intuition"
+
+
+def _slug(text: str) -> str:
+    """A readable id from a sentence. Kebab-case because the id becomes a filename."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    out = []
+    for w in words:
+        if w in _STOP and out:            # keep a leading "the" rather than emit nothing
+            continue
+        out.append(w)
+        if len("-".join(out)) > 48:
+            break
+    return "-".join(out) or "untitled"
+
+
+def idea(root, text, source) -> int:
+    """Drop your own idea into the graph in one line, for the agent to pick up.
+
+    An idea has to cite what prompted it, so this wires the edges for you: the graph's
+    single question (what it serves) and, unless `--from` names a source or a finding,
+    `source-own-intuition`, the source SKILL.md says a human's own head is recorded as.
+    Made once, on first use. The node lands `status: open`, which is what puts it at the
+    top of `knoten frontier`, where an agent that runs the loop sees it before choosing.
+    """
+    nodes = load(root)
+    if source is not None and source not in nodes:
+        raise GraphError(f"no node '{source}' to derive this from")
+    questions = [n.id for n in nodes.values() if n.type == "question"]
+    origins = [q for q in questions[:1]] if len(questions) == 1 else []
+    if source is None:
+        if OWN_INTUITION not in nodes:
+            made = commit(root, OWN_INTUITION, "type: source\nstatus: alive\norigin: own intuition",
+                          "# Own intuition\n\nIdeas that started in a person's head, not in "
+                          "something they read. Cited so an idea never comes from nowhere.\n")
+            if made["status"] != "COMMITTED":
+                return _fail(made, made.get("reason") or "; ".join(
+                    v["message"] for v in made.get("violations", [])), False)
+        origins.append(OWN_INTUITION)
+    else:
+        origins.append(source)
+
+    cfg = load_config(root)
+    sections = []
+    for r in cfg.get("rules", []):
+        if applies("open", "idea", r):
+            sections += _csv(r.get("require_sections"))
+
+    nid = "idea-" + _slug(text)
+    fm = "type: idea\nstatus: open"
+    if origins:
+        fm += "\nlinks:\n" + "".join(f"  - {{rel: prov:wasDerivedFrom, to: {o}}}\n" for o in origins)
+    body = f"# {text.strip()}\n\n"
+    body += "".join(f"## {sec}\nTODO\n\n" for sec in dict.fromkeys(sections))
+
+    res = commit(root, nid, fm, body)
+    if res["status"] != "COMMITTED":
+        return _fail(res, res.get("reason") or "; ".join(
+            v["message"] for v in res.get("violations", [])), False)
+    print(f"  + nodes/{nid}.md  (from {', '.join(origins)})" if origins else f"  + nodes/{nid}.md")
+    print("  it is `open`, so `knoten frontier` will offer it to whoever looks next.")
+    return 0
 
 
 def new(root, ntype, nid, status) -> int:
@@ -767,6 +904,9 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("viz", help="write the graph as one self-contained HTML file")
     s.add_argument("-o", "--out", default="knoten.html", help="where to write it")
     s.add_argument("--open", dest="show", action="store_true", help="open it when done")
+    s.add_argument("--watch", nargs="?", type=float, const=2.0, default=None,
+                   metavar="SECONDS",
+                   help="redraw when the graph changes and reload the page (default 2s)")
 
     s = sub.add_parser("hook", help="install the git gate that refuses a broken graph")
     s.add_argument("--server", nargs="?", const=".", metavar="REPO",
@@ -827,6 +967,11 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
     s.add_argument("--json", action="store_true", help="emit the raw payload")
+
+    s = sub.add_parser("idea", help="drop your own idea in for the agent to pick up")
+    s.add_argument("text", help="the idea, in a sentence")
+    s.add_argument("--from", dest="source", metavar="NODE",
+                   help="the source or finding that prompted it (default: your own intuition)")
 
     s = sub.add_parser("commit", help="file a new claim — gate-checked before it touches disk")
     s.add_argument("id")
@@ -915,13 +1060,14 @@ def main(argv=None) -> int:
                                     query=args.query, as_json=args.json, all=args.all),
             "new":    lambda: new(root, args.type, args.id, args.status),
             "show":   lambda: show(root, args.node, args.json),
+            "idea":   lambda: idea(root, args.text, args.source),
             "commit": lambda: commit_cmd(root, nid=args.id, frontmatter=args.frontmatter,
                                          body=args.body, as_json=args.json),
             "update": lambda: update_cmd(root, nid=args.id, status=args.status,
                                          append=args.append, results=args.result,
                                          links=args.link, fields=args.field,
                                          as_json=args.json),
-            "viz":    lambda: viz_cmd(root, args.out, args.show),
+            "viz":    lambda: viz_cmd(root, args.out, args.show, args.watch),
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
