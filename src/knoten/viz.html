@@ -1022,7 +1022,6 @@ vp.addEventListener("wheel", e => { if (VIEW === "metrics") return;   // let it 
   const k = Math.min(2.4, Math.max(.12, view.k * Math.exp(-e.deltaY * .0015)));
   view.x = mx - (mx-view.x)*(k/view.k); view.y = my - (my-view.y)*(k/view.k);
   view.k = k; apply(); }, {passive:false});
-const VIEWS = ["columns", "map", "metrics"];
 // A metrics view only when the graph declares a metric; otherwise the button is not
 // there to disappoint. `v` cycles through the views that exist.
 const VIEWS = ["columns", "map"].concat((DATA.metrics || []).length ? ["metrics"] : []);
