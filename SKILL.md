@@ -106,6 +106,12 @@ the exact failure this graph exists to prevent, arriving through the back door.
    experiment; file `kn:survivedGate` or `kn:killedByGate` once you have checked one. An
    alive claim that cites no gate is listed by `knoten frontier` as unchecked, not
    refused, unless this graph has enabled the rule that refuses it.
+
+`knoten metric` reads out the numbers this graph declared it is trying to move, oldest
+first, each against the best result before it and naming what it built on. Read the best
+point before you choose what to try: it already says which run beat which, and by how
+much, so a direction that has been walked twice is visible without opening a node. A
+graph that declares no `metrics:` prints one line saying so and costs you nothing.
 ## When the work concludes
 
 5. `knoten commit <id> --frontmatter <file> --body <file>`: file the claim, INCLUDING
@@ -201,7 +207,10 @@ nowhere, because six months from now nobody can tell evidence from a mood.
 
 `--frontmatter`, `--body` and `--append` take a file path or `-` for stdin. `--result
 key=value` records a number, `--link rel=to` adds an edge, `--field key=value` sets any
-top-level field including one already recorded. `--result` refuses to change a number the
+top-level field including one already recorded. Record every metric `graph.yaml` declares
+in the `results:` of the node that produced it, under exactly the declared name: a run
+that does not report the number is a run that is not on the chart, and nothing else
+records it. `--result` refuses to change a number the
 node already carries: correct a published result by superseding or retracting the node,
 never by editing it. A node that fails the graph's rules never reaches disk.
 
