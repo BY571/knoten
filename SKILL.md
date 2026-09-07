@@ -169,6 +169,15 @@ node from a prompt whose type it is not. Each prompt names the stage before it, 
 scaffold sections to fill, and points at the kill or reopen field that stage carries. They
 are the per-stage "write it like this"; the loop itself is above.
 
+## Ideas a human dropped in
+
+`knoten idea "<one sentence>"` files an idea as `status: open`, so anything a person
+wants looked at shows up at the top of `knoten frontier` alongside your own open work. It
+cites the graph's question and `source-own-intuition` for them (or `--from <node>`, a
+source or a finding), so the idea already satisfies the lineage rules. Treat those the
+same way: read the sentence, derive hypotheses from it, and if you decide against it,
+close it with a reason rather than leaving it open forever.
+
 ## When you run out of ideas
 
 `knoten frontier` is also how you learn the well is dry: nothing `open` you can act on, no

@@ -149,7 +149,8 @@ def test_a_fresh_graph_validates_clean_and_declares_the_round(tmp_path, monkeypa
     assert main(["validate"]) == 0
     text = (root / "graph.yaml").read_text(encoding="utf-8")
     for rid in ["ideas-come-from-sources", "hypotheses-come-from-ideas",
-                "experiments-test-a-hypothesis", "findings-come-from-experiments",
+                "experiments-test-a-hypothesis", "experiments-must-record-what-they-measured",
+                "findings-come-from-experiments", "findings-cite-the-run-rather-than-repeat-it",
                 "compress-before-you-accumulate"]:
         assert f"id: {rid}" in text
     assert "Cite the question this idea serves." in text
@@ -522,3 +523,11 @@ def test_show_prints_the_warning_on_a_superseded_node(graph, monkeypatch, capsys
     assert main(["show", "finding-old"]) == 0
     out = capsys.readouterr().out
     assert "! This claim was superseded by finding-new. Read that node before relying on this one." in out
+
+
+def test_a_fresh_graph_lets_an_idea_come_from_a_finding(tmp_path, monkeypatch):
+    """The diagram says findings open new ideas; the rule has to agree."""
+    root = _init(tmp_path, monkeypatch)
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+
+    assert "type: source, finding" in text
