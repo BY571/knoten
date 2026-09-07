@@ -465,7 +465,11 @@ function rowmap(){
     rows[r.id] = at;
     return size[r.id] = row - 1;
   };
-  for (const n of DATA.nodes) if (n.rule) walk(n, new Set());
+  // `opens`, not `rule`: what the walk has to measure is what the reader can open.
+  // Seeded from the badge, a node holding a fold without wearing one (a single
+  // `npx:supersedes`, or an inner rule an outer rule retired) got no rows at all --
+  // its hung cards stacked on one coordinate and the column below it never reflowed.
+  for (const n of DATA.nodes) if (opens(n)) walk(n, new Set());
   return {rows, size};
 }
 
@@ -572,26 +576,28 @@ function place(){
       p.classList.toggle("back", back);
     }
   }
-  // Every node covered by another takes a ring of alive supersessions, which `validate`
-  // refuses -- but the page draws graphs that break their own rules, and Math.min() of
-  // nothing is Infinity. Keep the last frame's box and leave `all` to get the reader out.
-  if (!ids.length) return;
-  const xs = ids.map(id => P[id][0]), ys = ids.map(id => P[id][1]);
-  const pad = map ? 120 : 60;
-  const x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - (map ? pad : TOPPAD);
-  const w = Math.max(...xs) - Math.min(...xs) + (map ? 2*pad : CARDW + 2*pad);
-  const h = Math.max(...ys) - Math.min(...ys) + (map ? 2*pad : CARDH + 2*pad);
-  svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
-  svg.setAttribute("width", w); svg.setAttribute("height", h);
-  stage.style.width = w + "px"; stage.style.height = h + "px";
-  for (const id of ids){
-    const c = cardOf[id];
-    c.style.left = (P[id][0] - x0) + "px"; c.style.top = (P[id][1] - y0) + "px";
+  // Nothing visible at all takes a ring of alive supersessions, every node covered by
+  // another -- which `validate` refuses, but the page draws graphs that break their own
+  // rules and Math.min() of nothing is Infinity. Keep the last frame's box, and go on to
+  // clear what the last frame drew: circles hanging over an empty stage read as a crash.
+  if (ids.length){
+    const xs = ids.map(id => P[id][0]), ys = ids.map(id => P[id][1]);
+    const pad = map ? 120 : 60;
+    const x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - (map ? pad : TOPPAD);
+    const w = Math.max(...xs) - Math.min(...xs) + (map ? 2*pad : CARDW + 2*pad);
+    const h = Math.max(...ys) - Math.min(...ys) + (map ? 2*pad : CARDH + 2*pad);
+    svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+    svg.setAttribute("width", w); svg.setAttribute("height", h);
+    stage.style.width = w + "px"; stage.style.height = h + "px";
+    for (const id of ids){
+      const c = cardOf[id];
+      c.style.left = (P[id][0] - x0) + "px"; c.style.top = (P[id][1] - y0) + "px";
+    }
+    document.querySelectorAll(".colhead").forEach((h, i) => {
+      h.style.left = (i * COLW - x0) + "px";
+      h.style.top = (8 - y0) + "px";
+    });
   }
-  document.querySelectorAll(".colhead").forEach((h, i) => {
-    h.style.left = (i * COLW - x0) + "px";
-    h.style.top = (8 - y0) + "px";
-  });
   walls.textContent = "";
   const wl = FOLD ? DATA.folded_walls : DATA.walls;
   for (const c in wl){ const [x, y, r] = wl[c]; walls.append(mk("circle", {cx:x, cy:y, r})); }

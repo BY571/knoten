@@ -411,6 +411,28 @@ def test_the_payload_says_who_covers_whom(compressed):
     assert by["finding-3"]["rule"] is False and by["finding-3"]["covers"] == []
 
 
+def test_a_single_target_supersession_folds_and_can_be_opened(compressed):
+    """The CLI's `replaces` path writes one `npx:supersedes` edge, which is not a rule --
+    one target is a replacement, not a generalisation -- and the page folds the target
+    under it all the same. So the layout has to give it rows: measured off the badge, its
+    hung cards stacked on one coordinate and the column below it never reflowed."""
+    compressed.node("finding-3", _finding(3, "superseded"), "# 3\n")
+    compressed.node("finding-p", "id: finding-p\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-07\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-3}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# P\n\n## Covers\n- finding-3: the one it replaces\n")
+
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert by["finding-p"]["rule"] is False and by["finding-p"]["covers"] == ["finding-3"]
+    assert by["finding-3"]["under"] == "finding-p"
+    assert "finding-p" in p["folded"] and "finding-3" not in p["folded"]
+    # The rows the page measures come off what can be opened, not off the badge.
+    assert "if (opens(n)) walk(n, new Set());" in viz.render(compressed.root)
+
+
 def test_a_rule_that_is_no_longer_alive_is_no_longer_badged(compressed):
     """`rule` is the badge on the card and the eyebrow on the record. A retracted general
     node stands for nothing -- validate reports the orphans it left behind -- and a page
