@@ -99,6 +99,12 @@ OPEN = "open"
 REOPEN_SECTION = "What would reopen this"
 GATE_TYPE = "gate"
 GATE_SECTIONS = ("The rule", "Why it exists")
+# The claim types `frontier`'s `unchecked` band watches. Gates are advisory by default
+# (graph.yaml's `live-claims-must-cite-their-gates` ships commented out), so nothing
+# refuses an alive claim with no `kn:survivedGate` edge — this is how the frontier shows
+# which ones nobody has checked instead. A graph that names its claim types differently
+# gets an empty band, same bargain as OPEN and GATE_TYPE above.
+CLAIM_TYPES = ("hypothesis", "finding")
 
 SUPERSEDES = "npx:supersedes"
 QUESTION_TYPE = "question"
@@ -538,7 +544,7 @@ def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
 
 
 def frontier(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> dict:
-    """What is worth doing next, in four buckets.
+    """What is worth doing next, in five buckets.
 
     `## What would reopen this` is the standing offer SPEC §5 insists on, and until now
     the only way to act on one was to re-read every post-mortem and notice the world had
@@ -546,11 +552,17 @@ def frontier(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIB
     judgement, and encoding it as a predicate would be either trivially wrong or an
     ontology project. It presents the offers cheaply and lets the reader judge, the same
     bargain `retrieve` makes with an index.
+
+    `unchecked` is the advisory counterpart to `live-claims-must-cite-their-gates`: a
+    graph that leaves the rule commented out (the default) never refuses an alive claim
+    with no gate, so this is the only place that claim still shows up as unfinished.
     """
     ordered = sorted(nodes.values(), key=lambda n: n.id)
     return {
         "compressible": compressible(nodes, types),
         "open": [n for n in ordered if n.status == OPEN],
+        "unchecked": [n for n in ordered if n.status == "alive" and n.type in CLAIM_TYPES
+                     and not any(l["rel"] == "kn:survivedGate" for l in n.links)],
         "reopenable": [(n, offer) for n in ordered
                        if n.status in ("dead", "retracted")
                        and (offer := section(n.body, REOPEN_SECTION))],

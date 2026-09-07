@@ -163,12 +163,14 @@ methodological gate."* DISK's `LineOfInquiry` is the closest blueprint and it
 
 | predicate | domain → range | meaning |
 |---|---|---|
-| `kn:survivedGate` | claim → gate | **claim passed this gate.** A `status: alive` claim MUST have ≥1. |
+| `kn:survivedGate` | claim → gate | **claim passed this gate.** A `status: alive` claim carries ≥1 wherever the graph has opted into requiring it (§6); the scaffold ships that rule advisory, not enforced. |
 | `kn:killedByGate` | claim → gate | **the gate that killed it.** The predicate the entire field is missing. |
 | `kn:blockedBy` | claim → finding | a *structural* blocker (a fee schedule, a venue, a data licence), not a result, a wall. |
 
-`kn:survivedGate` + the rule engine is the whole safety mechanism: **an unchallenged
-claim cannot be marked alive.**
+`kn:survivedGate` + the rule engine is the whole safety mechanism when a graph turns it
+on: **an unchallenged claim cannot be marked alive.** The scaffold ships that rule
+commented out, advisory by default; until a graph enables it, `knoten frontier` lists an
+uncited alive claim under `unchecked` instead of refusing it.
 
 ---
 
@@ -230,6 +232,11 @@ rules:
               weak_baseline, underpowered, crowding_decay]
     message: A cause of death you cannot filter on is a story, not an index.
 ```
+
+`knoten init` writes the first of these two commented out: gates are advisory by
+default, so an alive claim with no `kn:survivedGate` edge is not refused, only listed by
+`knoten frontier` under `unchecked`. Uncommenting it is what turns that listing into a
+refusal.
 
 | key | effect |
 |---|---|

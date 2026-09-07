@@ -174,6 +174,39 @@ def test_a_fresh_graph_lets_a_general_finding_skip_the_experiment_rule(tmp_path,
     assert "unless_edge: npx:supersedes" in text
 
 
+def test_a_fresh_graphs_gate_rule_ships_commented_out_and_still_validates(tmp_path, monkeypatch):
+    """Gates are advisory by default: the scaffold's `live-claims-must-cite-their-gates`
+    rule is kept, as text an author can uncomment, but not enforced out of the box."""
+    root = _init(tmp_path, monkeypatch)
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+
+    assert "# - id: live-claims-must-cite-their-gates" in text
+    assert main(["validate"]) == 0
+
+
+def test_a_fresh_graph_accepts_an_alive_finding_with_no_gate(tmp_path, monkeypatch, capsys):
+    root = _init(tmp_path, monkeypatch)
+    (root / "nodes" / "experiment-x.md").write_text(
+        "---\nid: experiment-x\ntype: experiment\nstatus: alive\n---\n\n# An experiment\n",
+        encoding="utf-8")
+    (tmp_path / "fm.yaml").write_text(
+        "type: finding\nstatus: alive\nlinks:\n"
+        "  - {rel: prov:wasDerivedFrom, to: experiment-x}\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# An unchecked finding\n", encoding="utf-8")
+
+    assert main(["commit", "finding-x", "--frontmatter", str(tmp_path / "fm.yaml"),
+                 "--body", str(tmp_path / "b.md")]) == 0
+    capsys.readouterr()
+
+    assert main(["frontier", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [n["id"] for n in payload["unchecked"]] == ["finding-x"]
+
+    assert main(["frontier"]) == 0
+    out = capsys.readouterr().out
+    assert "UNCHECKED" in out and "finding-x" in out
+
+
 def test_init_refuses_a_name_that_escapes_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

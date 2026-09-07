@@ -17,7 +17,8 @@ it gets wiser, and the graph rewards that.
 It exists because research loops forget, whether they are run by a human or an agent.
 They re-propose an idea that was settled last month under a different name, and they file
 the wins while the failures evaporate. knoten makes the failure the artifact: a claim
-cannot be marked alive unless it cites a test it survived, and a dead end has to say what
+marked alive with no test cited is not refused, but `knoten frontier` lists it as
+unchecked so it cannot quietly pass as settled, and a dead end has to say what
 would reopen it. Your graph declares its own rules in `graph.yaml`; the tool enforces them
 and knows nothing else about your field.
 
@@ -109,11 +110,11 @@ feature: read it, fix the node, run it again.
 
 ```yaml
 rules:
-  - id: live-claims-must-cite-their-gates
-    when_status: alive
-    when_type: hypothesis, finding
-    require_edge: kn:survivedGate
-    message: An unchallenged claim is not a finding, it is a hope.
+  # - id: live-claims-must-cite-their-gates
+  #   when_status: alive
+  #   when_type: hypothesis, finding
+  #   require_edge: kn:survivedGate
+  #   message: An unchallenged claim is not a finding, it is a hope.
 
   - id: deaths-must-name-a-cause
     when_status: dead
@@ -122,9 +123,12 @@ rules:
     message: A cause of death you cannot filter on is a story, not an index.
 ```
 
-The first is the safety mechanism: a good-looking result that was never checked cannot
-quietly become a finding. The second is what makes a dead end *reusable*. Once the cause
-is a field rather than a sentence, the question you ask six months later is a query:
+The first is advisory by default: a scaffolded graph ships it commented out, so a
+good-looking result that was never checked against a gate is not refused, only listed by
+`knoten frontier` under `UNCHECKED`. Uncomment it to make citing `kn:survivedGate` or
+`kn:killedByGate` mandatory for an alive hypothesis or finding. The second is what makes a
+dead end *reusable*. Once the cause is a field rather than a sentence, the question you
+ask six months later is a query:
 
 ```bash
 knoten index --where cause=weak_baseline    # we have a stronger baseline now. what reopens?
