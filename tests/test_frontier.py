@@ -8,6 +8,8 @@ log.
 """
 import pytest
 
+from conftest import compressible_graph
+
 from knoten import ops
 from knoten.core import frontier, load
 
@@ -88,3 +90,61 @@ def test_the_cli_prints_all_three_buckets(g, monkeypatch, capsys):
     assert "hyp-open" in out
     assert "hyp-dead" in out and "A task where" in out
     assert "gate-idle" in out
+
+
+def test_three_alive_findings_sharing_a_gate_or_a_tag_are_a_cluster(graph):
+    compressible_graph(graph, n=3, cap=5, gates=1, tag="lr", start=0)
+
+    f = frontier(load(graph.root))
+
+    shared = {tuple(c["shared"].items())[0] for c in f["compressible"]}
+    assert shared == {("gate", "gate-a"), ("tag", "lr")}
+    assert all(c["ids"] == ["finding-0", "finding-1", "finding-2"] for c in f["compressible"])
+    assert all(c["question"] == "question-q" for c in f["compressible"])
+
+
+def test_two_are_not_a_cluster(graph):
+    compressible_graph(graph, n=2, cap=5, gates=1, tag="lr", start=0)
+
+    assert frontier(load(graph.root))["compressible"] == []
+
+
+def test_clusters_are_ordered_biggest_first_and_superseded_nodes_are_out(graph):
+    compressible_graph(graph, n=4, cap=5, gates=1, tag="lr", start=0)
+    graph.node("finding-3", "id: finding-3\ntype: finding\nstatus: alive\ntags: [batch]\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 3\n")
+    graph.node("finding-0", "id: finding-0\ntype: finding\nstatus: superseded\ntags: [lr]\nlinks:\n"
+                            "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                            "  - {rel: kn:survivedGate, to: gate-a}", "# 0\n")
+
+    clusters = frontier(load(graph.root))["compressible"]
+
+    assert [(c["shared"], c["ids"]) for c in clusters] == [
+        ({"gate": "gate-a"}, ["finding-1", "finding-2", "finding-3"])]      # lr has 2 left
+
+
+def test_unrooted_findings_never_cluster(graph):
+    compressible_graph(graph, n=0, cap=5, gates=1)
+    for i in range(3):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\ntags: [lr]", f"# {i}\n")
+
+    assert frontier(load(graph.root))["compressible"] == []
+
+
+def test_the_payload_carries_the_shape_and_the_budget(graph, monkeypatch):
+    compressible_graph(graph, n=3, cap=5, gates=1, tag="lr", start=0)
+    monkeypatch.chdir(graph.root)
+
+    p = ops.frontier(graph.root)
+
+    assert p["shape"]["rules"] == 0 and p["shape"]["specifics"] == 3
+    assert p["shape"]["clusters"] == 2
+    assert p["shape"]["budget"] == [{"question": "question-q", "type": "finding", "free": 2, "count": 5}]
+    assert p["compressible"][0]["ids"] == ["finding-0", "finding-1", "finding-2"]
+
+
+def test_without_a_budget_rule_the_shape_has_no_budget(graph):
+    compressible_graph(graph, n=3, gates=1, tag="lr", start=0)
+
+    assert ops.frontier(graph.root)["shape"]["budget"] == []

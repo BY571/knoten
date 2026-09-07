@@ -135,6 +135,45 @@ def test_init_creates_a_graph_that_validates(tmp_path, monkeypatch):
     assert main(["validate"]) == 0
 
 
+def _init(tmp_path, monkeypatch, name="t"):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", name]) == 0
+    root = tmp_path / name
+    monkeypatch.chdir(root)
+    return root
+
+
+def test_a_fresh_graph_validates_clean_and_declares_the_round(tmp_path, monkeypatch):
+    root = _init(tmp_path, monkeypatch)
+
+    assert main(["validate"]) == 0
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+    for rid in ["ideas-come-from-sources", "hypotheses-come-from-ideas",
+                "experiments-test-a-hypothesis", "experiments-must-record-what-they-measured",
+                "findings-come-from-experiments", "findings-cite-the-run-rather-than-repeat-it",
+                "compress-before-you-accumulate"]:
+        assert f"id: {rid}" in text
+    assert "Cite the question this idea serves." in text
+
+
+def test_a_fresh_graph_refuses_a_finding_no_experiment_produced(tmp_path, monkeypatch, capsys):
+    _init(tmp_path, monkeypatch)
+    (tmp_path / "fm.yaml").write_text("type: finding\nstatus: open\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# f\n", encoding="utf-8")
+
+    assert main(["commit", "finding-x", "--frontmatter", str(tmp_path / "fm.yaml"),
+                 "--body", str(tmp_path / "b.md")]) == 1
+    assert "findings-come-from-experiments" in capsys.readouterr().err
+
+
+def test_a_fresh_graph_lets_a_general_finding_skip_the_experiment_rule(tmp_path, monkeypatch):
+    """`unless_edge` in the shipped rule: a general finding derives from findings."""
+    root = _init(tmp_path, monkeypatch)
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+
+    assert "unless_edge: npx:supersedes" in text
+
+
 def test_init_refuses_a_name_that_escapes_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -391,3 +430,104 @@ def test_a_hunch_is_a_source_like_any_other(tmp_path, monkeypatch):
     monkeypatch.chdir(root)
 
     assert main(["validate"]) == 0
+
+
+def test_frontier_prints_the_shape_first_and_the_compressible_band_before_open(graph, monkeypatch, capsys):
+    graph.rules("""\
+name: t
+statuses: [open, alive, active]
+node_types: [question, finding, gate, hypothesis]
+rules:
+  - id: compress-before-you-accumulate
+    max_alive: {type: finding, per: question, count: 4}
+    message: Compress first.
+""")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
+    graph.node("hyp-open", "id: hyp-open\ntype: hypothesis\nstatus: open", "# Open one\n")
+    for i in range(3):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: alive\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                   "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["frontier"]) == 0
+    out = capsys.readouterr().out
+    head, rest = out.split("\n", 1)
+
+    assert "0 rules over 3 specifics" in head and "1 compressible cluster" in head
+    assert "1 of 4 slots free under question-q" in head
+    assert rest.index("COMPRESSIBLE") < rest.index("OPEN")
+    assert "question-q  ·  gate-h  ·  3 alive findings, budget 4" in rest
+    assert "finding-0, finding-1, finding-2" in rest
+
+
+def test_frontier_lists_at_most_eight_ids_per_cluster(graph, monkeypatch, capsys):
+    graph.rules("name: t\nstatuses: [open, alive, active]\nnode_types: [question, finding, gate]\nrules: []\n")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-h", "id: gate-h\ntype: gate\nstatus: active", "# H\n")
+    for i in range(10):
+        graph.node(f"finding-{i:02d}", f"id: finding-{i:02d}\ntype: finding\nstatus: alive\nlinks:\n"
+                                       "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                                       "  - {rel: kn:survivedGate, to: gate-h}", f"# {i}\n")
+    monkeypatch.chdir(graph.root)
+
+    main(["frontier"])
+    out = capsys.readouterr().out
+
+    assert "finding-07, +2 more" in out and "finding-08" not in out
+    # No budget rule in this graph, so the cluster line ends at the count: a `, budget N`
+    # tail here would be a ceiling nobody declared.
+    assert "question-q  ·  gate-h  ·  10 alive findings\n" in out
+
+
+def test_index_footer_says_how_many_superseded_are_hidden(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [finding]\nstatuses: [alive, superseded]\nrules: []\n")
+    graph.node("finding-old", "id: finding-old\ntype: finding\nstatus: superseded", "# old\n")
+    graph.node("finding-new", "id: finding-new\ntype: finding\nstatus: alive", "# new\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["index"]) == 0
+    out = capsys.readouterr().out
+    assert "finding-old" not in out and "1 superseded hidden; --all shows them" in out
+
+    assert main(["index", "--all"]) == 0
+    assert "finding-old" in capsys.readouterr().out
+
+
+def test_show_prints_covers_before_the_body_of_a_general_node(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [question, finding]\nstatuses: [alive, superseded, open]\nrules: []\n")
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    for i in (1, 2):
+        graph.node(f"finding-{i}", f"id: finding-{i}\ntype: finding\nstatus: superseded\nlinks:\n"
+                                   "  - {rel: prov:wasDerivedFrom, to: question-q}", f"# {i}\n")
+    graph.node("finding-g", "id: finding-g\ntype: finding\nstatus: alive\nlinks:\n"
+                            "  - {rel: npx:supersedes, to: finding-1}\n"
+                            "  - {rel: npx:supersedes, to: finding-2}",
+               "# G\n\nThe general claim.\n\n## Covers\n- finding-1: small\n- finding-2: large\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["show", "finding-g"]) == 0
+    out = capsys.readouterr().out
+    assert out.index("covers:") < out.index("finding-1: small")
+    assert "finding-1: small" in out
+
+
+def test_show_prints_the_warning_on_a_superseded_node(graph, monkeypatch, capsys):
+    graph.rules("name: t\nnode_types: [finding]\nstatuses: [alive, superseded]\nrules: []\n")
+    graph.node("finding-old", "id: finding-old\ntype: finding\nstatus: superseded", "# old\n")
+    graph.node("finding-new", "id: finding-new\ntype: finding\nstatus: alive\nlinks:\n"
+                              "  - {rel: npx:supersedes, to: finding-old}", "# new\n")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["show", "finding-old"]) == 0
+    out = capsys.readouterr().out
+    assert "! This claim was superseded by finding-new. Read that node before relying on this one." in out
+
+
+def test_a_fresh_graph_lets_an_idea_come_from_a_finding(tmp_path, monkeypatch):
+    """The diagram says findings open new ideas; the rule has to agree."""
+    root = _init(tmp_path, monkeypatch)
+    text = (root / "graph.yaml").read_text(encoding="utf-8")
+
+    assert "type: source, finding" in text

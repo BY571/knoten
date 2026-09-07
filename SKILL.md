@@ -40,6 +40,11 @@ that graph says it means. A common shape:
 
     gate    stands outside the loop: the bar every claim must survive
 
+A round goes once around the loop. Read sources and file each one; take ideas from them;
+sharpen an idea into a hypothesis that says what would kill it; build the experiment;
+file the finding, alive or dead. Findings are where the next ideas come from, and where
+compression starts.
+
 A graph starts from ONE question, statement or task. `knoten init` scaffolds it, and
 everything else descends from it. Investigate sources first (papers, posts, datasets,
 searches); if the work starts from your own head instead, record that as a source too, so
@@ -48,6 +53,21 @@ an idea always names where it came from.
 Those names are the order `knoten viz` lays columns out in; a type it does not know lands
 after the ones it does. Links are a list, so one hypothesis can carry several experiments
 and several findings.
+
+**Every stage names the one before it.** One idea can produce several hypotheses and one
+hypothesis several experiments, but the requirement runs the other way and is not optional:
+every hypothesis cites an idea, every experiment cites a hypothesis it tests, every idea
+cites the question, a source or the finding that prompted it. A node with nothing behind it
+cannot be traced back to why anyone did the work, and a graph made with `knoten init`
+refuses it: an idea with no source, a hypothesis with no idea, an experiment that tests
+nothing, a finding that came from no experiment.
+
+**One node is one stage.** The commonest way to get this wrong is to write the claim, the
+run and the number into a single hypothesis: `results:` and a `## The result` section on a
+node whose type says it is a claim. Split them: the hypothesis states what you believe
+and how it could be wrong, the experiment states the setup and how to rerun it, the
+finding states what came out. A graph with four hypotheses and one experiment is a graph
+where three claims have no recorded test, whatever their bodies say.
 
 ## Which way an edge points
 
@@ -118,13 +138,56 @@ Never edit a node somebody else filed, not even to fix it: supersede or retract 
 new node, as above. Two people editing one file is the only way a pull ends in a
 conflict here, and `knoten pull` then names the file and what to run next.
 
+## Compress before you accumulate
+
+A graph that only grows is a notebook. Every few findings, and always when
+`knoten frontier` lists a `COMPRESSIBLE` cluster, stop and ask what single statement
+would make several of them unnecessary. Write that statement as a new node that
+`npx:supersedes` each of them, cite every gate any of them survived, and give it a
+`## Covers` section that names each superseded node by its id, one per line, with what
+that specific result contributed and what the general one drops. The specifics stay,
+superseded, with their numbers; `knoten index` stops listing them. A general node is held
+to the union of the bars its specifics faced, so a compression is not a summary, it is a
+stronger claim.
+
+The graph will refuse a new finding once a question holds more live findings than its
+budget. That refusal is not an error; it is the graph telling you it has learned enough
+specifics to deserve a rule.
+
+The graph rewards compression in the only currency it has: budget under the question
+comes back, the frontier gets shorter, and the commit tells you exactly what you freed. A
+refused compression costs nothing but the attempt; a lazy one cannot land, because the
+bar is checked, so every general node that exists is one the graph considers stronger
+than what it replaced.
+
+## Stage prompts
+
+`src/knoten/prompts/` holds one prompt per stage: how to write a `source`, an `idea`, a
+`hypothesis`, an `experiment`, a `finding`, a `gate`, and the root `question`. Read them
+at the start of a turn, then follow the one the next action asks for, and do not write a
+node from a prompt whose type it is not. Each prompt names the stage before it, lists the
+scaffold sections to fill, and points at the kill or reopen field that stage carries. They
+are the per-stage "write it like this"; the loop itself is above.
+
+## Ideas a human dropped in
+
+`knoten idea "<one sentence>"` files an idea as `status: open`, so anything a person
+wants looked at shows up at the top of `knoten frontier` alongside your own open work. It
+cites the graph's question and `source-own-intuition` for them (or `--from <node>`, a
+source or a finding), so the idea already satisfies the lineage rules. Treat those the
+same way: read the sentence, derive hypotheses from it, and if you decide against it,
+close it with a reason rather than leaving it open forever.
+
 ## When you run out of ideas
 
 `knoten frontier` is also how you learn the well is dry: nothing `open` you can act on, no
 reopen condition that now holds, no untested gate left. That is not a signal to invent a
 hypothesis out of your own context and file it. It is a signal to go and read.
 
-Start a new source round, and put what you find in the graph before you reason from it:
+Do a compression pass first: a general node often opens ideas the specifics hid.
+
+Then start a new source round, and put what you find in the graph before you reason from
+it:
 
 - search the web, arXiv, the venue's or vendor's own docs, blog posts, forum and Reddit
   threads, and the issue trackers of anything you depend on

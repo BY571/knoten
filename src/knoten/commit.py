@@ -13,9 +13,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .core import (VERDICT, GraphError, Node, backlink, fields, graph_lock, load,
-                   node_path, parse_text, retrieve, section, today, write_atomic)
-from .validate import check
+from .core import (VERDICT, GraphError, Node, fields, graph_lock, load,
+                   node_path, parse_text, retrieve, section, supersedes, today,
+                   write_atomic)
+from .update import compression_report, refused, superseded_candidates, superseded_texts
 
 
 def _similar(nodes: dict[str, Node], candidate: Node, keep: int = 3) -> list[dict]:
@@ -35,9 +36,13 @@ def _similar(nodes: dict[str, Node], candidate: Node, keep: int = 3) -> list[dic
     whole tool exists to prevent. The asymmetry says lean permissive.
     """
     mine = fields(candidate)[0]
+    # Never the nodes this candidate just superseded: they resemble it by construction --
+    # that is what a compression IS -- and telling the author to supersede what they have
+    # already superseded reads as a refusal of the very move the graph asked for.
+    own = set(supersedes(candidate))
     out = []
     for n in retrieve(nodes, candidate.title or candidate.id):
-        if n.status not in VERDICT or len(mine & fields(n)[0]) < 2:
+        if n.id in own or n.status not in VERDICT or len(mine & fields(n)[0]) < 2:
             continue
         row = {"id": n.id, "verdict": VERDICT[n.status], "title": n.title}
         if why := section(n.body, "Why it died"):
@@ -76,17 +81,47 @@ def commit(root: Path, nid: str, frontmatter: str, body: str) -> dict:
         except GraphError as e:
             return {"status": "REJECTED", "node": nid, "reason": str(e)}
 
-        if errs := [e for e in check(backlink({**nodes, nid: candidate}), root)
-                    if e.node == nid]:
+        targets = supersedes(candidate)
+
+        # The whole post-write graph is validated BEFORE anything is written: a target
+        # that fails once its OWN status is `superseded` (a `graph.yaml` whose `statuses:`
+        # lacks it; a `when_status: superseded` rule), or a third node whose own rule
+        # depended on a target staying alive, must refuse the commit here — not raise
+        # midway through a write that already put the general node and some targets on
+        # disk. `texts` is computed once; `cands` parses those SAME strings rather than
+        # recomputing them, so the text written below is exactly the candidate that was
+        # validated. `refused` only cascades past this node's own violations when there
+        # are targets to flip — a plain commit (no `npx:supersedes`) is refused on its
+        # own violations alone, same as it always was.
+        # Both calls turn a target id into a path, and an id that is not a legal one --
+        # `Finding-A.md`, written by hand -- raises there. `commit` promises a refusal it
+        # can read, so the promise has to cover the targets too, not only the candidate.
+        try:
+            texts = superseded_texts(root, nodes, candidate) if targets else {}
+            cands = {nid: candidate, **superseded_candidates(root, texts)}
+        except GraphError as e:
+            return {"status": "REJECTED", "node": nid, "reason": str(e)}
+        if errs := refused(nodes, cands, root, bool(targets)):
+            # `node` is no longer redundant with the top-level `nid` now that a flip can
+            # break a node that is neither the general node nor one of its targets: the
+            # violation must name which node it is on.
             return {"status": "REJECTED", "node": nid,
-                    "violations": [{"rule": e.rule, "message": e.message} for e in errs],
+                    "violations": [{"node": e.node, "rule": e.rule, "message": e.message}
+                                   for e in errs],
                     "hint": "Fix the violations and commit again. The gate is the point."}
 
         write_atomic(path, text)
+        for tid, ttext in texts.items():
+            write_atomic(node_path(root, tid), ttext)
+        flipped = list(texts.keys())
+
+        report = compression_report(root, candidate, flipped) if targets else None
 
     out = {"status": "COMMITTED", "node": nid, "path": f"nodes/{nid}.md",
            "graph_size": len(nodes) + 1,
            "next": "git add + commit to version this."}
+    if report is not None:
+        out["compressed"] = report
     if similar := _similar(nodes, candidate):
         out["similar"] = similar
         out["warning"] = (

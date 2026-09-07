@@ -95,10 +95,20 @@ open ──► alive ──────► superseded
    └───► retracted     (WE WERE WRONG: the most valuable node type)
 ```
 
+The engine applies the superseded arrow: a node that supersedes another flips it, and must
+first face every gate it survived. The node doing the superseding is itself of a
+compressible type (§6); every target is alive, or already superseded by that same node.
+And a `superseded` node always has an alive node superseding it: retract the general claim
+without reviving them first and the graph says so, rather than leaving findings standing
+for nothing.
+
 Every arrow is walkable via `knoten update`, which appends and moves the status but cannot
-rewrite a claim. Immutability protects **what was claimed**, never the status: the status
-*is* the lifecycle, and git holds the before and after (§7). Without it an agent could open
-a hypothesis and never close it, leaving a settled question `open` on every frontier.
+rewrite a claim. Every arrow but the superseded one: only the engine draws that, inside the
+write that declares the edge, so setting it by hand leaves a node nothing alive supersedes,
+and that is refused. Immutability protects **what was claimed**, never the status: the
+status *is* the lifecycle, and git holds the before and after (§7). Without it an agent
+could open a hypothesis and never close it, leaving a settled question `open` on every
+frontier.
 
 `retracted` is first-class. Three claims in the source session were withdrawn. **A
 graph that records only conclusions and never corrections lies to you in six months.**
@@ -226,14 +236,19 @@ rules:
 | `id` | **required.** Names the rule in the violation. |
 | `message` | what the human reads when it fires. |
 | `when_status` / `when_type` | only apply to these statuses / types (comma-separated). |
+| `unless_edge` | `<rel>`: skip the rule for a node that declares that relation. |
+| `max_alive` | `{type, per, count}`: a graph-level ceiling, attributed to the newest nodes past it. `per` is `question` (the default) or `graph`. |
 | `require_edge` | node must declare this relation. |
 | `require_sections` | body must contain these `## ` headings. |
 | `require_field` | frontmatter must carry this key, with any non-empty value. |
+| `forbid_fields` | this type must NOT carry these frontmatter keys (comma-separated). |
 | `require_result` | `results:` must carry this key. |
 | `require_result_min` | `{key: floor}`, a numeric floor on a result. |
 | `require_field_one_of` | `{field: [allowed]}`, a frontmatter field constrained to a closed set. |
 | `require_edge_target` | an edge of this relation must point at a node of this type/status; `min` counts distinct targets. |
 | `require_backlink` | something of this type/status must point AT this node (`rel` is the generated inverse). |
+
+`forbid_fields` is the only key that says what a type must *not* be, and it exists because every other key is positive: a graph could demand a hypothesis carry a claim and never stop it also carrying the run and the result.
 
 `require_field` is the open sibling of `require_field_one_of`: a url or a doi has no
 closed set of legal values, so the only thing worth demanding is that the answer got
@@ -272,7 +287,10 @@ would silently vanish from every query.
 Always-on structural checks, which no graph declares: `dangling-edge`,
 `missing-attachment`, `unknown-relation`, `authored-backlink`, `missing-type`,
 `unknown-type`, `unknown-status`, `unknown-tag`, `malformed-tags`, `mismatched-id`,
-`malformed-results`, `malformed-repro`, and `not-a-gate` (a migration aid, deletable once
+`malformed-results`, `malformed-repro`, `supersession` (the bar of §3: a superseder of a
+compressible type over alive targets of a compressible type, one shared question, the
+union of the gates they survived, a `## Covers` section naming each, and no superseded
+node left without an alive superseder), and `not-a-gate` (a migration aid, deletable once
 graphs written before the gate rename have moved).
 
 A biology graph declares entirely different rules. The core never changes.

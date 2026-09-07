@@ -8,10 +8,12 @@ silently enforces nothing is worse than no rule, because you believe you are cov
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import GATE_TYPE, GENERATED, INVERSE, GraphError, Node, _yaml
+from .core import (GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _csv, _yaml,
+                   compressible_types, counted, moved, question_of, section, supersedes)
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -25,18 +27,35 @@ RULE_KEYS = {
     "require_result",      # results must carry this key
     "require_result_min",  # {key: minimum} — numeric floor
     "require_field_one_of",  # {field: [allowed]} — closed vocabulary
+    "forbid_fields",       # this type must NOT carry these frontmatter keys
     "require_edge_target",   # {rel, type, status, min} — what the edge must POINT AT
     "require_backlink",      # same shape, read from the other side: what must point AT
                              # this node. `rel` is the GENERATED inverse, e.g. kn:testedBy
+    "unless_edge",           # skip this rule for a node that declares this relation
+    "max_alive",             # {type, per: question|graph, count} — a GRAPH-level cap:
+                             # the newest alive nodes past it are the violation
 }
 
 # Same for the top level. `node_type:` (singular) would be the next silent no-op.
-GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules"}
+GRAPH_KEYS = {"name", "description", "node_types", "statuses", "tags", "rules", "compressible"}
+
+# The rule ids the engine emits on its own, whatever the graph declares. A graph rule may
+# not take one of these names: the write gate filters `max_alive` violations out by rule id
+# so it can measure the budget on the delta instead, and a `max_alive` rule called
+# `supersession` would have silenced the supersession bar at exactly the moment it matters.
+# A shadowed check is a check that reports green forever.
+STRUCTURAL_RULES = frozenset({
+    "authored-backlink", "dangling-edge", "malformed-repro", "malformed-results",
+    "malformed-tags", "mismatched-id", "missing-attachment", "missing-status",
+    "missing-type", "not-a-gate", "supersession", "unknown-relation", "unknown-status",
+    "unknown-tag", "unknown-type",
+})
 
 # `GATE_TYPE` was this until the rename. Named only so the migration check below can
 # recognise a graph that predates it; nothing else in the package may use it.
 RENAMED_GATE_TYPE = "method"
 GATE_RELS = ("kn:survivedGate", "kn:killedByGate")
+SURVIVED_GATE = GATE_RELS[0]  # a killed gate is not a bar survived
 
 
 @dataclass
@@ -59,6 +78,7 @@ def load_config(root: Path) -> dict:
             f"graph.yaml: unknown key(s) {', '.join(sorted(unknown))}. "
             f"Known keys: {', '.join(sorted(GRAPH_KEYS))}"
         )
+
     # `node_types` may also be a MAPPING of type -> what that word means in this graph.
     # Membership is checked against the keys either way — `in` and iteration over a dict
     # give exactly that — so nothing downstream changes. The values are for the reader and
@@ -86,6 +106,19 @@ def load_config(root: Path) -> dict:
                     f"graph.yaml: `node_types` entry {t!r} is not a type name. To write "
                     f"meanings, drop the `- ` and make `node_types` a mapping.")
 
+    # Read the same way `_vocabulary` reads it: membership against a dict checks its
+    # keys, against a list its items — either way `in` gives what we want. By now
+    # `node_types` has already passed its own shape checks, so this cannot misfire on a
+    # bare string or a list of dicts and blame `compressible` for `node_types`' mistake.
+    if (comp := cfg.get("compressible")) is not None:
+        if not isinstance(comp, list) or not comp or not all(isinstance(t, str) for t in comp):
+            raise GraphError("graph.yaml: `compressible` must be a non-empty list of node "
+                             f"types, got {comp!r}")
+        if (declared := cfg.get("node_types")) and (
+                unknown := sorted({t for t in comp if t not in declared})):
+            raise GraphError(f"graph.yaml: `compressible` names type(s) not in node_types: "
+                             f"{', '.join(unknown)}")
+
     rules = cfg.get("rules") or []
     if not isinstance(rules, list):
         raise GraphError("graph.yaml: `rules` must be a list")
@@ -94,6 +127,9 @@ def load_config(root: Path) -> dict:
             raise GraphError(f"graph.yaml: each rule must be a mapping, got {r!r}")
         if "id" not in r:
             raise GraphError(f"graph.yaml: rule is missing `id`: {r!r}")
+        if r["id"] in STRUCTURAL_RULES:
+            raise GraphError(f"graph.yaml: rule '{r['id']}' takes the name of a check knoten "
+                             f"always runs, which would shadow it. Pick another id.")
         if unknown := set(r) - RULE_KEYS:
             raise GraphError(
                 f"graph.yaml: rule '{r['id']}' has unknown key(s) "
@@ -166,6 +202,36 @@ def _check_values(r: dict) -> None:
                     f"graph.yaml: rule '{rid}': `require_result_min` floor for '{k}' must "
                     f"be a number, got {v!r}")
 
+    if "unless_edge" in r:
+        u = r["unless_edge"]
+        if not isinstance(u, str) or u not in INVERSE:
+            raise GraphError(f"graph.yaml: rule '{rid}': `unless_edge` must be a relation a "
+                             f"node declares, one of {', '.join(sorted(INVERSE))} — got {u!r}")
+
+    if "max_alive" in r:
+        spec = r["max_alive"]
+        if not isinstance(spec, dict) or not spec.get("type"):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` must be a mapping "
+                             f"{{type, count, per}}, got {spec!r}")
+        cnt = spec.get("count")
+        if isinstance(cnt, bool) or not isinstance(cnt, int) or cnt < 1:
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` `count` must be a "
+                             f"positive whole number, got {cnt!r}")
+        if spec.get("per", "question") not in ("question", "graph"):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` `per` must be "
+                             f"question or graph, got {spec.get('per')!r}")
+        # An unknown subkey is silently dropped by `dict.get` everywhere above it, so
+        # `type: finding,principle` (a flow-style typo for a list) would parse as a
+        # `principle: None` key and quietly narrow the cap to one type.
+        if extra := sorted(set(spec) - {"type", "per", "count"}):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` does not take "
+                             f"{', '.join(extra)}")
+        # A cap is a statement about the graph, not about one node; mixing it with the
+        # per-node keys would make `when_type` look like it narrows the count. It does not.
+        if others := sorted(set(r) & (RULE_KEYS - {"id", "message", "max_alive"})):
+            raise GraphError(f"graph.yaml: rule '{rid}': `max_alive` stands alone; drop "
+                             f"{', '.join(others)}")
+
 
 def _tags(n: Node, cfg: dict) -> list[Violation]:
     """Tags are the filter axis: they narrow a graph too big to read into a slice an
@@ -235,6 +301,98 @@ def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
     return out
 
 
+def _alive_backers(nodes: dict[str, Node], t: Node) -> set:
+    """Who, still alive, supersedes `t`. Alive only: a retracted general node has stopped
+    standing for anything, so it neither keeps its targets retired nor blocks a second
+    node from generalising them properly."""
+    return {b["to"] for b in t.backlinks if b["rel"] == "npx:supersededBy"
+            and (s := nodes.get(b["to"])) is not None and s.status == "alive"}
+
+
+def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
+    """The bar a node clears before it may retire others. Always on: a graph that lets
+    a weaker claim replace stronger ones by declaring one edge has no bar at all.
+
+    One target or many, the checks are the same; the difference between "replaces"
+    and "generalises" is a count, not a rule."""
+    types = compressible_types(cfg)
+    out = []
+    for n in nodes.values():
+        # A superseded node whose superseder is gone -- retracted, or deleted by hand --
+        # is a claim nothing stands in for: hidden from `index`, counted by no budget,
+        # and answering no question. The graph must not lose a finding that quietly.
+        if n.status == "superseded" and not _alive_backers(nodes, n):
+            # Name the node still holding the edge when there is one: dropping it is the
+            # other half of the fix, and without it the author revives the target and the
+            # dead superseder's own `npx:supersedes` keeps pointing at a live claim.
+            held = sorted(b["to"] for b in n.backlinks if b["rel"] == "npx:supersededBy")
+            fix = (f"drop the npx:supersedes edge from {held[0]}" if held
+                   else "restore what superseded it")
+            out.append(Violation(n.id, "supersession",
+                                 f"{n.id} is superseded by nothing alive; `knoten update "
+                                 f"{n.id} --status alive` brings it back, or {fix}"))
+        raw = supersedes(n)
+        if not raw:
+            continue
+
+        def vio(m):
+            out.append(Violation(n.id, "supersession", m))
+
+        # The superseder's own type, before anything about its targets: a graph that lets
+        # a `hypothesis` retire findings has no compression bar, it has a delete button.
+        if n.type not in types:
+            vio(f"{n.id} ({n.type}) may not supersede; only {'/'.join(types)} can")
+        if n.id in raw:
+            vio(f"{n.id} cannot supersede itself")
+        # dangling: reported already as `dangling-edge`; self: refused above, and a
+        # self-target must not also be run through the checks below.
+        targets = [t for t in raw if t in nodes and t != n.id]
+        if not targets:
+            continue
+        questions = {}
+        for tid in targets:
+            t = nodes[tid]
+            # A target is spent, not disqualified, once the engine's own flip has
+            # retired it: it stays clear of the bar as long as THIS
+            # node is the (sole) one that retired it. A target already claimed by
+            # some other node's `npx:supersedes` is refused by naming that node --
+            # unless this node has itself stopped being alive, in which case it is a
+            # record of a compression rather than a claim on anything, and the node
+            # rescuing its orphaned targets must not be refused on its behalf.
+            other = next(iter(sorted(_alive_backers(nodes, t) - {n.id})), None)
+            if t.status == "alive" or (t.status == "superseded"
+                                       and (other is None or n.status != "alive")):
+                pass
+            elif t.status == "superseded":
+                vio(f"{n.id} supersedes {tid}, which {other} already superseded")
+            else:
+                vio(f"{n.id} supersedes {tid}, which is {t.status}, not alive")
+            if t.type not in types:
+                vio(f"{n.id} supersedes {tid} ({t.type}); only {'/'.join(types)} can be superseded")
+            q = question_of(nodes, tid)
+            if q is None:
+                vio(f"{n.id} supersedes {tid}, and cannot find the question {tid} stands under")
+            else:
+                questions[tid] = q
+        mine = question_of(nodes, n.id)
+        seen = sorted(set(questions.values()) | ({mine} if mine else set()))
+        if len(seen) > 1:
+            vio(f"{n.id} and its targets stand under different questions ({', '.join(seen)})")
+        faced = {l["to"] for l in n.links if l["rel"] == SURVIVED_GATE}
+        for tid in targets:
+            for g in sorted({l["to"] for l in nodes[tid].links if l["rel"] == SURVIVED_GATE} - faced):
+                vio(f"{n.id} must survive {g}, which {tid} survived; a general claim faces "
+                    f"the union of the bars")
+        covers = section(n.body, "Covers")
+        if covers is None:
+            vio(f"{n.id} has no '## Covers' section, or it is empty")
+        else:
+            for tid in targets:
+                if not re.search(rf"(?<![a-z0-9_-]){re.escape(tid)}(?![a-z0-9_-])", covers):
+                    vio(f"## Covers of {n.id} does not mention {tid}")
+    return out
+
+
 def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation]:
     """Checks the core ALWAYS runs. Structural, not domain."""
     out = []
@@ -283,15 +441,8 @@ def _structural(nodes: dict[str, Node], root: Path, cfg: dict) -> list[Violation
                              f"cited as a gate but typed '{RENAMED_GATE_TYPE}' — the type "
                              f"was renamed to '{GATE_TYPE}', and `knoten gates` only finds "
                              f"that, so this node is invisible to it"))
+    out += _supersession(nodes, cfg)
     return out
-
-
-def _csv(v) -> list[str]:
-    if not v:
-        return []
-    if isinstance(v, list):
-        return [str(x).strip() for x in v if str(x).strip()]
-    return [x.strip() for x in str(v).split(",") if x.strip()]
 
 
 def _matching(spec: dict, edges: list, nodes: dict) -> int:
@@ -319,13 +470,52 @@ def applies(status: str, ntype: str, r: dict) -> bool:
     return True
 
 
+def _budget(nodes: dict[str, Node], r: dict) -> list[Violation]:
+    """`max_alive`: the newest alive nodes past the cap are the violation. Blamed that way
+    for DISPLAY -- `validate` has to point at somebody, and the newest specifics are the
+    ones a rule would replace. A write is refused on the delta instead (`update.refused`),
+    since blame moves the moment an author picks an older `created:`.
+
+    `moved` is date-granular — a day is the finest stamp we have — so several nodes
+    committed the same day tie. When the node at the cap boundary ties with nodes
+    before it, the whole tied block is blamed: an id that happens to sort early must not
+    get to walk through a full cap while its same-day siblings do not.
+    """
+    spec = r["max_alive"]
+    types, cap = _csv(spec["type"]), spec["count"]
+    msg = str(r.get("message", r["id"])).strip()
+    out = []
+    for key, members in sorted(counted(nodes, tuple(types), spec.get("per", "question")).items()):
+        members.sort(key=lambda n: (moved(n), n.id))
+        if len(members) <= cap:
+            continue
+        i = cap
+        while i > 0 and moved(members[i - 1]) == moved(members[cap]):
+            i -= 1
+        for n in members[i:]:
+            out.append(Violation(n.id, r["id"], budget_message(msg, len(members), types, key, cap)))
+    return out
+
+
+def budget_message(msg: str, n: int, types: list, key: str, cap: int) -> str:
+    """One sentence for a cap that is over, wherever it is reported. `validate` blames a
+    node and the write path blames the write, but the reader must not have to learn two
+    spellings of the same number."""
+    return f"{msg} ({n} alive {'/'.join(types)} under {key}, budget {cap})"
+
+
 def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
     cfg = load_config(root)
     out = _structural(nodes, root, cfg)
 
+    for r in cfg.get("rules", []):
+        if "max_alive" in r:
+            out += _budget(nodes, r)
     for n in nodes.values():
         for r in cfg.get("rules", []):
-            if not applies(n.status, n.type, r):
+            if "max_alive" in r or not applies(n.status, n.type, r):
+                continue
+            if (u := r.get("unless_edge")) and u in n.rels():
                 continue
             rid, msg = r["id"], str(r.get("message", r["id"])).strip()
 
@@ -338,6 +528,12 @@ def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
 
             # `require_field_one_of` needs a closed set; a url or a doi has none. This
             # says only that the answer got written down.
+            # The only key that says what a type must NOT be. Without it a graph could
+            # demand a hypothesis carry a claim and never stop it carrying the run and
+            # the result too, which is how a loop loses its stages.
+            if wrong := [f for f in _csv(r.get("forbid_fields")) if f in n.frontmatter]:
+                out.append(Violation(n.id, rid, f"{msg} (remove: {', '.join(wrong)})"))
+
             if fld := r.get("require_field"):
                 got = n.frontmatter.get(fld)
                 if got is None or not str(got).strip():

@@ -12,18 +12,24 @@ not wherever its vocabulary says they should be.
 Layout is a pure function of the graph. Nothing is persisted: positions are derived state,
 and a `layout.json` in git would be a merge conflict generator with ten agents appending.
 """
+import hashlib
 import json
 import math
+import time
 from pathlib import Path
 
 from .core import GATE_TYPE, GraphError, load, section
-from .validate import load_config
+from .validate import check, load_config
 
 HERE = Path(__file__).parent
 
 # Columns: no vertical centring. Centring would make every column shift when any one of
 # them grows, which is the reflow this whole design exists to avoid.
 COLW, CARDH, GAP, TOP = 300, 74, 12, 58
+# A gate card carries the tally rail — what it killed, what it passed — which makes it
+# taller than every other card. Stepping every column by one fixed row height overlapped
+# them by about the height of that rail.
+RAIL = 28
 
 # Map: golden-angle sunflower. Uniform density, and index k always lands in the same
 # place, so appending a node never disturbs 1..k-1.
@@ -106,13 +112,14 @@ def roles(nodes: dict) -> tuple:
 
 
 def _columns(nodes: dict) -> dict:
-    cols, _, _ = roles(nodes)
-    at = {c: 0 for c in cols}
+    """Stack each column top-down, accumulating heights rather than counting rows, so a
+    type whose card is taller does not overlap the one beneath it."""
+    cols, gates, _ = roles(nodes)
+    at = {c: 0.0 for c in cols}
     pos = {}
     for n in _order(nodes):
-        i = cols.index(n.type)
-        pos[n.id] = [i * COLW, TOP + at[n.type] * (CARDH + GAP)]
-        at[n.type] += 1
+        pos[n.id] = [cols.index(n.type) * COLW, TOP + at[n.type]]
+        at[n.type] += CARDH + GAP + (RAIL if n.type in gates else 0)
     return pos
 
 
@@ -189,7 +196,39 @@ def layout(nodes: dict) -> dict:
     return {"columns": _columns(nodes), "map": pos}
 
 
-SECTION_LIMIT = 1500
+SECTION_LIMIT = 4000
+
+
+# The scaffold the panel lays a node's record into. A node body is free-form: an agent
+# writes "kill criterion", "kill condition", or "when this is wrong" and any of them is
+# the same field, so each canonical LABEL is matched against the aliases the author might
+# have used, and rendered under the label in this fixed order. The label is ours, not the
+# author's, which is what keeps two findings from disagreeing on shape.
+#
+# It shapes a claim and its verdict. A node whose headings match no label (a source, a
+# gate) renders under the agent's own headings in document order, so nothing is lost -
+# only reorganised where it helps.
+PANEL_SECTIONS = [
+    {"label": "Claim", "aliases": ["The claim", "The idea", "The direction"]},
+    {"label": "Scope", "aliases": [
+        "What this does not test", "What it excludes", "What is out of scope",
+        "Out of scope", "What it is not"]},
+    {"label": "Rationale", "aliases": [
+        "Why it might be true", "Why it might work", "Why it might hold", "Why here",
+        "Rationale", "Why this holds"]},
+    {"label": "Risk", "aliases": [
+        "Why it might be false", "Why it fails", "Why it won't work", "Risks", "Doubts",
+        "Why it might not hold"]},
+    {"label": "Method", "aliases": [
+        "The setup", "Test", "Method", "The test", "How I tested it", "Design",
+        "How it was tested"]},
+    {"label": "Result", "aliases": [
+        "Result", "The outcome", "Conclusion", "What I found", "The result"]},
+    {"label": "Evidence", "aliases": [
+        "Evidence", "The number", "Numbers", "The figures"]},
+    {"label": "Kill criterion", "aliases": [
+        "Kill criterion", "Kill condition", "When this is wrong", "Kill threshold"]},
+]
 
 
 def _clip(text: str) -> str:
@@ -211,6 +250,12 @@ def payload(root: Path) -> dict:
 
     # A graph may declare `node_types` as a plain list, or as a mapping of type -> what
     # that word means here. Only the second can fill the legend.
+    # What the graph's own rules say is wrong with it. Without this the page renders a
+    # graph that breaks its own rules exactly as it renders a clean one.
+    broken = {}
+    for v in check(nodes, root):
+        broken.setdefault(v.node, []).append({"rule": v.rule, "message": v.message})
+
     types = cfg.get("node_types")
     return {
         "root": root.name,
@@ -219,6 +264,7 @@ def payload(root: Path) -> dict:
         "gate_types": sorted(gates),
         "shelf_types": sorted(shelves),
         "walls": walls,
+        "violations": broken,
         "graph": {
             "name": cfg.get("name"),
             # `node_types` is a list when a graph only declares its vocabulary, and a
@@ -235,7 +281,7 @@ def payload(root: Path) -> dict:
             "created": str(n.frontmatter.get("created") or ""),
             "links": [{"rel": l["rel"], "to": l["to"]} for l in n.links],
             "backlinks": [{"rel": b["rel"], "to": b["to"]} for b in n.backlinks],
-            "sections": [{"title": t, "text": _clip(section(n.body, t) or "")}
+            "sections": [{"title": t, "text": _clip(section(n.body, t, collapse=False) or "")}
                          for t in n.sections],
             "results": n.results, "repro": n.repro, "attachments": n.attachments,
             "columns": columns[n.id], "map": pos[n.id],
@@ -243,7 +289,24 @@ def payload(root: Path) -> dict:
     }
 
 
-def render(root: Path) -> str:
+def fingerprint(root: Path) -> str:
+    """What `--watch` polls: a hash of every node plus graph.yaml.
+
+    mtimes were the obvious choice and are wrong here. Filesystem timestamp granularity
+    is coarser than an agent writing three nodes in a burst, and every file in a freshly
+    written graph can report the SAME `st_mtime_ns` — so the poll would sit there
+    reporting no change. Reading the content costs 0.56 ms on a 67-node graph, measured,
+    which is nothing against a two-second poll.
+    """
+    h = hashlib.blake2b(digest_size=16)
+    for f in sorted((root / "nodes").glob("*.md")) + [root / "graph.yaml"]:
+        if f.exists():
+            h.update(f.name.encode())
+            h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def render(root: Path, reload_ms: int = 0) -> str:
     """The template with the payload inlined.
 
     `<` is escaped rather than the `</script>` sequence alone: a node body containing that
@@ -251,11 +314,23 @@ def render(root: Path) -> str:
     graph lost to one string in one post-mortem.
     """
     blob = json.dumps(payload(root), default=str).replace("<", "\\u003c")
-    return (HERE / "viz.html").read_text(encoding="utf-8").replace("__KNOTEN_DATA__", blob)
+    html = (HERE / "viz.html").read_text(encoding="utf-8")
+    if reload_ms:
+        # Stamped only under --watch. A static export must stay byte-identical for the
+        # same graph, or `git diff` on a committed page is noise.
+        html = (html.replace("__RELOAD_MS__", str(int(reload_ms)))
+                    .replace("__BUILT_AT__", str(int(time.time()))))
+    else:
+        # Cut the block out rather than leave it behind a falsy guard. A file you emailed
+        # someone should contain no code that reloads it, not merely code that declines to.
+        a, b = html.index("/*__WATCH__*/"), html.rindex("/*__WATCH__*/")
+        html = html[:a] + html[b + len("/*__WATCH__*/"):]
+    return (html.replace("__PANEL_SECTIONS__", json.dumps(PANEL_SECTIONS))
+                 .replace("__KNOTEN_DATA__", blob))
 
 
-def write(root: Path, dest: Path) -> Path:
+def write(root: Path, dest: Path, reload_ms: int = 0) -> Path:
     if not (root / "nodes").is_dir():
         raise GraphError(f"{root} is not a knoten graph (no nodes/ directory)")
-    dest.write_text(render(root), encoding="utf-8")
+    dest.write_text(render(root, reload_ms), encoding="utf-8")
     return dest

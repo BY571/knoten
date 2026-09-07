@@ -3,6 +3,7 @@ on a second surface. An agent with a shell had to install an SDK to file a claim
 import json
 
 import pytest
+from conftest import compressible_graph
 
 from knoten.cli import main
 from knoten.core import load
@@ -237,3 +238,180 @@ def test_new_scaffolds_a_required_field_blank_so_validate_still_names_it(tmp_pat
 
     assert "origin:\n" in (root / "nodes" / "src-a.md").read_text()
     assert main(["validate"]) == 1
+
+
+@pytest.fixture
+def four_findings(graph, monkeypatch, tmp_path):
+    """Four findings under one question with a budget of six, and the two files a
+    `knoten commit` of a general node over three of them takes on the command line."""
+    compressible_graph(graph, n=4, cap=6)
+    fm = tmp_path / "fm.yaml"
+    fm.write_text("type: finding\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: finding-1}\n"
+                  "  - {rel: npx:supersedes, to: finding-2}\n"
+                  "  - {rel: npx:supersedes, to: finding-3}\n"
+                  "  - {rel: kn:survivedGate, to: gate-a}\n"
+                  "  - {rel: kn:survivedGate, to: gate-b}\n", encoding="utf-8")
+    body = tmp_path / "body.md"
+    body.write_text("# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n- finding-3: c\n",
+                    encoding="utf-8")
+    monkeypatch.chdir(graph.root)
+    return fm, body
+
+
+def test_a_compression_is_rewarded_in_the_commit_output(four_findings, capsys):
+    fm, body = four_findings
+
+    assert main(["commit", "finding-g", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "compressed 3 findings into 1 under question-q" in out
+    assert "survived 2 gates, one more than any of them faced alone" in out
+    assert "4 of 6 slots free under this question again" in out
+    assert "this graph now stands on 1 rule and 1 specific" in out
+
+
+def test_the_reward_is_in_the_json_payload_too(four_findings, capsys):
+    fm, body = four_findings
+
+    assert main(["commit", "finding-g", "--frontmatter", str(fm), "--body", str(body), "--json"]) == 0
+    c = json.loads(capsys.readouterr().out)["compressed"]
+
+    assert c["targets"] == ["finding-1", "finding-2", "finding-3"]
+    assert c["gates"] == 2 and c["gates_bonus"] and (c["free"], c["count"]) == (4, 6)
+    assert c["type"] == "finding"
+
+
+def test_a_single_replacement_says_so_in_one_line(four_findings, tmp_path, capsys):
+    fm, body = four_findings
+    fm.write_text("type: finding\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: finding-4}\n"
+                  "  - {rel: kn:survivedGate, to: gate-b}\n", encoding="utf-8")
+    body.write_text("# R\n\n## Covers\n- finding-4: it\n", encoding="utf-8")
+
+    assert main(["commit", "finding-r", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "replaces finding-4; finding-4 is now superseded" in out
+    assert "compressed" not in out
+
+
+PRINCIPLE_COMP = """\
+name: t
+statuses: [open, alive, superseded]
+node_types: [question, principle, gate]
+compressible: [principle]
+rules: []
+"""
+
+
+def test_a_compression_of_principles_names_its_own_type(graph, monkeypatch, tmp_path, capsys):
+    graph.rules(PRINCIPLE_COMP)
+    graph.node("question-q", "id: question-q\ntype: question\nstatus: open", "# Q\n")
+    graph.node("gate-a", "id: gate-a\ntype: gate\nstatus: open", "# A\n")
+    graph.node("principle-1", "id: principle-1\ntype: principle\nstatus: alive\nlinks:\n"
+                              "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                              "  - {rel: kn:survivedGate, to: gate-a}", "# 1\n")
+    graph.node("principle-2", "id: principle-2\ntype: principle\nstatus: alive\nlinks:\n"
+                              "  - {rel: prov:wasDerivedFrom, to: question-q}\n"
+                              "  - {rel: kn:survivedGate, to: gate-a}", "# 2\n")
+    fm = tmp_path / "fm.yaml"
+    fm.write_text("type: principle\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: principle-1}\n"
+                  "  - {rel: npx:supersedes, to: principle-2}\n"
+                  "  - {rel: kn:survivedGate, to: gate-a}\n", encoding="utf-8")
+    body = tmp_path / "body.md"
+    body.write_text("# G\n\n## Covers\n- principle-1: a\n- principle-2: b\n", encoding="utf-8")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["commit", "principle-g", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "compressed 2 principles into 1 under question-q" in out
+
+
+def test_a_compression_that_leaves_the_question_over_budget_says_so(graph, monkeypatch,
+                                                                   tmp_path, capsys):
+    """Six alive under a cap of three: compressing three of them is a real gain that still
+    leaves the question over. `-1 of 3 slots free` reads as a bug, so the reward says the
+    overdraft in the words `frontier` uses for the same number."""
+    compressible_graph(graph, n=6, cap=3)
+    fm = tmp_path / "fm.yaml"
+    fm.write_text("type: finding\nstatus: alive\nlinks:\n"
+                  "  - {rel: npx:supersedes, to: finding-1}\n"
+                  "  - {rel: npx:supersedes, to: finding-2}\n"
+                  "  - {rel: npx:supersedes, to: finding-3}\n"
+                  "  - {rel: kn:survivedGate, to: gate-a}\n"
+                  "  - {rel: kn:survivedGate, to: gate-b}\n", encoding="utf-8")
+    body = tmp_path / "body.md"
+    body.write_text("# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n- finding-3: c\n",
+                    encoding="utf-8")
+    monkeypatch.chdir(graph.root)
+
+    assert main(["commit", "finding-g", "--frontmatter", str(fm), "--body", str(body)]) == 0
+    out = capsys.readouterr().out
+
+    assert "1 still over the 3 budget under this question" in out
+    assert "slots free" not in out
+
+
+# ---------------------------------------------------------------- knoten idea
+
+def _fresh(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    main(["init", "demo"])
+    monkeypatch.chdir(tmp_path / "demo")
+    return tmp_path / "demo"
+
+
+def test_idea_files_a_node_the_agent_will_be_offered(tmp_path, monkeypatch, capsys):
+    """The point of the command: one line from a human, and the next agent that runs
+    `knoten frontier` is offered it. `status: open` is what does that."""
+    _fresh(tmp_path, monkeypatch)
+
+    assert main(["idea", "the order book knows something the price does not"]) == 0
+
+    node = next((tmp_path / "demo" / "nodes").glob("idea-*.md")).read_text()
+    assert "status: open" in node
+    assert "# the order book knows something the price does not" in node
+    main(["frontier"])
+    assert "idea-the-order-book" in capsys.readouterr().out
+
+
+def test_idea_wires_the_question_and_own_intuition_so_the_rules_pass(tmp_path, monkeypatch):
+    """An idea must cite the question it serves and a source. Making the human write
+    those edges by hand is how you get a refusal instead of an idea, so both are wired:
+    the sole question, and `source-own-intuition`, made once."""
+    root = _fresh(tmp_path, monkeypatch)
+
+    main(["idea", "try a longer holding period"])
+    main(["idea", "try a shorter one"])
+
+    node = next(root.joinpath("nodes").glob("idea-try-longer*.md")).read_text()   # stop words drop out of the slug
+    assert "prov:wasDerivedFrom, to: question-demo" in node
+    assert "prov:wasDerivedFrom, to: source-own-intuition" in node
+    assert (root / "nodes" / "source-own-intuition.md").exists()
+    assert len(list(root.joinpath("nodes").glob("source-*.md"))) == 1
+    assert main(["validate"]) == 0
+
+
+def test_idea_from_a_named_node_cites_that_instead(tmp_path, monkeypatch):
+    root = _fresh(tmp_path, monkeypatch)
+    (tmp_path / "fm.yaml").write_text("type: source\nstatus: alive\norigin: https://x\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# a paper\n", encoding="utf-8")
+    assert main(["commit", "source-paper", "--frontmatter", str(tmp_path / "fm.yaml"),
+                 "--body", str(tmp_path / "b.md")]) == 0
+
+    assert main(["idea", "what the paper suggests", "--from", "source-paper"]) == 0
+
+    node = next(root.joinpath("nodes").glob("idea-what*.md")).read_text()
+    assert "to: source-paper" in node and "own-intuition" not in node
+    assert not (root / "nodes" / "source-own-intuition.md").exists()
+    assert main(["validate"]) == 0
+
+
+def test_idea_refuses_an_origin_that_does_not_exist(tmp_path, monkeypatch, capsys):
+    _fresh(tmp_path, monkeypatch)
+
+    assert main(["idea", "x", "--from", "nope"]) == 1
+    assert "nope" in capsys.readouterr().err
