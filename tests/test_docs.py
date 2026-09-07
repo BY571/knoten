@@ -97,3 +97,9 @@ def test_a_compression_is_not_warned_about_resembling_what_it_just_superseded(re
     assert warned, "the example no longer trips the resemblance warning at all"
     assert "finding-sc-small-models" not in warned[0]
     assert "finding-sc-large-models" not in warned[0]
+
+
+def test_every_image_the_readme_shows_is_in_the_repo():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    for src in re.findall(r'src="([^"]+)"', text):
+        assert (ROOT / src).is_file(), src
