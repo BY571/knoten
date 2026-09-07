@@ -1,4 +1,8 @@
-"""Moving a node through its own lifecycle: open -> alive / dead / retracted.
+"""Moving a node through its own lifecycle: open -> alive / dead / retracted / superseded.
+
+The `superseded` arrow is the one the engine walks by itself: an update that leaves the
+node superseding others flips every one of those targets in the SAME validated write, so
+the general node and the specifics it retires are never on disk in disagreement.
 
 `knoten commit` refuses to overwrite a node, which is right — a correction to a claim is
 a new node, not an edit. But that left the lifecycle SPEC §3 draws with no way to walk it:
@@ -19,10 +23,10 @@ from pathlib import Path
 
 import yaml
 
-from .core import (FM_RE, SUPERSEDES, GraphError, Node, backlink, graph_lock, load,
+from .core import (FM_RE, GraphError, Node, backlink, counted, graph_lock, load,
                    node_path, parse_text, question_of, shape, split, supersedes, today,
-                   write_atomic)
-from .validate import check, load_config
+                   write_atomic, _csv)
+from .validate import Violation, budget_message, check, load_config
 
 # A key we re-emit; everything else keeps its original text, comments included.
 _BLOCK = re.compile(r"^(\w[\w-]*):", re.M)
@@ -103,10 +107,28 @@ def _candidate(text: str, nid: str, name: str, status, results, links, append, f
     return out
 
 
+SUPERSEDED_SECTION = "## Superseded"
+
+
+def _with_note(text: str, note: str) -> str:
+    """The flip's note, under a heading of its own. Appended bare it joined whatever
+    section the target's body happened to end with — under `## Result` it read as part of
+    the result, which is exactly the kind of quiet rewrite of a claim this tool refuses.
+    A body that already carries the heading (a node superseded, revived, superseded again)
+    gets one more line inside it rather than a second heading."""
+    m = re.search(rf"^{re.escape(SUPERSEDED_SECTION)}\s*$", text, re.M)
+    if not m:
+        return text.rstrip("\n") + f"\n\n{SUPERSEDED_SECTION}\n{note}\n"
+    nxt = re.compile(r"^##+ ", re.M).search(text, m.end())
+    cut = nxt.start() if nxt else len(text)
+    head, tail = text[:cut].rstrip("\n"), text[cut:]
+    return f"{head}\n{note}\n" + (f"\n{tail}" if tail else "")
+
+
 def superseded_texts(root: Path, nodes: dict[str, Node], node: Node) -> dict[str, str]:
     """The rewritten file text for every target `node` supersedes that exists and is not
     already superseded: `status: superseded`, with the note `superseded by <node.id> on
-    <today>` appended. Pure — reads the graph, writes nothing."""
+    <today>` under a `## Superseded` heading. Pure — reads the graph, writes nothing."""
     out = {}
     stamp = today()
     for tid in supersedes(node):
@@ -114,9 +136,10 @@ def superseded_texts(root: Path, nodes: dict[str, Node], node: Node) -> dict[str
         if t is None or t.status == "superseded":
             continue
         nf = node_path(root, tid)
-        out[tid] = _candidate(nf.read_text(encoding="utf-8"), tid, nf.name,
-                              status="superseded", results=None, links=None,
-                              append=f"superseded by {node.id} on {stamp}", fields=None)
+        out[tid] = _with_note(
+            _candidate(nf.read_text(encoding="utf-8"), tid, nf.name, status="superseded",
+                       results=None, links=None, append=None, fields=None),
+            f"superseded by {node.id} on {stamp}")
     return out
 
 
@@ -127,6 +150,37 @@ def superseded_candidates(root: Path, texts: dict[str, str]) -> dict[str, Node]:
     byte-for-byte what `write_atomic` puts on disk afterwards."""
     return {tid: parse_text(text, tid, node_path(root, tid).name)
             for tid, text in texts.items()}
+
+
+def _over_budget(nodes: dict[str, Node], after: dict[str, Node], cands: dict[str, Node],
+                 cfg: dict) -> list[Violation]:
+    """Budget violations this WRITE is responsible for: a group it makes bigger and leaves
+    over the cap.
+
+    Not `validate`'s blame, which names the newest nodes past the cap. Blame is fine for
+    display and wrong as a gate twice over: an author who writes `created: 2001-01-01`
+    puts the blame on somebody else and walks through a full cap, and a partial
+    compression that takes a group from six to four under a cap of three would be refused
+    for leaving it over — while making it strictly better, which is the move the whole
+    rule exists to buy.
+    """
+    out = []
+    for r in cfg.get("rules", []):
+        spec = r.get("max_alive")
+        if not spec:
+            continue
+        types, cap, per = _csv(spec["type"]), spec["count"], spec.get("per", "question")
+        was = {k: len(v) for k, v in counted(nodes, tuple(types), per).items()}
+        msg = str(r.get("message", r["id"])).strip()
+        for key, members in sorted(counted(after, tuple(types), per).items()):
+            if len(members) <= was.get(key, 0) or len(members) <= cap:
+                continue
+            # Blamed on what is being written, not on whoever is newest: this refusal is
+            # about the write, and the write is the only thing its author can change.
+            inside = sorted(n.id for n in members if n.id in cands)
+            out.append(Violation(inside[0] if inside else next(iter(cands)), r["id"],
+                                 budget_message(msg, len(members), types, key, cap)))
+    return out
 
 
 def refused(nodes: dict[str, Node], cands: dict[str, Node], root: Path,
@@ -147,12 +201,20 @@ def refused(nodes: dict[str, Node], cands: dict[str, Node], root: Path,
     alive, must refuse the write here, not land it and let `validate` discover the
     breakage after the fact — the whole point of flipping status INSIDE the same
     validated write as the edge that causes it.
+
+    The budget is the exception to both, and is measured on the delta instead: whose name
+    a cap lands on shifts with every write, so neither "on my node" nor "new since
+    before" can decide whether THIS write is the one that overspent.
     """
-    after = check(backlink({**nodes, **cands}), root)
+    cfg = load_config(root)
+    caps = {r["id"] for r in cfg.get("rules", []) if "max_alive" in r}
+    merged = backlink({**nodes, **cands})
+    out = _over_budget(nodes, merged, cands, cfg)
+    after = [e for e in check(merged, root) if e.rule not in caps]
     if not cascade:
-        return [e for e in after if e.node in cands]
-    before = check(backlink(nodes), root)
-    return [e for e in after if e.node in cands or e not in before]
+        return out + [e for e in after if e.node in cands]
+    before = [e for e in check(backlink(nodes), root) if e.rule not in caps]
+    return out + [e for e in after if e.node in cands or e not in before]
 
 
 def update_with_report(root: Path, nid: str, status: str | None = None,
@@ -178,8 +240,10 @@ def update_with_report(root: Path, nid: str, status: str | None = None,
         candidate = parse_text(out, nid, nf.name)
 
         nodes = load(root)
-        adds_supersedes = bool(links) and any(l.get("rel") == SUPERSEDES for l in links)
-        targets = supersedes(candidate) if adds_supersedes else []
+        # Read off the CANDIDATE, never off the `links` argument: `fields={"links": [...]}`
+        # sets the edge just as truly, and a supersession that flips nothing leaves the
+        # general node claiming to have retired a finding the graph still counts.
+        targets = supersedes(candidate)
         texts = superseded_texts(root, nodes, candidate) if targets else {}
         cands = {nid: candidate, **superseded_candidates(root, texts)}
 

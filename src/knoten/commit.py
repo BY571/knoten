@@ -36,9 +36,13 @@ def _similar(nodes: dict[str, Node], candidate: Node, keep: int = 3) -> list[dic
     whole tool exists to prevent. The asymmetry says lean permissive.
     """
     mine = fields(candidate)[0]
+    # Never the nodes this candidate just superseded: they resemble it by construction --
+    # that is what a compression IS -- and telling the author to supersede what they have
+    # already superseded reads as a refusal of the very move the graph asked for.
+    own = set(supersedes(candidate))
     out = []
     for n in retrieve(nodes, candidate.title or candidate.id):
-        if n.status not in VERDICT or len(mine & fields(n)[0]) < 2:
+        if n.id in own or n.status not in VERDICT or len(mine & fields(n)[0]) < 2:
             continue
         row = {"id": n.id, "verdict": VERDICT[n.status], "title": n.title}
         if why := section(n.body, "Why it died"):
@@ -89,8 +93,14 @@ def commit(root: Path, nid: str, frontmatter: str, body: str) -> dict:
         # validated. `refused` only cascades past this node's own violations when there
         # are targets to flip — a plain commit (no `npx:supersedes`) is refused on its
         # own violations alone, same as it always was.
-        texts = superseded_texts(root, nodes, candidate) if targets else {}
-        cands = {nid: candidate, **superseded_candidates(root, texts)}
+        # Both calls turn a target id into a path, and an id that is not a legal one --
+        # `Finding-A.md`, written by hand -- raises there. `commit` promises a refusal it
+        # can read, so the promise has to cover the targets too, not only the candidate.
+        try:
+            texts = superseded_texts(root, nodes, candidate) if targets else {}
+            cands = {nid: candidate, **superseded_candidates(root, texts)}
+        except GraphError as e:
+            return {"status": "REJECTED", "node": nid, "reason": str(e)}
         if errs := refused(nodes, cands, root, bool(targets)):
             # `node` is no longer redundant with the top-level `nid` now that a flip can
             # break a node that is neither the general node nor one of its targets: the

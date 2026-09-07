@@ -102,6 +102,10 @@ GATE_SECTIONS = ("The rule", "Why it exists")
 
 SUPERSEDES = "npx:supersedes"
 QUESTION_TYPE = "question"
+# What a general node may supersede when the graph declares nothing. Named once so the
+# frontier, the clusterer and the validator cannot disagree about what "compressible"
+# means in a graph that never said.
+DEFAULT_COMPRESSIBLE = ("finding",)
 # The edges that lead from a node back towards the question it serves. `question_of`
 # follows them breadth-first and stops at the first question. A node no such walk
 # reaches is unrooted, and compression refuses it, because "under the same question"
@@ -526,7 +530,7 @@ def gates(nodes: dict[str, Node]) -> list[tuple[Node, list, list]]:
             for n in sorted(nodes.values(), key=lambda n: n.id) if n.type == GATE_TYPE]
 
 
-def frontier(nodes: dict[str, Node], types: tuple[str, ...] = ("finding",)) -> dict:
+def frontier(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> dict:
     """What is worth doing next, in four buckets.
 
     `## What would reopen this` is the standing offer SPEC §5 insists on, and until now
@@ -569,31 +573,55 @@ def supersedes(n: Node) -> list[str]:
     return sorted({l["to"] for l in n.links if l["rel"] == SUPERSEDES})
 
 
+NO_QUESTION = "(no question)"
+WHOLE_GRAPH = "(graph)"
+
+
+def counted(nodes: dict[str, Node], types: tuple[str, ...],
+            per: str = "question") -> dict[str, list[Node]]:
+    """The alive nodes of `types` that nothing alive has generalised away, grouped by the
+    question they stand under (`per: graph` puts them all in one group).
+
+    THE one definition of "still counts". `shape`, `compressible`, `validate._budget` and
+    the delta `update.refused` measures a write by all read these groups, so the number a
+    commit is refused on is the number `validate` prints. Written three times before, it
+    drifted once already: a self-loop let a node exempt itself from the budget by naming
+    its own id, and only two of the three copies had the guard.
+    """
+    covered = {l["to"] for n in nodes.values() if n.status == "alive"
+               for l in n.links if l["rel"] == SUPERSEDES and l["to"] != n.id}
+    groups: dict[str, list[Node]] = {}
+    for n in nodes.values():
+        if n.status != "alive" or n.type not in types or n.id in covered:
+            continue
+        key = WHOLE_GRAPH if per == "graph" else (question_of(nodes, n.id) or NO_QUESTION)
+        groups.setdefault(key, []).append(n)
+    return groups
+
+
 def is_general(n: Node) -> bool:
     """A general node covers two or more; one target is a replacement, not a rule."""
     return len(supersedes(n)) >= 2
 
 
-def compressible(nodes: dict[str, Node], types: tuple[str, ...] = ("finding",)) -> list[dict]:
+def compressible(nodes: dict[str, Node], types: tuple[str, ...] = DEFAULT_COMPRESSIBLE) -> list[dict]:
     """Clusters of alive nodes under one question that share a survived gate or a tag,
     three or more, with nothing yet generalising them. Deliberately dumb: shared gate
     or tag, not similarity. It presents cheaply and lets the reader judge what
     generalises, the bargain the reopen band makes."""
-    # Same guard `shape` applies to its own `covered` set: a self-loop must not count a
-    # node as already covered by itself.
-    covered = {t for n in nodes.values() if n.status == "alive"
-              for t in supersedes(n) if t != n.id}
     groups: dict[tuple, set] = {}
-    for n in nodes.values():
-        if n.status != "alive" or n.type not in types or n.id in covered:
+    for q, members in counted(nodes, types).items():
+        if q == NO_QUESTION:      # an unrooted node has no question to cluster under
             continue
-        if (q := question_of(nodes, n.id)) is None:
-            continue
-        keys = [("gate", l["to"]) for l in n.links if l["rel"] == "kn:survivedGate"]
-        keys += [("tag", str(t)) for t in n.tags]
-        for k in keys:
-            groups.setdefault((q, k), set()).add(n.id)
-    out = [{"question": q, "shared": {kind: key}, "ids": sorted(ids)}
+        for n in members:
+            keys = [("gate", l["to"]) for l in n.links if l["rel"] == "kn:survivedGate"]
+            keys += [("tag", str(t)) for t in n.tags]
+            for k in keys:
+                groups.setdefault((q, k), set()).add(n.id)
+    out = [{"question": q, "shared": {kind: key}, "ids": sorted(ids),
+            # The word the frontier prints for this cluster: what these nodes ARE, since
+            # a graph whose compressible type is `principle` must not be told "findings".
+            "type": "/".join(sorted({nodes[i].type for i in ids}))}
            for (q, (kind, key)), ids in groups.items() if len(ids) >= 3]
     out.sort(key=lambda c: (-len(c["ids"]), c["question"], next(iter(c["shared"].items()))))
     return out
@@ -603,15 +631,15 @@ def compressible_types(cfg: dict) -> tuple[str, ...]:
     """What a general node may supersede. `graph.yaml: compressible:` or findings."""
     # `load_config` refuses anything but a list of declared types; this coercion guards
     # direct callers that may pass a bare string (e.g., from YAML that was parsed elsewhere).
-    v = cfg.get("compressible") or ["finding"]
+    v = cfg.get("compressible") or list(DEFAULT_COMPRESSIBLE)
     v = [v] if isinstance(v, str) else v
     return tuple(str(t) for t in v)
 
 
 def _csv(v) -> list[str]:
-    """A rule value that may be written as a YAML list or a comma-separated string,
-    read the same way everywhere: `shape` and `validate._budget` parse `max_alive.type`
-    from the same rule dict, and a hand-rolled split in one of them is how they drift."""
+    """A rule value that may be written as a YAML list or a comma-separated string, read
+    the same way everywhere. A hand-rolled split at one of the call sites is how they
+    drift: `type: finding,principle` would be one type in one place and two in another."""
     if not v:
         return []
     if isinstance(v, list):
@@ -620,29 +648,22 @@ def _csv(v) -> list[str]:
 
 
 def shape(nodes: dict[str, Node], cfg: dict) -> dict:
-    """The graph's compression state: rules over specifics, and the budget per question
-    when a `max_alive` rule exists. The same numbers reward a commit and head `frontier`."""
+    """The graph's compression state: rules over specifics, and how each budgeted group
+    stands against its cap. The same numbers reward a commit and head `frontier`."""
     types = compressible_types(cfg)
     alive = [n for n in nodes.values() if n.status == "alive"]
-    rules = [n for n in alive if is_general(n)]
-    # Same guard `validate._budget` applies to its own `covered` set: a self-loop must not
-    # count a node as already covered by itself.
-    covered = {l["to"] for n in alive for l in n.links
-              if l["rel"] == SUPERSEDES and l["to"] != n.id}
-    specifics = [n for n in alive if n.type in types and not is_general(n) and n.id not in covered]
-    out = {"rules": len(rules), "specifics": len(specifics), "budget": []}
+    still = counted(nodes, types, per="graph").get(WHOLE_GRAPH, [])
+    out = {"rules": len([n for n in alive if is_general(n)]),
+           "specifics": len([n for n in still if not is_general(n)]), "budget": []}
     for r in cfg.get("rules", []):
         spec = r.get("max_alive")
-        if not spec or spec.get("per", "question") != "question":
+        if not spec:
             continue
         rtypes = tuple(_csv(spec["type"]))
-        counts: dict[str, int] = {}
-        for n in alive:
-            if n.type in rtypes and n.id not in covered:
-                q = question_of(nodes, n.id) or "(no question)"
-                counts[q] = counts.get(q, 0) + 1
-        for q, c in counts.items():
-            out["budget"].append({"question": q, "type": "/".join(rtypes),
-                                  "free": spec["count"] - c, "count": spec["count"]})
+        # Every group `_budget` would form, `per: graph` included: a row missing here is a
+        # cap the reader is never shown and a compression that reports no budget at all.
+        for key, members in counted(nodes, rtypes, spec.get("per", "question")).items():
+            out["budget"].append({"question": key, "type": "/".join(rtypes),
+                                  "free": spec["count"] - len(members), "count": spec["count"]})
     out["budget"].sort(key=lambda b: (b["free"], b["question"]))
     return out

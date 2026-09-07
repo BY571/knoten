@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .core import (GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _csv, _yaml,
-                   compressible_types, moved, question_of, section, supersedes)
+                   compressible_types, counted, moved, question_of, section, supersedes)
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -285,6 +285,14 @@ def _vocabulary(n: Node, cfg: dict) -> list[Violation]:
     return out
 
 
+def _alive_backers(nodes: dict[str, Node], t: Node) -> set:
+    """Who, still alive, supersedes `t`. Alive only: a retracted general node has stopped
+    standing for anything, so it neither keeps its targets retired nor blocks a second
+    node from generalising them properly."""
+    return {b["to"] for b in t.backlinks if b["rel"] == "npx:supersededBy"
+            and (s := nodes.get(b["to"])) is not None and s.status == "alive"}
+
+
 def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
     """The bar a node clears before it may retire others. Always on: a graph that lets
     a weaker claim replace stronger ones by declaring one edge has no bar at all.
@@ -294,6 +302,14 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
     types = compressible_types(cfg)
     out = []
     for n in nodes.values():
+        # A superseded node whose superseder is gone -- retracted, or deleted by hand --
+        # is a claim nothing stands in for: hidden from `index`, counted by no budget,
+        # and answering no question. The graph must not lose a finding that quietly.
+        if n.status == "superseded" and not _alive_backers(nodes, n):
+            out.append(Violation(n.id, "supersession",
+                                 f"{n.id} is superseded by nothing alive; `knoten update "
+                                 f"{n.id} --status alive` brings it back, or restore what "
+                                 f"superseded it"))
         raw = supersedes(n)
         if not raw:
             continue
@@ -301,6 +317,10 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
         def vio(m):
             out.append(Violation(n.id, "supersession", m))
 
+        # The superseder's own type, before anything about its targets: a graph that lets
+        # a `hypothesis` retire findings has no compression bar, it has a delete button.
+        if n.type not in types:
+            vio(f"{n.id} ({n.type}) may not supersede; only {'/'.join(types)} can")
         if n.id in raw:
             vio(f"{n.id} cannot supersede itself")
         # dangling: reported already as `dangling-edge`; self: refused above, and a
@@ -315,8 +335,7 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
             # --status superseded` runs: it stays clear of the bar as long as THIS
             # node is the (sole) one that retired it. A target already claimed by
             # some other node's `npx:supersedes` is refused by naming that node.
-            backers = {b["to"] for b in t.backlinks if b["rel"] == "npx:supersededBy"}
-            other = next(iter(sorted(backers - {n.id})), None)
+            other = next(iter(sorted(_alive_backers(nodes, t) - {n.id})), None)
             if t.status == "alive" or (t.status == "superseded" and other is None):
                 pass
             elif t.status == "superseded" and other:
@@ -427,9 +446,10 @@ def applies(status: str, ntype: str, r: dict) -> bool:
 
 
 def _budget(nodes: dict[str, Node], r: dict) -> list[Violation]:
-    """`max_alive`: the newest alive nodes past the cap are the violation. Attributed
-    that way so a `commit` of the one-too-many refuses THAT node, while a general node
-    passes: everything it supersedes has stopped counting before it is counted.
+    """`max_alive`: the newest alive nodes past the cap are the violation. Blamed that way
+    for DISPLAY -- `validate` has to point at somebody, and the newest specifics are the
+    ones a rule would replace. A write is refused on the delta instead (`update.refused`),
+    since blame moves the moment an author picks an older `created:`.
 
     `moved` is date-granular — a day is the finest stamp we have — so several nodes
     committed the same day tie. When the node at the cap boundary ties with nodes
@@ -437,18 +457,10 @@ def _budget(nodes: dict[str, Node], r: dict) -> list[Violation]:
     get to walk through a full cap while its same-day siblings do not.
     """
     spec = r["max_alive"]
-    types, cap, per = _csv(spec["type"]), spec["count"], spec.get("per", "question")
-    covered = {l["to"] for n in nodes.values() if n.status == "alive"
-               for l in n.links if l["rel"] == SUPERSEDES and l["to"] != n.id}
-    groups: dict[str, list[Node]] = {}
-    for n in nodes.values():
-        if n.status != "alive" or n.type not in types or n.id in covered:
-            continue
-        key = "(graph)" if per == "graph" else (question_of(nodes, n.id) or "(no question)")
-        groups.setdefault(key, []).append(n)
+    types, cap = _csv(spec["type"]), spec["count"]
     msg = str(r.get("message", r["id"])).strip()
     out = []
-    for key, members in sorted(groups.items()):
+    for key, members in sorted(counted(nodes, tuple(types), spec.get("per", "question")).items()):
         members.sort(key=lambda n: (moved(n), n.id))
         if len(members) <= cap:
             continue
@@ -456,9 +468,15 @@ def _budget(nodes: dict[str, Node], r: dict) -> list[Violation]:
         while i > 0 and moved(members[i - 1]) == moved(members[cap]):
             i -= 1
         for n in members[i:]:
-            out.append(Violation(n.id, r["id"], f"{msg} ({len(members)} alive "
-                                                f"{'/'.join(types)} under {key}, budget {cap})"))
+            out.append(Violation(n.id, r["id"], budget_message(msg, len(members), types, key, cap)))
     return out
+
+
+def budget_message(msg: str, n: int, types: list, key: str, cap: int) -> str:
+    """One sentence for a cap that is over, wherever it is reported. `validate` blames a
+    node and the write path blames the write, but the reader must not have to learn two
+    spellings of the same number."""
+    return f"{msg} ({n} alive {'/'.join(types)} under {key}, budget {cap})"
 
 
 def check(nodes: dict[str, Node], root: Path) -> list[Violation]:
