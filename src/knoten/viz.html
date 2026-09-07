@@ -118,6 +118,11 @@ body.map .card,body.map .colhead{display:none}
   border-radius:0 8px 8px 0;padding:10px 13px}
 #panel .broke h3{margin:0 0 4px;color:var(--dead)}
 #panel .broke p{margin:0 0 6px;font-size:12.5px;color:var(--ink-2)}
+.card .kind{font:600 9px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+.card .sum{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  margin-top:4px;font-size:11px;line-height:1.35;color:var(--ink-2)}
+.card .when{font:10px var(--mono);color:var(--ink-3)}
+.card .num{font:600 10px var(--mono);color:var(--ink-2);white-space:nowrap}
 .card .ttl{display:-webkit-box;font-size:12.5px;line-height:1.35;font-weight:520;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card.closed .ttl{text-decoration:line-through;text-decoration-color:var(--dead);color:var(--ink-2)}
@@ -242,8 +247,8 @@ footer{position:absolute;bottom:12px;left:16px;font-size:11.5px;color:var(--ink-
     </svg>
     <div><h1>knoten</h1><span class=sub id=graphname></span></div>
     <div class=viewsw role=group aria-label="View">
-      <button id=v-columns aria-pressed=true>columns</button>
-      <button id=v-map aria-pressed=false>map</button>
+      <button id=v-columns aria-pressed=true>cards</button>
+      <button id=v-map aria-pressed=false>graph</button>
       <button id=v-metrics aria-pressed=false>metrics</button>
     </div>
     <div class=viewsw role=group aria-label="Fold" id=foldsw>
@@ -301,7 +306,7 @@ const CLOSED = ["dead", "retracted", "superseded"];
 const GATE_RELS = ["kn:survivedGate", "kn:killedByGate"];
 // The column step, from the layout that wrote the positions: a hung card takes exactly
 // one row, so the two sides have to agree on how tall a row is.
-const CARDH = 74, CARDW = 250, COLW = 300, GAP = 12;
+const CARDH = 108, CARDW = 250, COLW = 300, GAP = 12;
 
 document.title = "knoten · " + DATA.root;
 document.getElementById("graphname").textContent = DATA.root;
@@ -373,9 +378,17 @@ for (const n of DATA.nodes){
   b.style.setProperty("--edge", vc(n));
   // A rule's verdict slot says `rule`, not `alive`. Every rule is alive — that is what
   // makes it a rule — so the status is the one word on the card that says nothing.
+  // What a card says, top to bottom: what kind of node, its verdict, its title, its
+  // first paragraph, then id, date and the number it moved. Enough to decide whether
+  // to open the record, which is what a card is for.
   const idline = el("span","id", n.id);
-  b.append(el("span","verdict", n.rule ? "rule" : (n.status || "?")),
-           el("span","ttl", n.title || n.id), idline);
+  if (n.created) idline.append(el("span", "when", n.created));
+  const metric = (DATA.metrics || []).find(m => n.results && typeof n.results[m.name] === "number");
+  if (metric) idline.append(el("span", "num", `${metric.name} ${n.results[metric.name]}`));
+  b.append(el("span","kind", n.type), el("span","verdict", n.rule ? "rule" : (n.status || "?")),
+           el("span","ttl", n.title || n.id));
+  if (n.summary) b.append(el("span","sum", n.summary));
+  b.append(idline);
   if (DATA.gate_types.includes(n.type)){
     const killed = n.backlinks.filter(x => x.rel === "kn:gateKilled").length;
     const kept = n.backlinks.filter(x => x.rel === "kn:gateSurvivedBy").length;
@@ -1010,6 +1023,10 @@ vp.addEventListener("wheel", e => { if (VIEW === "metrics") return;   // let it 
   view.x = mx - (mx-view.x)*(k/view.k); view.y = my - (my-view.y)*(k/view.k);
   view.k = k; apply(); }, {passive:false});
 const VIEWS = ["columns", "map", "metrics"];
+// A metrics view only when the graph declares a metric; otherwise the button is not
+// there to disappoint. `v` cycles through the views that exist.
+const VIEWS = ["columns", "map"].concat((DATA.metrics || []).length ? ["metrics"] : []);
+if (!VIEWS.includes("metrics")) document.getElementById("v-metrics").hidden = true;
 function setView(v){
   VIEW = v;
   document.body.classList.toggle("map", v === "map");
@@ -1028,8 +1045,8 @@ addEventListener("keydown", e => {
   // reads the letter and ignores the modifier answers a shortcut nobody aimed at it.
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "f") fit();
-  if (e.key === "v") setView(VIEW === "columns" ? "map" : "columns");
-  if (e.key === "m") setView(VIEW === "metrics" ? "columns" : "metrics");
+  if (e.key === "v"){ const i = VIEWS.indexOf(VIEW); setView(VIEWS[(i + 1) % VIEWS.length]); }
+  if (e.key === "m" && VIEWS.includes("metrics")) setView(VIEW === "metrics" ? "columns" : "metrics");
   if (e.key === "a") setFold(!FOLD);
   // The chip is a pointer target; this is the same fold from the keyboard, on whatever
   // rule the record is currently showing.
