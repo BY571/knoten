@@ -9,11 +9,13 @@ silently enforces nothing is worse than no rule, because you believe you are cov
 from __future__ import annotations
 
 import re
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
 from .core import (GATE_TYPE, GENERATED, INVERSE, SUPERSEDES, GraphError, Node, _csv, _yaml,
-                   compressible_types, counted, moved, question_of, section, supersedes)
+                   compressible_types, counted, moved, question_of, section, supersedes,
+                   under)
 
 # A rule key that is not in here is a typo. Refuse it.
 RULE_KEYS = {
@@ -309,6 +311,39 @@ def _alive_backers(nodes: dict[str, Node], t: Node) -> set:
             and (s := nodes.get(b["to"])) is not None and s.status == "alive"}
 
 
+def _backers(nodes: dict[str, Node], t: Node) -> set:
+    """Who supersedes `t` and is still in the graph, whatever their status. The chain the
+    orphan check walks up runs through superseded nodes, so it cannot use the alive set."""
+    return {b["to"] for b in t.backlinks if b["rel"] == "npx:supersededBy" and b["to"] in nodes}
+
+
+def _chain_top(nodes: dict[str, Node], n: Node, orphans: set) -> bool:
+    """Is `n` where a broken chain of supersessions starts?
+
+    Only the top is reported. Deleting one general node is ONE violation, on the node it
+    directly covered: the specifics hanging below that node still reach it, and restoring
+    the deleted node fixes them all. Reporting every node down the chain would answer one
+    deletion with a screenful and bury the one edit that repairs it.
+
+    Nothing above `n` broken makes `n` the top. When the walk up finds only a ring -- a
+    cycle stands for nothing, so every member of it is orphaned and none is above the
+    others -- the smallest id in the ring reports for it, or a graph could lose a whole
+    ring of findings and say nothing at all.
+    """
+    up, queue = set(), deque(_backers(nodes, n) & orphans)
+    while queue:
+        b = queue.popleft()
+        if b in up:
+            continue
+        up.add(b)
+        queue.extend(_backers(nodes, nodes[b]) & orphans)
+    if not up:
+        return True
+    if any(not (_backers(nodes, nodes[b]) & orphans) for b in up):
+        return False                       # a broken node above reports for this chain
+    return n.id == min(up)
+
+
 def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
     """The bar a node clears before it may retire others. Always on: a graph that lets
     a weaker claim replace stronger ones by declaring one edge has no bar at all.
@@ -317,11 +352,15 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
     and "generalises" is a count, not a rule."""
     types = compressible_types(cfg)
     out = []
+    # A superseded node nothing standing covers is a claim nothing stands in for: hidden
+    # from `index`, counted by no budget, and answering no question. The graph must not
+    # lose a finding that quietly. Standing, not alive: a superseder that is itself
+    # superseded by a chain ending in an alive node still covers its targets, which is
+    # what makes a rule over rules legal.
+    covered = under(nodes)
+    orphans = {m.id for m in nodes.values() if m.status == "superseded" and m.id not in covered}
     for n in nodes.values():
-        # A superseded node whose superseder is gone -- retracted, or deleted by hand --
-        # is a claim nothing stands in for: hidden from `index`, counted by no budget,
-        # and answering no question. The graph must not lose a finding that quietly.
-        if n.status == "superseded" and not _alive_backers(nodes, n):
+        if n.id in orphans and _chain_top(nodes, n, orphans):
             # Name the node still holding the edge when there is one: dropping it is the
             # other half of the fix, and without it the author revives the target and the
             # dead superseder's own `npx:supersedes` keeps pointing at a live claim.
@@ -360,6 +399,12 @@ def _supersession(nodes: dict[str, Node], cfg: dict) -> list[Violation]:
             # record of a compression rather than a claim on anything, and the node
             # rescuing its orphaned targets must not be refused on its behalf.
             other = next(iter(sorted(_alive_backers(nodes, t) - {n.id})), None)
+            # Two nodes retiring each other stand for nothing: each is inside the other,
+            # so a page that folds the covered layer draws neither and a budget counts
+            # neither. Reported from the smaller id only, or validate prints the same
+            # pair twice, once from each end.
+            if n.id in supersedes(t) and n.id < tid:
+                vio(f"{n.id} and {tid} supersede each other")
             if t.status == "alive" or (t.status == "superseded"
                                        and (other is None or n.status != "alive")):
                 pass

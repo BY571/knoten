@@ -411,6 +411,30 @@ def test_the_payload_says_who_covers_whom(compressed):
     assert by["finding-3"]["rule"] is False and by["finding-3"]["covers"] == []
 
 
+def test_a_rule_over_a_rule_hangs_the_whole_chain(compressed):
+    """Recursive compression: the outer rule retires the inner, the inner keeps its own
+    findings. Reading only alive superseders drew the inner rule's two findings loose on
+    the folded map, beside the rule that covers them."""
+    compressed.node("finding-g", "id: finding-g\ntype: finding\nstatus: superseded\n"
+                                 "created: 2026-01-05\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-1}\n"
+                                 "  - {rel: npx:supersedes, to: finding-2}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# G\n\n## Covers\n- finding-1: a\n- finding-2: b\n")
+    compressed.node("finding-o", "id: finding-o\ntype: finding\nstatus: alive\n"
+                                 "created: 2026-01-06\nlinks:\n"
+                                 "  - {rel: npx:supersedes, to: finding-g}\n"
+                                 "  - {rel: kn:survivedGate, to: gate-h}",
+                    "# O\n\n## Covers\n- finding-g: both of them\n")
+
+    p = viz.payload(compressed.root)
+    by = {n["id"]: n for n in p["nodes"]}
+
+    assert by["finding-g"]["under"] == "finding-o"
+    assert by["finding-1"]["under"] == "finding-g" and by["finding-2"]["under"] == "finding-g"
+    assert not {"finding-1", "finding-2", "finding-g"} & set(p["folded"])
+
+
 def test_the_folded_layout_holds_only_visible_nodes(compressed):
     p = viz.payload(compressed.root)
 

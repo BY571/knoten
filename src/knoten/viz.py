@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from .core import (GATE_TYPE, GraphError, compressible, compressible_types, is_general,
-                   load, section, shape, supersedes)
+                   load, section, shape, supersedes, under)
 from .validate import check, load_config
 
 HERE = Path(__file__).parent
@@ -205,20 +205,6 @@ def layout(nodes: dict) -> dict:
     return {"columns": _columns(nodes), "map": pos}
 
 
-def _under(nodes: dict) -> dict:
-    """Who covers whom: the ALIVE node that supersedes each id, or None. Several alive
-    superseders is a validate violation; the first by id is taken so the page still
-    draws."""
-    under = {}
-    for n in sorted(nodes.values(), key=lambda n: n.id):
-        if n.status != "alive":
-            continue
-        for t in supersedes(n):
-            if t in nodes and t != n.id:
-                under.setdefault(t, n.id)
-    return under
-
-
 def _visible(nodes: dict, under: dict) -> dict:
     """The graph with the covered layer folded away. Its own layout, so a compression
     shrinks the picture; hung positions are derived on the page, never stored."""
@@ -302,9 +288,9 @@ def payload(root: Path) -> dict:
 
     # Who covers whom, and the graph with the covered layer folded away: its own layout,
     # so a compression shrinks the picture on the page that shows it.
-    under = _under(nodes)
-    visible = _visible(nodes, under)
-    fpos, fwalls = _map(_inherited(nodes, visible, under))
+    covered = under(nodes)
+    visible = _visible(nodes, covered)
+    fpos, fwalls = _map(_inherited(nodes, visible, covered))
     # Columns stay the plain visible set, not the inherited one: `_inherited`'s extra
     # links are only for `_map`'s degree count, and feeding them to `_columns` would risk
     # entering `roles()`'s citing/cited sets and flipping a shelf classification.
@@ -354,7 +340,7 @@ def payload(root: Path) -> dict:
                          for t in n.sections],
             "results": n.results, "repro": n.repro, "attachments": n.attachments,
             "columns": columns[n.id], "map": pos[n.id],
-            "rule": is_general(n), "covers": supersedes(n), "under": under.get(n.id),
+            "rule": is_general(n), "covers": supersedes(n), "under": covered.get(n.id),
         } for n in _order(nodes)],
     }
 
