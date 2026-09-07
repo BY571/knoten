@@ -554,12 +554,18 @@ def supersedes(n: Node) -> list[str]:
 
 
 def under(nodes: dict[str, Node]) -> dict[str, str]:
-    """Who covers whom: for every node an ALIVE node retired, the id of that node (the
+    """Who covers whom: for every retired node, the id of the node that retired it (the
     first by id, since several is a `validate` violation and the page must still draw).
-    A self-target is not an edge here: without that guard a node covered itself."""
+
+    A superseder counts while it is alive OR itself superseded: a rule over two rules over
+    four findings leaves the inner rules `superseded`, and reading only alive superseders
+    would call all four findings loose and draw them beside the rule that covers them. A
+    superseder that is dead or retracted covers nothing -- it has stopped standing for
+    what it retired. A self-target is not an edge here: without that guard a node covered
+    itself."""
     claims: dict[str, list[str]] = {}
     for n in nodes.values():
-        if n.status != "alive":
+        if n.status not in ("alive", "superseded"):
             continue
         for t in supersedes(n):
             if t in nodes and t != n.id:
