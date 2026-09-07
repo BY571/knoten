@@ -276,3 +276,18 @@ def test_the_page_script_parses(small, tmp_path):
     r = subprocess.run([node, "--check", str(tmp_path / "page.js")], capture_output=True, text=True)
 
     assert r.returncode == 0, r.stderr
+
+
+def test_the_record_knows_its_file_and_what_it_points_at(graph):
+    graph.rules("name: t\nnode_types: [experiment]\nstatuses: [alive]\nrules: []\n")
+    graph.node("exp-a", "id: exp-a\ntype: experiment\nstatus: alive\nrepro:\n  script: runs/a.py\n"
+                        "attachments: [plot.png]", "# a\n")
+    (graph.root / "runs").mkdir(); (graph.root / "runs" / "a.py").write_text("print(1)\n")
+    graph.attachment("exp-a", "plot.png")
+
+    (n,) = viz.payload(graph.root)["nodes"]
+
+    assert n["path"] == "nodes/exp-a.md"
+    assert n["files"] == [{"path": "runs/a.py", "kind": "script", "exists": True},
+                          {"path": "attachments/exp-a/plot.png", "kind": "attachment", "exists": True}]
+    assert viz.payload(graph.root)["root_path"] == str(graph.root.resolve())
