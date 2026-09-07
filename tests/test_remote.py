@@ -8,10 +8,10 @@ import pytest
 from conftest import commit_node, git, make_key, pub_line
 
 from knoten import remote
-from knoten import contributors as C
+from knoten import identity as C
 from knoten.cli import main
 from knoten.core import GraphError, today
-from knoten.keys import key_dir, public_line
+from knoten.identity import key_dir, public_line
 from knoten.remote import _explain, cred_lookup, cred_path, cred_store, credential_helper
 
 

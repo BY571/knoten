@@ -368,7 +368,7 @@ def test_revoking_an_admin_kills_the_invites_they_issued(reg):
 # ---------------------------------------------------------------- signed invites
 
 from conftest import commit_signed, git, make_key, pub_line
-from knoten import contributors as C
+from knoten import identity as C
 
 
 @pytest.fixture

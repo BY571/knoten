@@ -7,9 +7,9 @@ import pytest
 from conftest import make_key, pub_line
 from knoten import core, contributors
 from knoten.core import GraphError
-from knoten.contributors import (FILE, ROLES, active, admins, check_blob, diff, dump,
+from knoten.identity import (FILE, ROLES, active, admins, check_blob, diff, dump,
                                  invite_blob, keys, load, parse, parse_blob, verify_invite)
-from knoten.keys import INVITE_NS, sign
+from knoten.identity import INVITE_NS, sign
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxYm3v0R3f7pWJ2cQ5lD8Rk9x6ZQ7pMd2eS8rT1uV2w"
 KEY2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHF3ZaMh1uWn5V0oGZ9rT2pQ8cX6yLdN4wK1sB3jR7t"

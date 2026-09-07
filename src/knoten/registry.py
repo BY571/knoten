@@ -21,7 +21,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import contributors as C
+from . import identity as C
 from . import gate
 from .core import (GraphError, ID_RE, MAX_DAYS, MAX_NAME, MAX_PUSH_BYTES, graph_lock,
                    server_git_env, write_atomic)

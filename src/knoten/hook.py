@@ -1,17 +1,12 @@
 """The git pre-commit gate.
 
-`knoten validate` has always printed "commit REJECTED". Nothing rejected a commit —
-git wrote the invalid graph to history without complaint, and the phrase was a bluff.
+A rule that only fires when you remember to ask is a rule that rots. The gate sits in the
+one place you cannot forget to walk through.
 
-A rule that only fires when you remember to ask is the same rule that let the previous
-attempt (`knowledge_graph.jsonl`, still zero bytes) rot. The gate has to sit in the one
-place you cannot forget to walk through.
-
-We ask GIT where its hooks live rather than assuming `.git/hooks`. That assumption is
-wrong in three common cases — `core.hooksPath` (husky, the pre-commit framework, most
-monorepos), worktrees and submodules (where `.git` is a FILE, not a directory) — and
-being wrong here means writing the hook somewhere git never reads, reporting success,
-and silently not gating. Which is precisely the failure this module exists to prevent.
+We ask GIT where its hooks live rather than assuming `.git/hooks`, which is wrong under
+`core.hooksPath` (husky, monorepos) and in worktrees and submodules, where `.git` is a
+FILE. Being wrong there means writing the hook where git never reads it and reporting
+success: the exact failure this module exists to prevent.
 """
 from __future__ import annotations
 
@@ -59,11 +54,9 @@ def _git(root: Path, *args: str, env: dict | None = None) -> str:
 
 
 def hooks_dir(root: Path, env: dict | None = None) -> Path:
-    """Where git ACTUALLY reads hooks from — not where we guess it does.
-
-    `env` is how the server side asks the same question the server-side git will answer:
-    ask it under a different config and you write the hook where nothing runs it.
-    """
+    """Where git ACTUALLY reads hooks from. `env` is how the server side asks the same
+    question the server-side git will answer: ask it under a different config and you
+    write the hook where nothing runs it."""
     p = Path(_git(root, "rev-parse", "--git-path", "hooks", env=env))
     return p if p.is_absolute() else (root / p).resolve()
 
@@ -71,10 +64,7 @@ def hooks_dir(root: Path, env: dict | None = None) -> Path:
 def _write_hook(root: Path, name: str, marker: str, body: str, force: bool,
                 env: dict | None = None) -> Path:
     """Put a hook where git actually reads it, without clobbering one somebody wrote.
-
-    Shared so the two gates cannot drift on the clobber rule, which is the half a reader
-    has to trust rather than check.
-    """
+    Shared, so the two gates cannot drift on the clobber rule."""
     hooks = hooks_dir(root, env)
     hooks.mkdir(parents=True, exist_ok=True)
     hook = hooks / name
@@ -100,12 +90,8 @@ def install(root: Path, force: bool = False) -> Path:
 # --------------------------------------------------------------- the server-side gate
 #
 # The gate above runs in one clone and `--no-verify` walks past it. This one runs on the
-# repo everyone pushes TO, so it cannot be skipped from a laptop.
-#
-# The script itself only proves knoten is on PATH, fail-closed, then execs `knoten gate`
-# (src/knoten/gate.py), which reads the pushed refs from stdin, finds every graph in each
-# pushed tree, unpacks it as regular files only, and runs its rules. That logic moved out
-# of shell because later checks (signatures, the constitution rule) are not shell.
+# repo everyone pushes TO, so it cannot be skipped from a laptop. The script only proves
+# knoten is on PATH, fail-closed, then execs `knoten gate`.
 
 SERVER_MARKER = "# knoten pre-receive gate"
 
@@ -129,21 +115,16 @@ exec knoten gate
 
 
 def install_server(repo: Path, force: bool = False, env: dict | None = None) -> Path:
-    """Install the pre-receive gate into the repo everyone pushes to.
-
-    Takes the repo rather than a graph: a bare repo has no working tree, so there is no
-    `graph.yaml` here to read and no graph path worth recording. The hook finds the
-    graphs in each pushed tree instead.
+    """Install the pre-receive gate into the repo everyone pushes to. Takes the repo,
+    not a graph: a bare repo has no working tree, and the hook finds the graphs in each
+    pushed tree instead.
 
     `env` must be whatever the receive-pack that will ENFORCE this gate runs under, since
-    that is what decides where hooks are read from. `knoten serve` owns the repo and runs
-    receive-pack itself, so `Registry.create` passes `server_git_env()` -- the COMPLETE
-    environment, not a few keys merged over the caller's own os.environ: a stray GIT_DIR
-    or core.hooksPath left in the daemon's environment must not survive into this call
-    and redirect where the gate gets written. `knoten hook --server` passes no env at
-    all: that repo is hosted by nginx or sshd under the operator's own account,
-    receive-pack reads their ~/.gitconfig, and forcing a server env here wrote the gate
-    to repo.git/hooks while git went looking at their core.hooksPath. The gate then
-    failed OPEN, which is the one way for it to be wrong and still report green.
+    that decides where hooks are read from. `knoten serve` runs receive-pack itself, so
+    `Registry.create` passes `server_git_env()`, the COMPLETE environment, or a stray
+    GIT_DIR in the daemon's shell redirects where the gate is written. `knoten hook
+    --server` passes NO env: that repo is served by the operator's own account, whose
+    ~/.gitconfig receive-pack reads, and forcing a server env there wrote the gate to
+    repo.git/hooks while git looked at their core.hooksPath. The gate then failed OPEN.
     """
     return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force, env=env)

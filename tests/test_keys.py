@@ -8,7 +8,7 @@ import pytest
 
 from conftest import make_key, pub_line
 from knoten.core import GraphError
-from knoten.keys import (INVITE_NS, allowed_signers, configure_signing, ensure_key,
+from knoten.identity import (INVITE_NS, allowed_signers, configure_signing, ensure_key,
                          key_dir, public_line, sign, verify)
 
 

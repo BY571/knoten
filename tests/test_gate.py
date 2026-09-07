@@ -189,7 +189,7 @@ def test_git_gives_children_no_access_to_the_hooks_stdin(bare, monkeypatch):
 # ---------------------------------------------------------------- signatures
 
 from conftest import commit_signed, make_key, pub_line
-from knoten import contributors as C
+from knoten import identity as C
 
 
 @pytest.fixture
@@ -512,7 +512,7 @@ def test_a_rewrite_of_accepted_history_is_refused_as_a_non_fast_forward(bare):
 
 # ---------------------------------------------------------------- the constitution
 
-from knoten.keys import INVITE_NS, sign
+from knoten.identity import INVITE_NS, sign
 
 
 def invite_for(admin_priv, graph, name, role):

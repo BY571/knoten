@@ -525,9 +525,9 @@ def test_an_absurd_invite_lifetime_is_a_400_not_a_dropped_connection(hub, tradin
 # ---------------------------------------------------------------- signed invites
 
 from conftest import commit_signed, make_key, pub_line
-from knoten import contributors as C
+from knoten import identity as C
 from knoten.core import GraphError
-from knoten.keys import INVITE_NS, sign
+from knoten.identity import INVITE_NS, sign
 
 
 @pytest.fixture

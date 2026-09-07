@@ -14,11 +14,11 @@ import webbrowser
 from pathlib import Path
 
 from . import attachments, ops, viz
-from . import contributors as C
+from . import identity as C
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, _STOP, find_root, load, node_path, today
 from .hook import install as install_hook, install_server
-from .keys import ensure_key, public_line
+from .identity import ensure_key, public_line
 from .registry import ROLES, Registry
 from .serve import make_server
 from . import gate
@@ -59,12 +59,6 @@ def render_validate(payload: dict) -> None:
     print(f"\n  {len(payload['violations'])} violation(s) — commit REJECTED")
 
 
-def validate(root, as_json=False) -> int:
-    payload = ops.validate(root)
-    _emit(payload, as_json, render_validate)
-    return 0 if payload["valid"] else 1
-
-
 def render_query(payload: dict) -> None:
     print(f'"{payload["query"]}" → {payload["total"]} claim(s)\n')
     # Relevance order, NOT status order: the closest match must be first, because an
@@ -84,12 +78,6 @@ def render_query(payload: dict) -> None:
         # `note` carries the caveat against a false "untested", the one failure knoten
         # exists to prevent. Prose must print it too.
         print(f"\n  {note}")
-
-
-def query(root, term, as_json=False) -> int:
-    payload = ops.query(root, term)
-    _emit(payload, as_json, render_query)
-    return 0
 
 
 def _pairs(pairs, msg):
@@ -133,16 +121,6 @@ def render_index(payload: dict) -> None:
         print(f"\n  {note}")
 
 
-def index(root, tags, status, ntype, where, since, limit, query=None, as_json=False,
-         all=False) -> int:
-    """The whole graph, one line per node: the answer to "have we done anything LIKE
-    this?" that keyword search cannot give."""
-    payload = ops.index(root, query=query, tags=tags, status=status, type=ntype,
-                        where=_where(where), since=since, limit=limit, all=all)
-    _emit(payload, as_json, render_index)
-    return 0
-
-
 def render_gates(payload: dict) -> None:
     for g in payload["gates"]:
         killed, survived = g["killed"], g["survived"]
@@ -155,14 +133,6 @@ def render_gates(payload: dict) -> None:
         print()
     if note := payload.get("note"):
         print(f"  {note}")
-
-
-def gates_cmd(root, as_json=False) -> int:
-    """What every claim in this graph has to survive. Read it before you design the
-    experiment, not after the commit is refused."""
-    payload = ops.gates(root)
-    _emit(payload, as_json, render_gates)
-    return 0
 
 
 BANDS = [("open", "OPEN — started, never settled"),
@@ -199,14 +169,6 @@ def render_frontier(payload: dict) -> None:
         print(f"\n  {note}")
 
 
-def frontier_cmd(root, as_json=False) -> int:
-    """The one screen that answers "what now?". Kept short on purpose — a frontier you
-    have to scroll is a frontier nobody reads."""
-    payload = ops.frontier(root)
-    _emit(payload, as_json, render_frontier)
-    return 0
-
-
 def render_path(payload: dict) -> None:
     p = payload["path"]
     if p is None:
@@ -216,12 +178,6 @@ def render_path(payload: dict) -> None:
     for i, hop in enumerate(p):
         rel = hop.get("via")
         print("  " * i + (f"└─ {rel} → " if rel else "") + hop["node"])
-
-
-def path(root, a, b, as_json=False) -> int:
-    payload = ops.path(root, a, b)
-    _emit(payload, as_json, render_path)
-    return 0
 
 
 def viz_cmd(root, out, show, watch) -> int:
@@ -382,12 +338,29 @@ def render_get(payload: dict) -> None:
             print(f"    {a['path']}  ({sz})")
 
 
-def show(root, nid, as_json=False) -> int:
-    payload = ops.get(root, nid)
+# Every read command: build the payload from `ops`, then print it as JSON or as prose.
+# One table, so a command cannot grow a second renderer or forget the --json contract.
+READ = {
+    "validate": (lambda a, root: ops.validate(root), render_validate),
+    "query":    (lambda a, root: ops.query(root, a.term), render_query),
+    "index":    (lambda a, root: ops.index(root, query=a.query, tags=a.tag, status=a.status,
+                                           type=a.type, where=_where(a.where), since=a.since,
+                                           limit=a.limit, all=a.all), render_index),
+    "frontier": (lambda a, root: ops.frontier(root), render_frontier),
+    "gates":    (lambda a, root: ops.gates(root), render_gates),
+    "path":     (lambda a, root: ops.path(root, a.a, a.b), render_path),
+    "show":     (lambda a, root: ops.get(root, a.node), render_get),
+}
+
+
+def read_cmd(cmd: str, args, root) -> int:
+    build, render = READ[cmd]
+    payload = build(args, root)
     if err := payload.get("error"):
-        return _fail(payload, err, as_json)
-    _emit(payload, as_json, render_get)
-    return 0
+        return _fail(payload, err, args.json)
+    _emit(payload, args.json, render)
+    # `validate` is the one read that decides an exit code: the hook runs it.
+    return 1 if payload.get("valid") is False else 0
 
 
 # ---------------------------------------------------------------- write commands
@@ -454,11 +427,17 @@ def render_commit(payload: dict) -> None:
         render_reward(compressed)
 
 
+def _rejected(res: dict, as_json: bool = False) -> int:
+    """A REJECTED payload from `commit`, printed the one way: `reason` when the candidate
+    never parsed, the violations otherwise."""
+    return _fail(res, res.get("reason") or "; ".join(
+        f"[{v['rule']}] {v['message']}" for v in res.get("violations", [])), as_json)
+
+
 def commit_cmd(root, nid, frontmatter, body, as_json) -> int:
     res = commit(root, nid, _read(frontmatter), _read(body))
     if res["status"] == "REJECTED":
-        return _fail(res, res.get("reason") or "; ".join(
-            f"[{v['rule']}] {v['message']}" for v in res["violations"]), as_json)
+        return _rejected(res, as_json)
     _emit(res, as_json, render_commit)
     return 0
 
@@ -542,8 +521,7 @@ def idea(root, text, source) -> int:
                           "# Own intuition\n\nIdeas that started in a person's head, not in "
                           "something they read. Cited so an idea never comes from nowhere.\n")
             if made["status"] != "COMMITTED":
-                return _fail(made, made.get("reason") or "; ".join(
-                    v["message"] for v in made.get("violations", [])), False)
+                return _rejected(made)
         origins.append(OWN_INTUITION)
     else:
         origins.append(source)
@@ -563,8 +541,7 @@ def idea(root, text, source) -> int:
 
     res = commit(root, nid, fm, body)
     if res["status"] != "COMMITTED":
-        return _fail(res, res.get("reason") or "; ".join(
-            v["message"] for v in res.get("violations", [])), False)
+        return _rejected(res)
     print(f"  + nodes/{nid}.md  (from {', '.join(origins)})" if origins else f"  + nodes/{nid}.md")
     print("  it is `open`, so `knoten frontier` will offer it to whoever looks next.")
     return 0
@@ -802,9 +779,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = _parser().parse_args(argv if argv is not None else sys.argv[1:])
     try:
-        if args.cmd is None or args.cmd == "validate":
-            # No subcommand never parsed a `validate` subparser, so it has no --json.
-            return validate(find_root(), getattr(args, "json", False))
+        if args.cmd is None:
+            # No subcommand parsed no subparser, so `args` has no --json to read.
+            args = _parser().parse_args(["validate"])
         if args.cmd == "init":
             return init(args.name)
 
@@ -842,16 +819,10 @@ def main(argv=None) -> int:
             return 0
 
         root = find_root()
+        if args.cmd in READ:
+            return read_cmd(args.cmd, args, root)
         return {
-            "query":  lambda: query(root, args.term, args.json),
-            "path":   lambda: path(root, args.a, args.b, args.json),
-            "frontier": lambda: frontier_cmd(root, args.json),
-            "gates":  lambda: gates_cmd(root, args.json),
-            "index":  lambda: index(root, tags=args.tag, status=args.status, ntype=args.type,
-                                    where=args.where, since=args.since, limit=args.limit,
-                                    query=args.query, as_json=args.json, all=args.all),
             "new":    lambda: new(root, args.type, args.id, args.status),
-            "show":   lambda: show(root, args.node, args.json),
             "idea":   lambda: idea(root, args.text, args.source),
             "commit": lambda: commit_cmd(root, nid=args.id, frontmatter=args.frontmatter,
                                          body=args.body, as_json=args.json),

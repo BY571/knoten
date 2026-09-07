@@ -21,10 +21,10 @@ from pathlib import Path
 
 import yaml
 
-from . import contributors as C
+from . import identity as C
 from . import ops
 from .core import GraphError, SERVER_GIT_ENV, server_git_env
-from .keys import allowed_signers
+from .identity import allowed_signers
 
 ZERO = re.compile(r"^0+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")

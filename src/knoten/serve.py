@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from . import contributors as C
+from . import identity as C
 from .core import GraphError, MAX_PUSH_BYTES, SERVER_GIT_ENV
 from .registry import Registry
 

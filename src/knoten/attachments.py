@@ -1,7 +1,7 @@
 """Attaching files to a node — the code that killed it, the plot that shows why.
 
-Print-free on purpose. It returns data and the CLI does the printing, so `--json`
-emits exactly what the function produced and nothing writes to stdout behind its back.
+Print-free on purpose: it returns data and the CLI prints, so `--json` emits exactly what
+the function produced and nothing writes to stdout behind its back.
 """
 from __future__ import annotations
 
@@ -35,12 +35,9 @@ def _node_file(root: Path, nid: str) -> Path:
 
 
 def _scalar(name: str) -> str:
-    """Emit a filename as YAML, quoting it unless it round-trips as the identical string.
-
-    Filenames were written raw. `plot #1.png` became the YAML comment `plot` (and then a
-    false missing-attachment violation, with the real file sitting on disk); `run: final
-    .png` became a dict; `123` became an int. All are legal filenames.
-    """
+    """A filename as YAML, quoted unless it round-trips identically. Written raw,
+    `plot #1.png` became the comment `plot`, `run: final.png` a dict and `123` an int.
+    All are legal filenames."""
     try:
         if yaml.load(name, Loader=_Loader) == name:
             return name
@@ -50,16 +47,10 @@ def _scalar(name: str) -> str:
 
 
 def set_list(node_file: Path, names: list[str]) -> None:
-    """Rewrite ONLY the `attachments:` block, line by line.
-
-    We do not re-dump the frontmatter through yaml — that would reformat it and strip the
-    comments a human wrote.
-
-    The items we must drop may be indented OR NOT: `yaml.dump` emits list items at zero
-    indent by default. Requiring leading whitespace orphaned them into the preceding block
-    and left the node unparseable — which takes the whole graph down with it, since load()
-    raises rather than skips.
-    """
+    """Rewrite ONLY the `attachments:` block, line by line: re-dumping the frontmatter
+    through yaml would reformat it and strip the comments a human wrote. The items to drop
+    may be indented or NOT, since `yaml.dump` emits list items at zero indent, and
+    requiring leading whitespace orphaned them and left the node unparseable."""
     text = node_file.read_text(encoding="utf-8")
     read_frontmatter(node_file)          # refuse to touch a node we cannot parse
     m = FM_RE.match(text)
@@ -103,12 +94,8 @@ def _embed(node_file: Path, nid: str, images: list[str]) -> list[str]:
 
 
 def _preflight(files: list[str]) -> list[Path]:
-    """Vet every file BEFORE copying any, so a bad path halfway through the list cannot
-    leave the node half-attached.
-
-    `exists()` is true for a directory, so the old pre-check passed one and copy2 then
-    died mid-way, orphaning the files already copied.
-    """
+    """Vet every file BEFORE copying any, so a bad path halfway through cannot leave the
+    node half-attached. `exists()` is true for a directory, which copy2 then died on."""
     srcs = [Path(f) for f in files]
     for src in srcs:
         if not src.exists():
