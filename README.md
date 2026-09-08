@@ -36,7 +36,7 @@
 <tr>
 <td valign="top"><b>Cards</b>, one column per stage of the loop. A general finding carries <code>covers 2</code>; open it and the two findings it retired hang beneath it, and its record says what each contributed, which gate it survived, and where its file is.</td>
 <td valign="top"><b>Graph</b>, clustered around the busiest nodes. Here the gate is selected: its rule, why it exists, and the nine claims it judged, two of them killed.</td>
-<td valign="top"><b>Metric over time.</b> Each point is a run that recorded <code>return</code>, placed at its date; the dashed arc is a run building on an earlier one, the ring the best so far, the red point a run whose claim died.</td>
+<td valign="top"><b>Metric over time.</b> Each point is a run that recorded <code>return</code>, in the order the runs were made; the ring marks the best so far, the red point a run whose claim died, and hovering a point says what it built on.</td>
 </tr>
 </table>
 
