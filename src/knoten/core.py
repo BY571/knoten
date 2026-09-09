@@ -27,37 +27,6 @@ except ImportError:                           # pragma: no cover
 
 LOCK = ".knoten.lock"
 
-# The ceiling on one push, named once so the server's read bound and the repo's own
-# `receive.maxInputSize` cannot drift apart: a body the HTTP layer accepts and git then
-# refuses is a push that spends the bandwidth before it is told no.
-MAX_PUSH_BYTES = 100 * 1024 * 1024
-
-# What every git the SERVER runs must be told, so the git that INSTALLS the gate and the
-# git that ENFORCES it agree on where hooks live: with `core.hooksPath` in the daemon's
-# ~/.gitconfig they did not, the hook landed where nothing would run it, and a push that
-# breaks the graph returned rc 0. A gate that fails OPEN reports green forever. Dropping
-# global config also drops `init.templateDir`, deliberately: a template directory is one
-# more place a hook can arrive from. Neither `knoten hook` nor `knoten hook --server` may
-# use this -- honouring core.hooksPath is right in a clone, and the second repo is served
-# by somebody else's receive-pack.
-SERVER_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
-                  # A graph directory named "*" once widened `git archive`'s pathspec to
-                  # the whole repo; literal pathspecs make every name a plain path, glob
-                  # metacharacters included.
-                  "GIT_LITERAL_PATHSPECS": "1"}
-
-
-def server_git_env() -> dict:
-    """The environment every server-side git subprocess must run under: the operator's
-    shell, minus every GIT_* variable it might carry, with SERVER_GIT_ENV then reapplied
-    on top. `-C <repo>` is not enough on its own -- an absolute GIT_DIR left in the
-    environment (the operator's shell, a stray export) outranks `-C` and points git at a
-    repo nobody asked for, silently: a `-C` flag was verified to lose that race. Every
-    site that reads a HOSTED repo from outside its own process (gate._git, Registry.create)
-    must build its env from this, never from `{**os.environ, **SERVER_GIT_ENV}` alone."""
-    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | SERVER_GIT_ENV
-
-
 class GraphError(Exception):
     """The graph on disk is malformed. Always name the file."""
 
@@ -110,17 +79,8 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 # An id becomes a filename, so anything else is a path traversal: go through node_path()
 # for EVERY id -> file conversion (`knoten detach ../../x f` once deleted a file outside
 # the graph). `\\Z`, not `$`: `$` lets a trailing newline through, and `"maria\\n"` goes on
-# to be a filename, a directory, a URL segment and a line in the credentials file.
+# to be a filename, a directory, a filename.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
-
-# An invite is a bearer secret. A year is already generous for one. Here rather than in
-# the registry so the client's own bound and the server's cannot drift apart.
-MAX_DAYS = 365
-
-# A name becomes a directory and a URL segment. ID_RE bounds its alphabet, nothing
-# bounded its length: a 300-character name reached mkdir and surfaced NAME_MAX as an
-# opaque OSError after the data directory had already been touched.
-MAX_NAME = 64
 
 # Undated work sorts LAST, with the newest. Empty-string-first put it in slot 0 of the viz
 # layout and pushed every node along, and it would make an undated node the baseline every

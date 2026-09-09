@@ -8,21 +8,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 import time
 import webbrowser
 from pathlib import Path
 
 from . import attachments, ops, viz
-from . import identity as C
 from .commit import commit
 from .core import GraphError, ID_RE, LOCK, _STOP, find_root, load, node_path, today
-from .hook import install as install_hook, install_server
-from .identity import ensure_key, public_line
-from .registry import ROLES, Registry
-from .serve import make_server
-from . import gate
-from . import remote
+from .hook import install as install_hook
 from .validate import _csv, applies, load_config
 
 # Keyed by the uppercase word `ops` puts in `verdict` — not by raw status, which is
@@ -260,104 +255,12 @@ def viz_cmd(root, out, show, watch) -> int:
     return 0
 
 
-# ---------------------------------------------------------------- remote and server
+# ---------------------------------------------------------------- the gate
 
 def hook(root, force) -> int:
     h = install_hook(root, force=force)
     print(f"  ✓ installed {h}")
     print("    `git commit` now runs `knoten validate` and refuses a broken graph.")
-    return 0
-
-
-def server_hook(repo, force) -> int:
-    """The gate for a graph several people push to. Run it ON the server, in the repo
-    they push to: there is no graph there to `find_root`."""
-    h = install_server(Path(repo), force=force)
-    print(f"  ✓ installed {h}")
-    print("    `git push` now runs `knoten validate` on the pushed tree and refuses a")
-    print("    broken graph — for every contributor, including the ones who never ran")
-    print("    `knoten hook` and the ones who used `git commit --no-verify`.")
-    return 0
-
-
-def remote_cmd(root, args) -> int:
-    if args.remote_cmd == "create":
-        url = remote.remote_create(root, args.name, args.on, admin=args.admin,
-                                   owner_secret=args.owner_secret)
-        print(f"  ✓ {url}")
-        print("    invite someone:  knoten invite <name> --role write")
-        return 0
-    signs_as = remote.remote_add(root, args.url, me=args.me)
-    print("  ✓ origin set. `knoten pull` and `knoten push` now use it.")
-    if signs_as:
-        print(f"    this clone signs as {signs_as}")
-    return 0
-
-
-def invite_cmd(root, name, role, days) -> int:
-    code = remote.invite(root, name, role, days)
-    print(f"  ✓ {name} may join as {role} for {days} day(s). Send them this code, once:")
-    print(f"    {code}")
-    return 0
-
-
-def render_invites(payload: dict) -> None:
-    rows = payload["invites"]
-    if not rows:
-        print("  no open invites")
-        return
-    width = max(len(r["name"]) for r in rows)
-    for r in rows:
-        by = f"  (invited by {r['by']})" if r["by"] else ""
-        print(f"  {r['name']:{width}}  {r['role']:6}  expires {r['expires'][:10]}{by}")
-
-
-def invites_cmd(root, as_json=False) -> int:
-    """Who was invited and has not arrived. An invite is a bearer secret sitting on the
-    server, and without this an admin cannot tell a forgotten one from a revoked one."""
-    _emit({"invites": remote.invites(root)}, as_json, render_invites)
-    return 0
-
-
-def revoke_cmd(root, name) -> int:
-    remote.revoke(root, name)
-    print(f"  ✓ {name} is revoked and can no longer connect. What they already pushed stays.")
-    return 0
-
-
-def serve_cmd(data, bind) -> int:
-    """Run on the server. Prints the owner secret the first time a data directory is
-    used: that is the one moment the owner is certainly at the keyboard."""
-    host, _, port_str = bind.rpartition(":")
-    host = host or "127.0.0.1"
-    # Parse and validate the port before any file is written; a crash after the owner
-    # secret exists orphans it, shown to nobody, forever.
-    try:
-        port = int(port_str)
-    except ValueError:
-        raise GraphError(f"--bind wants HOST:PORT with a numeric port, got '{bind}'") from None
-    reg = Registry(Path(data))
-    srv = make_server(reg, host, port)
-    # Only now, after the server socket is open, check and display the owner secret.
-    # The registry says whether it made one, rather than this guessing from the file:
-    # an `owner` file that existed but was empty read as "already shown" and the server
-    # came up with a secret nobody had ever seen.
-    secret, minted = reg.ensure_owner_secret()
-    # flush=True on both: on a server this runs as `nohup knoten serve ... > log &`, and a
-    # block-buffered stdout showed the secret and the address only when the process died.
-    if minted:
-        print(f"  owner secret (shown once, keep it somewhere safe): {secret}", flush=True)
-    if host not in ("127.0.0.1", "localhost"):
-        print("  warning: plain HTTP on a non-local address. Put TLS in front (a reverse "
-              "proxy or a tunnel) before anyone outside this machine connects.",
-              file=sys.stderr)
-    print(f"  serving {reg.data} on http://{host}:{srv.server_address[1]}  (ctrl-c to stop)", flush=True)
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        srv.server_close()
     return 0
 
 
@@ -653,6 +556,8 @@ def init(name) -> int:
     root = Path.cwd() / name
     if root.exists():
         raise GraphError(f"{root} already exists")
+    # Asked before the graph has a .git of its own, which would answer for itself.
+    parent = _git(Path.cwd(), "rev-parse", "--show-toplevel")
     (root / "nodes").mkdir(parents=True)
     (root / "graph.yaml").write_text(_template("graph.yaml", name),
                                      encoding="utf-8")
@@ -661,13 +566,49 @@ def init(name) -> int:
     (root / "nodes" / f"question-{name}.md").write_text(
         _template("question.md", name), encoding="utf-8")
     (root / "nodes" / "gate-example.md").write_text(_template("gate.md"), encoding="utf-8")
-    print(f"created graph '{name}'\n")
+    (root / ".github" / "workflows").mkdir(parents=True)
+    (root / ".github" / "workflows" / "knoten.yml").write_text(_template("knoten.yml"),
+                                                                 encoding="utf-8")
+    # The graph is its own repository, whatever it sits inside: shared on its own, with
+    # its own history, and never a merge, because `git pull` here rebases.
+    if _git(root, "init", "-q") is None:
+        raise GraphError("git is not installed; install it and run `git init` in the graph")
+    # force: a repo made one line ago holds nothing the user wrote, only what a global
+    # init.templateDir may have dropped in, and refusing here would strand a half-made graph.
+    install_hook(root, force=True)
+    print(f"created graph '{name}', its own git repository\n")
     print(f"  {name}/nodes/question-{name}.md  <- start here: what this graph answers")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
-    print(f"  {name}/nodes/       <- one markdown file per question / source / idea / claim\n")
-    print(f"  next:  cd {name} && git init && knoten hook")
-    print("         (the hook makes `git commit` refuse a graph that breaks its own rules)")
+    print(f"  {name}/nodes/       <- one markdown file per question / source / idea / claim")
+    if parent is not None:
+        # A graph inside a project: the project ignores it, so the graph can be shared
+        # without the project's code, and the project pushed without the graph.
+        ignore = Path(parent) / ".gitignore"
+        entry = f"{root.resolve().relative_to(Path(parent).resolve()).as_posix()}/"
+        lines = ignore.read_text(encoding="utf-8").splitlines() if ignore.exists() else []
+        if entry not in lines:
+            ignore.write_text("\n".join(lines + [entry]) + "\n", encoding="utf-8")
+        print(f"  {ignore}   <- now lists {entry}: the project's repo does not carry the graph")
+    _git(root, "add", "-A")
+    if (why := _git(root, "commit", "-qm", f"{name}: a new graph", stderr=True)) is not None:
+        print(f"\n  git could not commit the graph: {why}\n  fix that and run `git commit` in {name}/")
+    print(f"\n  share it:   gh repo create <you>/{name} --private --source {name} --push")
+    print(f"  join it:    git clone <url> && cd {name} && knoten frontier")
+    print("  each session:  git pull   (one branch; your commits go on top, nothing merges)")
     return 0
+
+
+def _git(cwd: Path, *args: str, stderr: bool = False) -> str | None:
+    """git's stdout, or None when git refused or is missing: `init` asks questions a
+    missing git answers with "no", not with a traceback. With `stderr`, the reverse:
+    the last line of git's complaint when it refused, None when it succeeded."""
+    try:
+        r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    except FileNotFoundError:
+        return "git is not installed" if stderr else None
+    if stderr:
+        return None if r.returncode == 0 else (r.stderr.strip().splitlines() or ["refused"])[-1]
+    return r.stdout.strip() if r.returncode == 0 else None
 
 
 # ---------------------------------------------------------------- entry point
@@ -732,60 +673,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="redraw when the graph changes and reload the page (default 2s)")
 
     s = sub.add_parser("hook", help="install the git gate that refuses a broken graph")
-    s.add_argument("--server", nargs="?", const=".", metavar="REPO",
-                   help="install the pre-receive gate in the repo everyone pushes to "
-                        "(run this ON the server, inside the bare repo) instead of the "
-                        "pre-commit gate in this clone")
     s.add_argument("--force", action="store_true",
                    help="overwrite a hook knoten did not write")
-
-    s = sub.add_parser("serve", help="host remote graphs (run this on the server)")
-    s.add_argument("--data", required=True, metavar="DIR", help="where graphs and tokens live")
-    s.add_argument("--bind", default="127.0.0.1:8899", metavar="HOST:PORT")
-
-    # git runs this; nobody types it. `!knoten credential` is set in every clone's config.
-    s = sub.add_parser("credential", help=argparse.SUPPRESS)
-    s.add_argument("action", nargs="?")
-
-    # git runs this from the pre-receive hook; nobody types it.
-    sub.add_parser("gate", help=argparse.SUPPRESS)
-
-    s = sub.add_parser("key", help="your signing key (made on first use)")
-    s.add_argument("name", nargs="?", help="who you sign as (default: git user.name)")
-
-    s = sub.add_parser("remote", help="connect this graph to a knoten server")
-    rs = s.add_subparsers(dest="remote_cmd", required=True)
-    c = rs.add_parser("create", help="create this graph on a server and push it")
-    c.add_argument("name")
-    c.add_argument("--on", required=True, metavar="URL", help="the server, e.g. https://graphs.example")
-    c.add_argument("--as", dest="admin", metavar="NAME", help="your contributor name (default: git user.name)")
-    c.add_argument("--owner-secret",
-                   help="the server's owner secret, as a last resort: argv is visible to "
-                        "every other process on the machine. Prefer KNOTEN_OWNER_SECRET in "
-                        "the environment, or let knoten prompt for it.")
-    a = rs.add_parser("add", help="point this clone at an existing remote graph")
-    a.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
-    a.add_argument("--as", dest="me", metavar="NAME",
-                   help="sign as this contributor (default: the stored credential's name)")
-
-    sub.add_parser("push", help="push this graph's commits to its remote, through the gate")
-    sub.add_parser("pull", help="bring down what collaborators pushed; your own commits go on top")
-
-    s = sub.add_parser("invite", help="admin: let someone in (prints a one-time code)")
-    s.add_argument("name", help="their contributor name, kebab-case")
-    s.add_argument("--role", default="write", choices=ROLES)
-    s.add_argument("--expires", type=int, default=7, metavar="DAYS")
-
-    s = sub.add_parser("invites", help="admin: list the invites nobody has redeemed yet")
-    s.add_argument("--json", action="store_true", help="emit the raw payload")
-
-    s = sub.add_parser("join", help="redeem an invite and clone the graph")
-    s.add_argument("url", help="the graph's URL, e.g. https://graphs.example/trading")
-    s.add_argument("--invite", required=True, metavar="CODE")
-    s.add_argument("--dest", metavar="DIR", help="where to clone (default: the graph's name)")
-
-    s = sub.add_parser("revoke", help="admin: remove a contributor's access")
-    s.add_argument("name")
 
     s = sub.add_parser("show", help="the node, its edges and its attachments")
     s.add_argument("node")
@@ -839,41 +728,6 @@ def main(argv=None) -> int:
         if args.cmd == "init":
             return init(args.name)
 
-        # Both bypass find_root(): `init` has no graph yet, and a bare repo never has one.
-        if args.cmd == "hook" and args.server is not None:
-            return server_hook(args.server, args.force)
-
-        if args.cmd == "serve":
-            return serve_cmd(args.data, args.bind)
-
-        if args.cmd == "credential":
-            if args.action == "get":
-                sys.stdout.write(remote.credential_helper(sys.stdin.read()))
-            return 0           # store/erase: git manages nothing here; knoten does
-
-        if args.cmd == "gate":
-            return gate.main()
-
-        if args.cmd == "key":
-            name = args.name or remote.default_signing_name()
-            priv = ensure_key(name)
-            print(f"  {public_line(priv)}")
-            print(f"    signs as {name}; private half at {priv}. Never share that file.")
-            return 0
-
-        if args.cmd == "join":
-            clone, name, role, signed = remote.join(args.url, args.invite, args.dest)
-            print(f"  ✓ joined as {name} ({role}), cloned to {clone}/")
-            if signed:
-                print(f"    a signing key was made for {name}; this clone signs its own commits")
-            elif role == "read":
-                print("    read access: this clone can pull. Readers are not listed in "
-                      f"{C.FILE} and hold no signing key.")
-            # The graph may sit in a subdirectory of the clone; `cd <clone>` then finds no graph.
-            dirs = gate.graph_dirs("HEAD", repo=Path(clone))
-            print(f"    cd {Path(clone) / dirs[0] if dirs and dirs[0] else clone} && knoten frontier")
-            return 0
-
         root = find_root()
         if args.cmd in READ:
             return read_cmd(args.cmd, args, root)
@@ -891,12 +745,6 @@ def main(argv=None) -> int:
             "hook":   lambda: hook(root, args.force),
             "attach": lambda: attach(root, args.node, args.files),
             "detach": lambda: detach(root, args.node, args.file),
-            "remote": lambda: remote_cmd(root, args),
-            "push":   lambda: remote.push(root),
-            "pull":   lambda: remote.pull(root),
-            "invite": lambda: invite_cmd(root, args.name, args.role, args.expires),
-            "invites": lambda: invites_cmd(root, args.json),
-            "revoke": lambda: revoke_cmd(root, args.name),
         }[args.cmd]()
     except (GraphError, OSError) as e:
         # OSError: a typo'd --frontmatter/--body/--append path is ordinary user error.

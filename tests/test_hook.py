@@ -83,3 +83,11 @@ def test_cli_exposes_hook_install(repo, monkeypatch):
     monkeypatch.chdir(repo.root)
     assert main(["hook"]) == 0
     assert (repo.root / ".git" / "hooks" / "pre-commit").exists()
+
+
+def test_the_hook_brings_the_pull_settings_a_clone_starts_without(repo):
+    """`git pull` must rebase on every clone, not only where `init` ran."""
+    from knoten.hook import install
+    install(repo.root)
+    assert git("config", "pull.rebase", cwd=repo.root).stdout.strip() == "true"
+    assert git("config", "rebase.autoStash", cwd=repo.root).stdout.strip() == "true"
