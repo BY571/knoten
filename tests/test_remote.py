@@ -436,3 +436,53 @@ def test_revoke_refuses_when_this_clone_cannot_sign(hub, shared_signed, capsys, 
     err = capsys.readouterr().err
     assert "no signing key configured" in err
     assert "knoten key seb" in err
+
+
+# ---------------------------------------------------------------- the first walk through sharing
+# Each of these was found by sharing a real graph the way the README says to.
+
+def test_remote_create_refuses_to_replace_an_origin_that_is_not_the_server(hub, local_graph, monkeypatch, capsys):
+    """A graph inside a project repo: `remote create` would have swapped the project's
+    GitHub origin for the graph server and pushed the whole project through the gate."""
+    git("remote", "add", "origin", "git@github.com:someone/project.git", cwd=local_graph)
+    monkeypatch.chdir(local_graph)
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 1
+    err = capsys.readouterr().err
+    assert "git@github.com:someone/project.git" in err and "its own repository" in err
+    assert git("remote", "get-url", "origin", cwd=local_graph).stdout.strip() == "git@github.com:someone/project.git"
+    assert git("log", "-1", "--format=%s", cwd=local_graph).stdout.strip() == "seed"   # nothing bootstrapped
+    assert not (local_graph / C.FILE).exists()
+
+
+def test_join_points_at_the_graph_not_the_clone_in_a_monorepo(hub, nested_local_graph, tmp_path, monkeypatch, capsys):
+    """`cd trading && knoten frontier` found no graph.yaml; the graph is at trading/g."""
+    monkeypatch.chdir(nested_local_graph)
+    assert main(["remote", "create", "trading", "--on", hub.url, "--as", "seb",
+                 "--owner-secret", hub.secret]) == 0
+    assert main(["invite", "maria", "--role", "write"]) == 0
+    code = capsys.readouterr().out.strip().split()[-1]
+    monkeypatch.chdir(tmp_path)
+    assert main(["join", f"{hub.url}/trading", "--invite", code]) == 0
+    assert "cd trading/g && knoten frontier" in capsys.readouterr().out
+
+
+def test_serve_shows_the_secret_even_when_its_output_is_a_file(tmp_path):
+    """`nohup knoten serve --data d > serve.log &` is how it runs on a server. With stdout
+    block-buffered the secret and the address reached the log only at shutdown."""
+    import subprocess, sys, time
+    log = tmp_path / "serve.log"
+    with log.open("w") as out:
+        p = subprocess.Popen([sys.executable, "-c", "import sys; from knoten.cli import main; sys.exit(main(sys.argv[1:]))",
+                              "serve", "--data", str(tmp_path / "d"), "--bind", "127.0.0.1:0"],
+                             stdout=out, stderr=subprocess.STDOUT)
+        try:
+            for _ in range(50):
+                time.sleep(0.1)
+                if "serving" in log.read_text(encoding="utf-8"):
+                    break
+        finally:
+            p.terminate(); p.wait(timeout=10)
+    text = log.read_text(encoding="utf-8")
+    secret = (tmp_path / "d" / "owner").read_text(encoding="utf-8").strip()
+    assert secret in text and "serving" in text, text

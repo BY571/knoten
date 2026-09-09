@@ -286,6 +286,13 @@ def remote_create(root: Path, name: str, on: str, admin: str | None = None,
                   owner_secret: str | None = None) -> str:
     repo = _toplevel(root)
     on = on.rstrip("/")
+    # A graph inside a project repo: wiring origin here would swap the project's own
+    # remote for the graph server and push the whole project through the gate.
+    origin = _git(repo, "remote", "get-url", "origin").stdout.strip()
+    if origin and not origin.startswith(on + "/"):
+        raise GraphError(f"this repository's origin is {origin}; a hosted graph is its own "
+                         f"repository. Copy the graph folder somewhere on its own, `git init` "
+                         f"and commit it there, and run `knoten remote create` in that copy")
     u = urlsplit(on)
     # Not `<scheme>://<host>`: that is the shape git asks for when useHttpPath is off, and
     # the credential helper would then hand the owner secret to a plain `git fetch`.

@@ -343,13 +343,15 @@ def serve_cmd(data, bind) -> int:
     # an `owner` file that existed but was empty read as "already shown" and the server
     # came up with a secret nobody had ever seen.
     secret, minted = reg.ensure_owner_secret()
+    # flush=True on both: on a server this runs as `nohup knoten serve ... > log &`, and a
+    # block-buffered stdout showed the secret and the address only when the process died.
     if minted:
-        print(f"  owner secret (shown once, keep it somewhere safe): {secret}")
+        print(f"  owner secret (shown once, keep it somewhere safe): {secret}", flush=True)
     if host not in ("127.0.0.1", "localhost"):
         print("  warning: plain HTTP on a non-local address. Put TLS in front (a reverse "
               "proxy or a tunnel) before anyone outside this machine connects.",
               file=sys.stderr)
-    print(f"  serving {reg.data} on http://{host}:{srv.server_address[1]}  (ctrl-c to stop)")
+    print(f"  serving {reg.data} on http://{host}:{srv.server_address[1]}  (ctrl-c to stop)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -867,7 +869,9 @@ def main(argv=None) -> int:
             elif role == "read":
                 print("    read access: this clone can pull. Readers are not listed in "
                       f"{C.FILE} and hold no signing key.")
-            print(f"    cd {clone} && knoten frontier")
+            # The graph may sit in a subdirectory of the clone; `cd <clone>` then finds no graph.
+            dirs = gate.graph_dirs("HEAD", repo=Path(clone))
+            print(f"    cd {Path(clone) / dirs[0] if dirs and dirs[0] else clone} && knoten frontier")
             return 0
 
         root = find_root()

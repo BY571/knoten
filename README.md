@@ -205,6 +205,8 @@ bought:
 
 A remote is a `knoten serve` process on any machine you reach over HTTPS. Who may write
 is written in the graph itself (`contributors.yaml`, signed commits), not on the server.
+A hosted graph is its own repository: a graph that lives inside a project repo is copied
+out and given its own `git init` first, so the project's remote stays what it was.
 
 ```bash
 knoten serve --data ~/knoten-remotes                 # on a box behind TLS; prints the owner secret once
