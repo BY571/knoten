@@ -573,9 +573,9 @@ def init(name) -> int:
     # its own history, and never a merge, because `git pull` here rebases.
     if _git(root, "init", "-q") is None:
         raise GraphError("git is not installed; install it and run `git init` in the graph")
-    _git(root, "config", "pull.rebase", "true")
-    _git(root, "config", "rebase.autoStash", "true")      # a half-written node does not block a pull
-    install_hook(root)
+    # force: a repo made one line ago holds nothing the user wrote, only what a global
+    # init.templateDir may have dropped in, and refusing here would strand a half-made graph.
+    install_hook(root, force=True)
     print(f"created graph '{name}', its own git repository\n")
     print(f"  {name}/nodes/question-{name}.md  <- start here: what this graph answers")
     print(f"  {name}/graph.yaml   <- edit the rules for THIS topic")
@@ -589,22 +589,25 @@ def init(name) -> int:
         if entry not in lines:
             ignore.write_text("\n".join(lines + [entry]) + "\n", encoding="utf-8")
         print(f"  {ignore}   <- now lists {entry}: the project's repo does not carry the graph")
-    if _git(root, "add", "-A") is None or _git(root, "commit", "-qm", f"{name}: a new graph") is None:
-        print(f"\n  git could not commit the graph (set user.name and user.email); "
-              f"run `git commit` in {name}/ yourself")
+    _git(root, "add", "-A")
+    if (why := _git(root, "commit", "-qm", f"{name}: a new graph", stderr=True)) is not None:
+        print(f"\n  git could not commit the graph: {why}\n  fix that and run `git commit` in {name}/")
     print(f"\n  share it:   gh repo create <you>/{name} --private --source {name} --push")
     print(f"  join it:    git clone <url> && cd {name} && knoten frontier")
     print("  each session:  git pull   (one branch; your commits go on top, nothing merges)")
     return 0
 
 
-def _git(cwd: Path, *args: str) -> str | None:
+def _git(cwd: Path, *args: str, stderr: bool = False) -> str | None:
     """git's stdout, or None when git refused or is missing: `init` asks questions a
-    missing git answers with "no", not with a traceback."""
+    missing git answers with "no", not with a traceback. With `stderr`, the reverse:
+    the last line of git's complaint when it refused, None when it succeeded."""
     try:
         r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
     except FileNotFoundError:
-        return None
+        return "git is not installed" if stderr else None
+    if stderr:
+        return None if r.returncode == 0 else (r.stderr.strip().splitlines() or ["refused"])[-1]
     return r.stdout.strip() if r.returncode == 0 else None
 
 

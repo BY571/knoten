@@ -79,7 +79,7 @@ FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
 # An id becomes a filename, so anything else is a path traversal: go through node_path()
 # for EVERY id -> file conversion (`knoten detach ../../x f` once deleted a file outside
 # the graph). `\\Z`, not `$`: `$` lets a trailing newline through, and `"maria\\n"` goes on
-# to be a filename, a directory, a URL segment and a line in the credentials file.
+# to be a filename, a directory, a filename.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
 
 # Undated work sorts LAST, with the newest. Empty-string-first put it in slot 0 of the viz

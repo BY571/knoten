@@ -89,9 +89,8 @@ def compressible_graph(graph, n=2, gates=2, tag=None, start=1, through=None):
 
 
 GIT_ISOLATION = {
-    # The developer's own git config must not reach these tests: a global credential
-    # helper would answer the server's 401 with cached credentials and pass a test that
-    # should fail, and a global signing setup would make commits in fixtures fail.
+    # The developer's own git config must not reach these tests: a global signing setup
+    # would make commits in fixtures fail, and a global hooks path would hide the hook.
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_TERMINAL_PROMPT": "0",

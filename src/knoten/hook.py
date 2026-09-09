@@ -70,7 +70,13 @@ def _write_hook(root: Path, name: str, marker: str, body: str, force: bool) -> P
 
 
 def install(root: Path, force: bool = False) -> Path:
+    """The gate, and the two settings that keep a shared graph one line of history:
+    `git pull` rebases (never a merge commit) and a half-written node on disk does not
+    block it. Set here, not only by `init`, because a clone starts with neither and
+    `knoten hook` is the one command every clone runs."""
     repo = Path(_git(root, "rev-parse", "--show-toplevel"))
     graph = root.resolve().relative_to(repo.resolve())
+    _git(root, "config", "pull.rebase", "true")
+    _git(root, "config", "rebase.autoStash", "true")
     return _write_hook(root, "pre-commit", MARKER,
                        HOOK.format(graph=graph.as_posix() or "."), force)
