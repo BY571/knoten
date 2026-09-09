@@ -4,8 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from knoten import ops
-from knoten.cli import _parser, main
+from knoten.cli import main
 from knoten.core import load
 from knoten.validate import check
 
@@ -183,7 +182,7 @@ def test_the_question_comes_before_everything_else(tmp_path, monkeypatch):
     (root / "nodes" / "idea-a.md").write_text(
         "---\nid: idea-a\ntype: idea\nstatus: open\nlinks:\n"
         "  - {rel: prov:wasDerivedFrom, to: source-a-paper}\n---\n\n# x\n", encoding="utf-8")
-    cols, _, _ = viz.roles(load(root))
+    cols, _ = viz.roles(load(root))
     assert cols[0] == "question"
     assert cols.index("source") < cols.index("idea")
 

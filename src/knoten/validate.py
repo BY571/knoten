@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import (GATE_TYPE, GENERATED, GOALS, ID_RE, INVERSE, SUPERSEDES, GraphError,
+from .core import (GATE_TYPE, GENERATED, GOALS, ID_RE, INVERSE, GraphError,
                    Node, _csv, _yaml, compressible_types, question_of, section,
                    supersedes)
 

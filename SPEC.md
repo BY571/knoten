@@ -401,7 +401,7 @@ body the day a graph outgrows a tag-filtered index, which the 1k-5k node case do
 | **1** | `knoten` CLI (`init/new/validate/query/index/frontier/gates/path/show/attach`) + rule engine | ✅ done |
 | **2** | **Tool-protocol server** | ✅ done, later demoted to a fallback, then removed (§8) |
 | **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind every read, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
-| 3 | Static-site graph viewer → GitHub Pages | free hosting |
+| 3 | `knoten viz`: the graph as one HTML file, cards, map and metric | ✅ done |
 | 4 | **Remote graphs** | ✅ a graph is its own git repository, shared on GitHub (§12) |
 
 Phase 0 **validated the schema against real content**, including retractions, structural

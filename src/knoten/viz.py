@@ -59,7 +59,7 @@ def _sunflower(k: int) -> tuple:
 
 
 def roles(nodes: dict) -> tuple:
-    """Which types are gates, which are shelves, and what order the rest go in. Derived
+    """Which types are gates, and what order the columns go in. Derived
     from what the edges DO: a type cited via a gate relation is a gate and goes at the
     end, a type only ever cited and never citing is a shelf and goes at the start, and
     gate is tested first since a gate is nearly always cited-and-never-citing. A function
@@ -86,7 +86,7 @@ def roles(nodes: dict) -> tuple:
                + [t for t in rest if t in shelves]
                + [t for t in rest if t not in shelves]
                + gates)
-    return ordered, set(gates), set(shelves)
+    return ordered, set(gates)
 
 
 def _columns(nodes: dict, basis: tuple | None = None) -> dict:
@@ -96,7 +96,7 @@ def _columns(nodes: dict, basis: tuple | None = None) -> dict:
     `basis`, when given, is `(cols, gates)` from a prior `roles()` call. The folded view
     passes the full view's, or a covered type with every member hidden would vanish from
     the smaller set's own `roles()` and shift every column after it."""
-    cols, gates = basis if basis is not None else roles(nodes)[:2]
+    cols, gates = basis if basis is not None else roles(nodes)
     at = {c: 0.0 for c in cols}
     pos = {}
     for n in _order(nodes):
@@ -251,7 +251,7 @@ def payload(root: Path) -> dict:
     is needed on either side of the wire."""
     nodes = load(root)
     cfg = load_config(root)
-    cols, gates, shelves = roles(nodes)
+    cols, gates = roles(nodes)
     gates &= set(cols)
     pos, walls = _map(nodes)
     columns = _columns(nodes)
@@ -276,7 +276,6 @@ def payload(root: Path) -> dict:
         "count": len(nodes),
         "columns": cols,
         "gate_types": sorted(gates),
-        "shelf_types": sorted(shelves),
         "walls": walls,
         "violations": broken,
         "folded": {nid: {"columns": fcols[nid], "map": fpos[nid]} for nid in visible},

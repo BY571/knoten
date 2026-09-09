@@ -3,7 +3,6 @@ import pytest
 
 from conftest import compressible_graph
 
-from knoten import ops
 from knoten.core import frontier, load
 
 DEAD_WITH_OFFER = """\

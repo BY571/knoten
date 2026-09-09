@@ -1,8 +1,7 @@
 """Parsing."""
 import pytest
 
-from knoten.core import (GraphError, backlink, compressible_types, is_general, load,
-                         question_of, supersedes)
+from knoten.core import GraphError, backlink, is_general, load, question_of, supersedes
 
 FM = """\
 id: hyp-x

@@ -1,10 +1,9 @@
 """One HTML file you can open from a plane."""
-import json
 import re
 
 import pytest
 
-from knoten import ops, viz
+from knoten import viz
 from knoten.cli import main
 from knoten.core import load
 

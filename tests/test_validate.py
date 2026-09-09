@@ -2,8 +2,7 @@
 import pytest
 from conftest import compressible_graph
 
-from knoten.commit import commit
-from knoten.core import GraphError, load, today
+from knoten.core import GraphError, load
 from knoten.validate import check, load_config, load_rules
 
 ALIVE_NO_GATE = "id: hyp-x\ntype: hypothesis\nstatus: alive"
