@@ -6,9 +6,9 @@
   <b>A research graph that remembers what didn't work.</b>
 </p>
 
-- **One shared graph for a team.** Host it with `knoten serve`, invite people with read or
-  write rights, and every push is checked against the graph's own rules and a signed
-  identity that lives in the graph, not on the server.
+- **One shared graph for a team.** A graph is its own git repository, on GitHub or
+  wherever you keep repositories. Push a node and everyone who pulls has it; one branch,
+  nothing to merge, and every clone refuses a node that breaks the graph's rules.
 - **Dead ends are the asset.** A dead hypothesis carries why it died, what would bring it
   back, and the script that killed it. Nothing is deleted; a correction is a new node.
 - **Rules are data.** Your `graph.yaml` says what a claim must carry and what it must
@@ -22,7 +22,7 @@
 - **A visualizer you can hand to anyone.** `knoten viz` writes one HTML file: the graph as
   cards, as a map, and as your metric over time, with every record one click away.
 - **Zero dependencies.** Markdown files in git and PyYAML. No database, no build step, no
-  server until you share.
+  server, ever.
 
 <details>
 <summary><b>Visualizer</b>: the same graph as cards, as a map, and as a metric over time (click a picture to enlarge)</summary>
@@ -203,26 +203,27 @@ bought:
 <details>
 <summary><b>A shared graph</b></summary>
 
-A remote is a `knoten serve` process on any machine you reach over HTTPS. Who may write
-is written in the graph itself (`contributors.yaml`, signed commits), not on the server.
-A hosted graph is its own repository: a graph that lives inside a project repo is copied
-out and given its own `git init` first, so the project's remote stays what it was.
+`knoten init` makes the graph its own git repository, whatever it sits inside: a project
+repo that holds the graph folder ignores it, so the knowledge is shared without the code
+and the code is pushed without the knowledge. Sharing it is one line:
 
 ```bash
-knoten serve --data ~/knoten-remotes                 # on a box behind TLS; prints the owner secret once
-knoten remote create trading --on https://graphs.example --as seb
-knoten invite maria --role write                     # a one-time code; send it to her
-
-knoten join https://graphs.example/trading --invite 7f3a9c...   # maria, once
-knoten pull                                          # every session: what arrived
-knoten commit ...; git add -A && git commit -m "hyp-14: ..."; knoten push
-knoten revoke maria                                  # seb, whenever
+gh repo create my-org/my-topic --private --source my-topic --push   # once
 ```
 
-`knoten commit` files a node; git commits it; `knoten push` sends it through the gate,
-which runs the graph's rules and checks the signature for everyone. `knoten pull`
-replays your commits on top of what arrived; a hosted graph is one line of history. A
-revoked person keeps their clone; only their token and future signatures stop working.
+Collaborators are the repository's collaborators, on GitHub. Each of them:
+
+```bash
+git clone git@github.com:my-org/my-topic && cd my-topic && knoten hook
+git pull                                              # every session: what arrived
+knoten commit ...; git add -A && git commit -m "hyp-14: ..."; git push
+```
+
+`git pull` rebases here, so your commits go on top of what arrived and there is never a
+merge to do; a new node is a new file, so two people filing nodes never conflict. The
+gate runs on every clone before a commit, and the graph carries a GitHub Actions workflow
+that runs `knoten validate` on every push, so a broken graph shows up on the commit for
+everyone.
 
 </details>
 
@@ -234,5 +235,4 @@ says how to write each kind of node, and where to look when there are no ideas l
 climbing 2 to 15 over five experiments); [`examples/llm-research/`](examples/llm-research)
 a second one; [SPEC.md](SPEC.md) the design.
 
-MIT. One dependency: PyYAML. No framework, no database, no build step, and no server until
-you share a graph.
+MIT. One dependency: PyYAML. No framework, no database, no build step, and no server.

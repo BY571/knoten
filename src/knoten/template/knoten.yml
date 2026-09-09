@@ -1,0 +1,15 @@
+# Runs this graph's own rules on every push and shows the verdict on the commit. GitHub
+# cannot refuse a push for a broken graph; the gate on each clone does that before the
+# commit, and this is the check everyone else sees.
+name: knoten
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install git+https://github.com/BY571/knoten
+      - run: knoten validate

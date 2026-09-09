@@ -90,7 +90,7 @@ reversed. A correction is a NEW node, never an edit.
 
 ## Before you work
 
-If the graph has a remote, `knoten pull` FIRST. Every read below answers from the files
+If the graph has a remote, `git pull` FIRST. Every read below answers from the files
 on disk, so a stale clone reports work a collaborator settled days ago as still open:
 the exact failure this graph exists to prevent, arriving through the back door.
 
@@ -120,23 +120,20 @@ graph that declares no `metrics:` prints one line saying so and costs you nothin
    --append <file> --field cause=<value>` instead if you opened the node earlier.
 6. `knoten attach <id> <files...>`: the script that ran it and the plot that shows it. A
    claim nobody can re-run is a claim nobody trusts in six months. With a remote, git
-   commit and `knoten push` now, not at the end of the session.
+   commit and `git push` now, not at the end of the session.
 
 ## In a shared graph
 
-A graph with a remote is one line of history that several people and their agents push
-to. Three things change, and nothing else does:
+A graph with a remote is one branch that several people and their agents push to. Three
+things change, and nothing else does:
 
-- `knoten pull` before step 1, every session. Your own unpushed commits are replayed on
-  top of what arrived; there is never a merge commit, because the server refuses one.
+- `git pull` before step 1, every session. It rebases: your own unpushed commits are
+  replayed on top of what arrived, and there is never a merge commit.
 - `knoten commit` writes a node to disk and git has not seen it. Filing is finished when
-  you run `git add -A && git commit -m "<id>: what was found"`; the clone signs the commit
-  for you, and `knoten push` refuses while anything is uncommitted.
-- `knoten push` after each filed node. Three refusals to know: `moved on since your last
-  pull` means somebody was faster, so pull and push again; a rule violation is step 5's
-  refusal applied on the server for everyone, so fix the node and push again; `not
-  signed` means this clone was never set up by `knoten join`, `knoten remote create` or
-  `knoten remote add`, so stop and say so rather than working around it.
+  you run `git add -A && git commit -m "<id>: what was found"`; the pre-commit gate runs
+  `knoten validate` and refuses a broken graph.
+- `git push` after each filed node. If it is refused because somebody was faster, `git
+  pull` and push again. If the gate refuses the commit, fix the node; do not bypass it.
 
 Never edit a node somebody else filed, not even to fix it: supersede or retract it with a
 new node. Two people editing one file is the only way a pull ends in a conflict here.

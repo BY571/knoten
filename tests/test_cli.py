@@ -267,3 +267,41 @@ def test_the_rl_example_validates_and_tracks_its_return(monkeypatch, capsys):
     assert main(["metric", "return"]) == 0
     out = capsys.readouterr().out
     assert "best 15.4" in out and "builds on exp-reward-scale" in out
+
+
+# ---------------------------------------------------------------- a graph is its own repository
+
+def _git(cwd, *args):
+    import subprocess
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+
+
+def test_init_makes_the_graph_its_own_repository_with_the_gate_and_the_check(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "t"); monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@t.t")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "t"); monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@t.t")
+    assert main(["init", "my-topic"]) == 0
+    g = tmp_path / "my-topic"
+    assert _git(g, "rev-parse", "--show-toplevel").stdout.strip() == str(g.resolve())
+    assert _git(g, "config", "pull.rebase").stdout.strip() == "true"
+    assert _git(g, "config", "rebase.autoStash").stdout.strip() == "true"
+    assert _git(g, "log", "--oneline").stdout.count("\n") == 1          # the first commit, made
+    assert _git(g, "status", "--porcelain").stdout == ""                 # and it took everything
+    hooks = Path(_git(g, "rev-parse", "--git-path", "hooks").stdout.strip())
+    assert "knoten validate" in (g / hooks / "pre-commit").read_text(encoding="utf-8")
+    workflow = (g / ".github" / "workflows" / "knoten.yml").read_text(encoding="utf-8")
+    assert "knoten validate" in workflow and "on: [push" in workflow
+    out = capsys.readouterr().out
+    assert "gh repo create" in out and "git pull" in out
+
+
+def test_init_inside_a_project_keeps_the_graph_out_of_the_project(tmp_path, monkeypatch):
+    """The project's repo ignores the graph folder: the knowledge is shared on its own."""
+    project = tmp_path / "project"; project.mkdir()
+    assert _git(project, "init", "-q").returncode == 0
+    (project / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+    assert main(["init", "research"]) == 0
+    assert (project / ".gitignore").read_text(encoding="utf-8") == "*.pyc\nresearch/\n"
+    assert _git(project / "research", "rev-parse", "--show-toplevel").stdout.strip() == str((project / "research").resolve())
+    assert "research" not in _git(project, "status", "--porcelain").stdout   # ignored, not untracked

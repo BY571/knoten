@@ -36,16 +36,9 @@ exec knoten validate
 """
 
 
-def _git(root: Path, *args: str, env: dict | None = None) -> str:
+def _git(root: Path, *args: str) -> str:
     try:
-        # env AS GIVEN, never merged with os.environ: a caller that passes an env is
-        # asserting "this is the complete environment", server_git_env() among them --
-        # merging os.environ back in here let a stray GIT_DIR survive every filter the
-        # caller applied and point `rev-parse --git-path hooks` at a repo nobody asked
-        # for. `env=None` (no caller-supplied env, the client `hook.install` path) still
-        # inherits the parent's environment in full, same as subprocess.run's own default.
-        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
-                           env=env)
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
     except FileNotFoundError as e:
         raise GraphError("git is not installed") from e
     if r.returncode != 0:
@@ -53,19 +46,15 @@ def _git(root: Path, *args: str, env: dict | None = None) -> str:
     return r.stdout.strip()
 
 
-def hooks_dir(root: Path, env: dict | None = None) -> Path:
-    """Where git ACTUALLY reads hooks from. `env` is how the server side asks the same
-    question the server-side git will answer: ask it under a different config and you
-    write the hook where nothing runs it."""
-    p = Path(_git(root, "rev-parse", "--git-path", "hooks", env=env))
+def hooks_dir(root: Path) -> Path:
+    """Where git ACTUALLY reads hooks from."""
+    p = Path(_git(root, "rev-parse", "--git-path", "hooks"))
     return p if p.is_absolute() else (root / p).resolve()
 
 
-def _write_hook(root: Path, name: str, marker: str, body: str, force: bool,
-                env: dict | None = None) -> Path:
-    """Put a hook where git actually reads it, without clobbering one somebody wrote.
-    Shared, so the two gates cannot drift on the clobber rule."""
-    hooks = hooks_dir(root, env)
+def _write_hook(root: Path, name: str, marker: str, body: str, force: bool) -> Path:
+    """Put a hook where git actually reads it, without clobbering one somebody wrote."""
+    hooks = hooks_dir(root)
     hooks.mkdir(parents=True, exist_ok=True)
     hook = hooks / name
 
@@ -85,44 +74,3 @@ def install(root: Path, force: bool = False) -> Path:
     graph = root.resolve().relative_to(repo.resolve())
     return _write_hook(root, "pre-commit", MARKER,
                        HOOK.format(graph=graph.as_posix() or "."), force)
-
-
-# --------------------------------------------------------------- the server-side gate
-#
-# The gate above runs in one clone and `--no-verify` walks past it. This one runs on the
-# repo everyone pushes TO, so it cannot be skipped from a laptop. The script only proves
-# knoten is on PATH, fail-closed, then execs `knoten gate`.
-
-SERVER_MARKER = "# knoten pre-receive gate"
-
-SERVER_HOOK = """\
-#!/bin/sh
-""" + SERVER_MARKER + """ - installed by `knoten hook --server`. Delete this file to remove it.
-#
-# Refuses a push whose graph breaks its own rules, or whose commits are not signed by
-# someone the graph lists, BEFORE the ref moves. The checks live in `knoten gate`; this
-# script only makes sure knoten is there to run them.
-
-if ! command -v knoten >/dev/null 2>&1; then
-    echo "knoten: not on PATH on the server, so this gate cannot check anything." >&2
-    echo "        Refusing the push: a gate that waves work through when it cannot" >&2
-    echo "        check it is not a gate. Install knoten for the user owning this repo." >&2
-    exit 1
-fi
-
-exec knoten gate
-"""
-
-
-def install_server(repo: Path, force: bool = False, env: dict | None = None) -> Path:
-    """Install the pre-receive gate into the repo everyone pushes to. Takes the repo, not
-    a graph: a bare repo has no working tree, and the hook finds the graphs in each pushed
-    tree instead.
-
-    `env` must be whatever the receive-pack that will ENFORCE this gate runs under, since
-    that decides where hooks are read from. `knoten serve` runs receive-pack itself, so
-    `Registry.create` passes `server_git_env()`, the COMPLETE environment, or a stray
-    GIT_DIR redirects where the gate is written. `knoten hook --server` passes NO env: its
-    repo is served by the operator's account, whose ~/.gitconfig receive-pack reads, and
-    forcing a server env there wrote the gate where git never looked -- failing OPEN."""
-    return _write_hook(repo, "pre-receive", SERVER_MARKER, SERVER_HOOK, force, env=env)

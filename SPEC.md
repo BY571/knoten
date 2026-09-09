@@ -402,7 +402,7 @@ body the day a graph outgrows a tag-filtered index, which the 1k-5k node case do
 | **2** | **Tool-protocol server** | ✅ done, later demoted to a fallback, then removed (§8) |
 | **2.5** | CLI becomes the primary agent surface: `ops.py` as the one implementation behind every read, `--json` on every read, `commit`/`update` on the CLI, `SKILL.md` | ✅ done |
 | 3 | Static-site graph viewer → GitHub Pages | free hosting |
-| 4 | **Remote graphs**: serve, invites, roles, the gate; signed identity | ✅ transport and signed identity done; verification follows |
+| 4 | **Remote graphs** | ✅ a graph is its own git repository, shared on GitHub (§12) |
 
 Phase 0 **validated the schema against real content**, including retractions, structural
 blockers, and prose that no JSON schema could hold.
@@ -434,14 +434,18 @@ Micropublications, nanopublications, PROV-O and LinkML are all open and safe to 
 
 ---
 
-## 12. Threat model for remote graphs
+## 12. Remote graphs
 
-Phase 1 is a token in front of `git http-backend` and a gate on the server. What follows
-is what that does NOT defend against, decided on purpose rather than overlooked. Each row
-says what phase 1 does and what phase 2 would have to answer.
+A graph is its own git repository, and sharing it is hosting that repository on GitHub
+or any forge: collaborators are the repository's collaborators, one branch is the whole
+history, `git pull` rebases so nothing is ever merged, and a new node is a new file so
+two people filing nodes never conflict. The gate is the pre-commit hook on every clone
+plus a workflow that runs `knoten validate` on every push.
 
-| concern | phase 1 | phase 2 |
-|---|---|---|
-| **One admin removes another, the creator included.** An admin can also re-invite a name that already exists, at a lower role, which demotes that person. | Allowed. Every admin is equal and the creator holds no protected status. This is deliberate: a graph whose creator cannot be removed is a graph nobody else can rescue when that person leaves, and the alternative (a permanent super-admin) puts one token beyond recovery. | Still allowed, but the record is now signed: a role is a signed entry in `contributors.yaml`, not a row in a file only the server sees, and revocation is a signed commit marking the entry, not a call the server can forget. Whether the creator should be protected, and whether demoting an admin should need more than one admin's signature, remains open. |
-| **Single line of history.** A hosted graph's history is one branch, and only its ref-level shape is defended. | Left to the hosted repo's own config: `receive.denyDeletes` and `receive.denyNonFastForwards`, which say nothing about branches or tags and are absent from a bare repo somebody gated by hand with `knoten hook --server`. | Enforced by the gate itself, wherever the gate runs: the first push creates the only branch, and after that a new branch, a tag, a deletion and a non-fast-forward are each refused with the reason. A second branch is a tree no `knoten pull` ever reads, which makes it a place to keep a second `contributors.yaml` and a second answer to who may write. One push creates at most one ref, counted across the ref lines rather than asked of git, which mid-push answers "no branches here" for every line. And the constitution itself is never deleted: a `contributors.yaml` that a graph once had cannot be removed, renamed away or emptied of a name by anyone, admins included. |
-| **A revoked token finishes what it started.** Tokens do not expire, and revocation is checked once per request. | A push already past authentication runs to completion; the next request from that token is refused. Revocation is therefore prompt, not instant, and it never interrupts work in flight. | Expiring tokens, and a revocation that also reaches a request already being served. Both need somewhere to keep session state, which phase 1 deliberately does not have. |
+knoten once carried its own server (`knoten serve`: git over HTTPS behind a token,
+invites, roles, a pre-receive gate, and an identity of signed commits kept in the graph).
+It was removed on 2026-09-09. It worked, and nobody would run it: a graph that can only
+be shared by hosting a machine behind TLS is a graph that is not shared. What that layer
+enforced on the server, the hook and the workflow now report on the clone and on the
+commit; who may write is the forge's decision, not the graph's. If a hosted git service
+ever runs a custom check before accepting a push, that is where the gate belongs.
